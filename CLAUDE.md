@@ -1,36 +1,58 @@
-# Puskás URH Kupa – projekt kontextus
+# Puskás URH Kupa – project context
 
-## Mi ez?
-Amatőr rádió verseny (Puskás URH Kupa) segédeszköz, két szkripttel:
-- `puskas_log_analyzer.py` – versenynapló elemző, generálja a `puskas_stations.csv`-t
-- `puskas_kst.py` – ON4KST 144/432 MHz chat kliens, figyeli az online állomásokat
+## What is this?
+Amateur radio contest (Puskás URH Kupa) toolset, two scripts:
+- `puskas_log_analyzer.py` – contest log analyser, generates `puskas_stations.csv`
+- `puskas_kst.py` – ON4KST 144/432 MHz chat client, monitors online stations
 
-## Hívójel / lokátor
-- `MY_CALLSIGN = "HA5LA"`, `MY_LOCATOR = "JN97TF"`
-- Belépési adatok: `~/.netrc` (`machine www.on4kst.info login ha5la password ...`)
+## Credentials / locator
+- Callsign and password: `~/.netrc` (`machine www.on4kst.info login ha5la password ...`)
+- Callsign is read from `.netrc` at startup (uppercased), **not hardcoded**
+- Grid locator is fetched from the server via `/SHow CONFig` after login, **not hardcoded**
 
-## puskas_kst.py – architektúra
-- **Pure asyncio, no threads** (2025-05-25 refactor from threading → select → asyncio+prompt_toolkit)
-- Login: sequential `await _read_until()` using `asyncio.StreamReader`
-- Locator: fetched from `/SHow CONFig` after login, not hardcoded
-- Callsign: taken from `.netrc` (uppercase), not hardcoded
+## puskas_kst.py – architecture
+- **Pure asyncio, no threads** (final refactor 2025-05-25)
+- Dependency: `prompt_toolkit` (declared in uv script header)
+- Login: sequential `await _read_until()` on `asyncio.StreamReader`
+- Locator: `fetch_locator()` sends `/SHow CONFig` after login, parses the response line
+  that contains the callsign for a Maidenhead locator pattern (`RE_LOCATOR`)
 - Main loop: `asyncio.create_task(client.read_loop())` + `await session.prompt_async()`
-- Socket refresh: `asyncio.wait_for(reader.read(), timeout)` fires `/SHow USer` every 120s
-- Output: `prompt_toolkit.patch_stdout` — plain `print()` in socket coroutine, prompt redrawn cleanly
-- TAB completion: `KSTCompleter` (prompt_toolkit) — CSV known stations + currently online
-- Prompt: `1917Z [online:80] HA5LA>` callable; `minute_ticker()` coroutine syncs to UTC minute boundary via `session.app.invalidate()`; `first_userlist` asyncio.Event ensures count shown from first prompt
-- Message highlighting: bold-yellow = addressed to me, bright-cyan = broadcast, dim = server notices
+- Socket refresh: `asyncio.wait_for(reader.read(), timeout)` fires `/SHow USer` every 120 s
+- Output: `prompt_toolkit.patch_stdout` + `print_formatted_text(ANSI(...))` for colours —
+  plain `print()` for uncoloured lines; the prompt is redrawn cleanly after every print
+- TAB completion: `KSTCompleter` (prompt_toolkit `Completer`) — CSV known stations first,
+  then currently online stations (union, deduped)
+- Prompt format: `1917Z [online:80] HA5LA>` — callable passed to `prompt_async`;
+  `minute_ticker()` coroutine wakes at each UTC minute boundary and calls
+  `session.app.invalidate()` to sync the timestamp;
+  `client.first_userlist` (`asyncio.Event`) is awaited before showing the first prompt
+  so the online count is present from the start
+- Message highlighting via `colored_chat()`:
+  - Bold bright-yellow (`\033[1;93m`) — message addressed to MY_CALLSIGN
+  - Bright cyan (`\033[96m`) — broadcast / no explicit recipient
+  - Dim (`\033[2m`) — server notices
+  - Plain — message addressed to someone else
+- Sked messages: `sked_text()` always returns a string; for CSV-known stations it includes
+  bands/distance/bearing; for unknown stations it falls back to a short generic message.
+  Either way, `send`/`pm`/`s` work for any online callsign.
 
-## Ismert problémák / történet
-- Eredeti threading verzió: `_read_loop` + `_process_loop` + refresh thread –
-  néhány mp után disconnect; valószínűleg race condition a login után
-- Select-es átírás 2025-05-25: megszüntette a disconnectet, de `sys.stdin.readline()`
-  miatt elveszett a tab-kiegészítés (readline csak `input()` híváskor aktív)
-- Stdin-thread + SimpleQueue fix 2025-05-25: tab-kiegészítés visszaállítva,
-  minimális threading (csak stdin, nincs shared state a socketen)
+## Known history / why it evolved
+- Original threading version: `_read_loop` + `_process_loop` + refresh thread →
+  disconnected after a few seconds (race condition between login and read thread)
+- Select rewrite: fixed disconnect but `sys.stdin.readline()` broke TAB completion
+  (readline only active inside `input()`)
+- Stdin-thread + SimpleQueue: restored TAB completion but `input()` from a non-main
+  thread doesn't use readline on CPython
+- Socket-thread + main-thread `input()`: readline worked but raw ANSI cursor math
+  in `rprint()` caused prompt corruption on multiline server output
+- Current: full asyncio + prompt_toolkit — no threads, no cursor math, clean output
 
-## Futtatás
+## Running
 ```
 uv run puskas_kst.py
 ```
-Előfeltétel: `puskas_stations.csv` létezzen (futtasd előbb `puskas_log_analyzer.py`-t).
+Prerequisite: `puskas_stations.csv` must exist (run `puskas_log_analyzer.py` first).
+
+## Repository
+- `.gitignore` excludes generated files (`puskas_stations.csv`, `puskas_missed.csv`,
+  `puskas_map.html`, `puskas_polar.png`) and scratch files (`*.json`, `*.url`, `*.txt`)
