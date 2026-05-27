@@ -43,9 +43,6 @@ import netrc
 import re
 import sys
 import time
-from collections import deque
-from dataclasses import dataclass
-from datetime import datetime, timezone
 
 # ============================================================
 # Configuration
@@ -59,7 +56,6 @@ SERVER_NAME = "on4kst.bridge"
 CHANNEL     = "#on4kst"
 REFRESH_SEC = 120
 RECONNECT_S = 30
-HISTORY_MAX = 500           # buffered messages replayed on reconnect
 
 # ============================================================
 # Credentials
@@ -106,23 +102,12 @@ RE_CHAT      = re.compile(r"\d{4}Z\s+\S+\s+.+chat\s*>", re.I)
 RE_CHAT_MSG  = re.compile(r"^(\d{4}Z)\s+([A-Z0-9/]+)\s+.*?>\s+(.+)", re.I)
 RE_RECIPIENT = re.compile(r"^\(([A-Z0-9/]+)\)\s+(.*)", re.I)
 RE_USR       = re.compile(
-    r"^\(?([A-Z0-9]{3,}(?:/[A-Z0-9]+)?)\)?\s{2,}([A-Z]{2}\d{2}[A-Z]{2})",
+    r"^(\(?)([A-Z0-9]{3,}(?:/[A-Z0-9]+)?)\)?\s{2,}([A-Z]{2}\d{2}[A-Z]{2})\s*(.*)",
     re.I,
 )
+# groups: 1=open-paren (away marker), 2=callsign, 3=locator, 4=name+equipment
 RE_PROMPT    = re.compile(r"(Login|Password|choice|chat)\s*[>:]\s*$", re.I)
 RE_LOCATOR   = re.compile(r"\b([A-R]{2}\d{2}[A-X]{2})\b", re.I)
-
-# ============================================================
-# Buffered message (history replay)
-# ============================================================
-
-@dataclass
-class BufferedMsg:
-    utc:       str   # e.g. "0712Z"
-    from_call: str
-    target:    str   # CHANNEL or a callsign (for PMs addressed to us)
-    text:      str
-
 
 # ============================================================
 # Bridge  (coordinates ON4KST client ↔ IRC sessions)
@@ -133,7 +118,6 @@ class Bridge:
         self.callsign    = callsign
         self.kst: ON4KSTClient | None = None
         self._sessions: set[IRCSession] = set()
-        self._history:  deque[BufferedMsg] = deque(maxlen=HISTORY_MAX)
 
     # ----------------------------------------------------------
     # IRC session lifecycle
@@ -143,15 +127,6 @@ class Bridge:
         self._sessions.add(session)
         if self.kst:
             await self.kst.send("/SET HERE")
-        if self._history:
-            await session.send_notice(
-                f"--- replaying {len(self._history)} buffered message(s) ---"
-            )
-            for msg in self._history:
-                await session.send_privmsg(
-                    msg.from_call, msg.target, f"[{msg.utc}] {msg.text}"
-                )
-            await session.send_notice("--- end of buffer ---")
 
     async def irc_disconnected(self, session: IRCSession):
         self._sessions.discard(session)
@@ -187,18 +162,13 @@ class Bridge:
         else:
             target = CHANNEL
 
-        msg = BufferedMsg(utc, from_call, target, text)
+        for s in list(self._sessions):
+            try:
+                await s.send_privmsg(from_call, target, text)
+            except Exception:
+                pass
 
-        if self._sessions:
-            for s in list(self._sessions):
-                try:
-                    await s.send_privmsg(from_call, target, text)
-                except Exception:
-                    pass
-        else:
-            self._history.append(msg)
-
-    async def kst_userlist(self, old: dict[str, str], new: dict[str, str]):
+    async def kst_userlist(self, old: dict[str, dict], new: dict[str, dict]):
         joined = set(new) - set(old)
         parted = set(old) - set(new)
         for s in list(self._sessions):
@@ -273,15 +243,19 @@ class IRCSession:
     # ----------------------------------------------------------
 
     async def _welcome(self):
+        callsign = self._bridge.callsign
         await self._num(1,   f"Welcome to the ON4KST IRC Bridge, {self.nick}")
         await self._num(2,   f"Your host is {SERVER_NAME}")
         await self._num(3,   "This server was created today")
         await self._num(4,   SERVER_NAME, "on4kst-bridge-1.0", "o", "o")
         await self._num(375, f"- {SERVER_NAME} Message of the Day -")
         await self._num(372, f"- ON4KST 144/432 MHz IRC bridge")
-        await self._num(372, f"- Connected as: {self._bridge.callsign}")
+        await self._num(372, f"- Connected as: {callsign}")
         await self._num(372, f"- Join {CHANNEL} to enter the chat")
         await self._num(376, "End of MOTD command.")
+        if self.nick.upper() != callsign.upper():
+            await self._send(f":{self.nick}!{self.nick}@localhost NICK {callsign}")
+            self.nick = callsign
         self._reg = True
         await self._bridge.irc_connected(self)
 
@@ -341,24 +315,41 @@ class IRCSession:
                 text   = parts[2].lstrip(":")
                 await self._bridge.irc_message(target, text)
 
+        elif cmd == "AWAY":
+            going_away = len(parts) > 1
+            if going_away:
+                await self._num(306, "You have been marked as being away")
+                if self._bridge.kst:
+                    await self._bridge.kst.send("/UNSET HERE")
+            else:
+                await self._num(305, "You are no longer marked as being away")
+                if self._bridge.kst:
+                    await self._bridge.kst.send("/SET HERE")
+
         elif cmd == "WHO":
             target = parts[1].strip() if len(parts) > 1 else CHANNEL
             if target.lower() == CHANNEL.lower() and self._bridge.kst:
-                for call, loc in self._bridge.kst.online_users.items():
+                for call, user in self._bridge.kst.online_users.items():
+                    flag  = "G" if user.get("away") else "H"
+                    gecos = user.get("info") or user["loc"]
                     await self._send(
                         f":{SERVER_NAME} 352 {self.nick} {CHANNEL} {call} on4kst "
-                        f"{SERVER_NAME} {call} H :0 {loc}"
+                        f"{SERVER_NAME} {call} {flag} :0 {gecos} [{user['loc']}]"
                     )
             await self._num(315, CHANNEL, "End of WHO list.")
 
         elif cmd == "WHOIS":
             target = (parts[1].strip() if len(parts) > 1 else "").upper()
             kst    = self._bridge.kst
-            loc    = (kst.online_users.get(target, "") if kst else "")
-            if loc:
-                await self._num(311, target, target, "on4kst", "*", target)
+            user   = kst.online_users.get(target) if kst else None
+            if user:
+                gecos = user.get("info") or user["loc"]
+                await self._num(311, target, target, "on4kst", "*",
+                                f"{gecos} [{user['loc']}]")
                 await self._num(319, target, CHANNEL)
-                await self._num(312, target, SERVER_NAME, f"ON4KST {loc}")
+                await self._num(312, target, SERVER_NAME, f"ON4KST {user['loc']}")
+                if user.get("away"):
+                    await self._num(301, target, "Away (UNSET HERE)")
             await self._num(318, target, "End of WHOIS list.")
 
         elif cmd == "MODE":
@@ -409,8 +400,8 @@ class ON4KSTClient:
         self._writer: asyncio.StreamWriter | None = None
         self._buf         = b""
         self._collecting  = False
-        self._new_users: dict[str, str] = {}
-        self.online_users: dict[str, str] = {}
+        self._new_users: dict[str, dict] = {}
+        self.online_users: dict[str, dict] = {}
         self.first_userlist = asyncio.Event()
         self.locator  = ""
 
@@ -501,9 +492,11 @@ class ON4KSTClient:
         # --- user list accumulation ---
         m = RE_USR.match(stripped)
         if m:
-            call = m.group(1).upper().strip("()")
-            loc  = m.group(2).upper()
-            self._new_users[call] = loc
+            away = m.group(1) == "("
+            call = m.group(2).upper()
+            loc  = m.group(3).upper()
+            info = m.group(4).strip()
+            self._new_users[call] = {"loc": loc, "info": info, "away": away}
             self._collecting = True
             return
 
