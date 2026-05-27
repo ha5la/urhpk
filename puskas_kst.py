@@ -21,6 +21,7 @@ Usage:
 
 import asyncio
 import csv
+import html
 import netrc
 import re
 import sys
@@ -333,6 +334,7 @@ class KSTClient:
 
     def _process_line(self, line: str):
         global _online_count
+        line = html.unescape(line)
         stripped = line.strip()
 
         m = RE_USR.match(stripped)
