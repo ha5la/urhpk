@@ -223,9 +223,10 @@ class IRCSession:
         self._reader = reader
         self._writer = writer
         self._bridge = bridge
-        self.nick    = ""
-        self._user   = ""
-        self._reg    = False   # registration complete
+        self.nick          = ""
+        self._user         = ""
+        self._reg          = False   # registration complete
+        self._cap_pending  = False   # True between CAP LS and CAP END
 
     # ----------------------------------------------------------
     # Low-level send helpers
@@ -297,14 +298,27 @@ class IRCSession:
         parts = line.split(" ", 2)
         cmd   = parts[0].upper()
 
-        if cmd == "NICK":
+        if cmd == "CAP":
+            subcmd = parts[1].upper() if len(parts) > 1 else ""
+            if subcmd == "LS":
+                self._cap_pending = True
+                await self._send(f":{SERVER_NAME} CAP * LS :")
+            elif subcmd == "REQ":
+                caps = parts[2].lstrip(":") if len(parts) > 2 else ""
+                await self._send(f":{SERVER_NAME} CAP * NAK :{caps}")
+            elif subcmd == "END":
+                self._cap_pending = False
+                if self.nick and self._user and not self._reg:
+                    await self._welcome()
+
+        elif cmd == "NICK":
             self.nick = parts[1].strip() if len(parts) > 1 else "?"
-            if self._user and not self._reg:
+            if self._user and not self._reg and not self._cap_pending:
                 await self._welcome()
 
         elif cmd == "USER":
             self._user = parts[1].strip() if len(parts) > 1 else "?"
-            if self.nick and not self._reg:
+            if self.nick and not self._reg and not self._cap_pending:
                 await self._welcome()
 
         elif cmd == "PING":
