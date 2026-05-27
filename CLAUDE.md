@@ -1,9 +1,10 @@
 # Puskás URH Kupa – project context
 
 ## What is this?
-Amateur radio contest (Puskás URH Kupa) toolset, two scripts:
+Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
 - `puskas_log_analyzer.py` – contest log analyser, generates `puskas_stations.csv`
 - `puskas_kst.py` – ON4KST 144/432 MHz chat client, monitors online stations
+- `on4kst_irc_bridge.py` – general ON4KST↔IRC bridge; use with irssi or any IRC client
 
 ## Credentials / locator
 - Callsign and password: `~/.netrc` (`machine www.on4kst.info login ha5la password ...`)
@@ -52,11 +53,32 @@ Amateur radio contest (Puskás URH Kupa) toolset, two scripts:
   in `rprint()` caused prompt corruption on multiline server output
 - Current: full asyncio + prompt_toolkit — no threads, no cursor math, clean output
 
+## on4kst_irc_bridge.py – architecture
+- **General** ON4KST↔IRC bridge; no contest-specific logic (Puskás sked message TBD)
+- No external dependencies – pure stdlib asyncio
+- Listens as a minimal IRC server on `127.0.0.1:6667`; designed for one IRC client
+  but supports multiple simultaneous connections
+- Public chat maps to `#on4kst`; `/CQ CALLSIGN` maps to IRC private messages
+- ON4KST connection is kept permanently and reconnects after drops (`RECONNECT_S = 30`)
+- Messages received while no IRC client is connected are buffered (`HISTORY_MAX = 500`)
+  and replayed with original timestamps when a client reconnects
+- `/SET HERE` sent when first IRC client connects; `/UNSET HERE` when last disconnects
+- User list updates (every 120 s) trigger IRC JOIN/PART events for member list accuracy
+
+irssi quick-start:
+```
+/server add -auto -network on4kst localhost 6667
+/channel add -auto #on4kst on4kst
+/save
+/connect on4kst
+```
+
 ## Running
 ```
-uv run puskas_kst.py
+uv run puskas_kst.py        # interactive prompt_toolkit client
+uv run on4kst_irc_bridge.py # IRC bridge (then connect irssi to localhost:6667)
 ```
-Prerequisite: `puskas_stations.csv` must exist (run `puskas_log_analyzer.py` first).
+Prerequisite for puskas_kst.py: `puskas_stations.csv` must exist (run `puskas_log_analyzer.py` first).
 
 ## Repository
 - `.gitignore` excludes generated files (`puskas_stations.csv`, `puskas_missed.csv`,
