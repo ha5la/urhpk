@@ -6,6 +6,13 @@ Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
 - `puskas_kst.py` – ON4KST 144/432 MHz chat client, monitors online stations
 - `on4kst_irc_bridge.py` – general ON4KST↔IRC bridge; use with irssi or any IRC client
 
+## Development principles
+- **Kent Beck's simplicity rule**: always implement the simplest thing that works.
+  Prefer decremental development — remove code that isn't needed rather than keeping
+  it "just in case". Dead code is technical debt.
+- **Tests must always pass**: never commit with a failing test. The test suite is the
+  safety net for refactoring and simplification.
+
 ## Credentials / locator
 - Callsign and password: `~/.netrc` (`machine www.on4kst.info login ha5la password ...`)
 - Callsign is read from `.netrc` at startup (uppercased), **not hardcoded**
@@ -58,17 +65,21 @@ Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
 - No external dependencies – pure stdlib asyncio
 - Listens as a minimal IRC server on `127.0.0.1:6667`; designed for one IRC client
   but supports multiple simultaneous connections
-- Public chat maps to `#on4kst`; `/CQ CALLSIGN` maps to IRC private messages
+- Public chat maps to `#on4kst`; `/CQ CALLSIGN` maps to IRC PM (PRIVMSG to nick)
 - ON4KST connection is kept permanently and reconnects after drops (`RECONNECT_S = 30`)
-- Messages received while no IRC client is connected are buffered (`HISTORY_MAX = 500`)
-  and replayed with original timestamps when a client reconnects
-- `/SET HERE` sent when first IRC client connects; `/UNSET HERE` when last disconnects
+- Bridge auto-joins the IRC client to `#on4kst` on connect — no client-side autojoin needed
+- `/SET HERE` sent when first IRC client connects; `/UNSET HERE` when last disconnects;
+  AWAY command from IRC client forwards the same
 - User list updates (every 120 s) trigger IRC JOIN/PART events for member list accuracy
+- IRC subset implemented: CAP negotiation, NICK/USER registration, PING/PONG,
+  JOIN, PRIVMSG, AWAY, WHO (352), WHOIS (311/312/318/319), MODE (324/368/349/347), QUIT
+- irssi channel sync (10 s) requires responses to `MODE #channel b/e/I`
+  (368 ban-list end, 349 exception-list end, 347 invite-list end) — plain `MODE #channel`
+  returns 324
 
 irssi quick-start:
 ```
 /server add -auto -network on4kst localhost 6667
-/channel add -auto #on4kst on4kst
 /save
 /connect on4kst
 ```
@@ -79,6 +90,12 @@ uv run puskas_kst.py        # interactive prompt_toolkit client
 uv run on4kst_irc_bridge.py # IRC bridge (then connect irssi to localhost:6667)
 ```
 Prerequisite for puskas_kst.py: `puskas_stations.csv` must exist (run `puskas_log_analyzer.py` first).
+
+## Testing
+```
+uv run pytest tests/ -v     # 50 tests: parsing, IRC protocol, integration
+```
+CI runs the same suite on every push via GitHub Actions.
 
 ## Repository
 - `.gitignore` excludes generated files (`puskas_stations.csv`, `puskas_missed.csv`,

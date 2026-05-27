@@ -31,7 +31,6 @@ Usage:
 
 irssi quick-start:
     /server add -auto -network on4kst localhost 6667
-    /channel add -auto #on4kst on4kst
     /save
     /connect on4kst
 """
@@ -368,8 +367,6 @@ class IRCSession:
         elif cmd == "QUIT":
             self._writer.close()
 
-        # Silently ignore: CAP, PASS, AWAY, LIST, NAMES, TOPIC, ISON, …
-
     async def handle_loop(self):
         buf = ""
         try:
@@ -610,7 +607,7 @@ async def _main():
     server = await asyncio.start_server(_irc_handler, IRC_HOST, IRC_PORT)
     addrs  = ", ".join(str(s.getsockname()) for s in server.sockets)
     print(f"[IRC] Listening on {addrs}")
-    print(f"[IRC] irssi: /server localhost {IRC_PORT}  then  /join {CHANNEL}")
+    print(f"[IRC] irssi: /server localhost {IRC_PORT}  (auto-joins {CHANNEL})")
 
     async with server:
         await asyncio.gather(
