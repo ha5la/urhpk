@@ -258,6 +258,14 @@ class IRCSession:
             self.nick = callsign
         self._reg = True
         await self._bridge.irc_connected(self)
+        await self._do_join()  # auto-join #on4kst immediately after welcome
+
+    async def _do_join(self):
+        await self._send(f":{self.nick}!{self.nick}@localhost JOIN {CHANNEL}")
+        await self._num(332, CHANNEL, "ON4KST 144/432 MHz chat bridge")
+        await self._num(333, CHANNEL, SERVER_NAME, "0")
+        await self._num(324, CHANNEL, "+")
+        await self._send_names()
 
     # ----------------------------------------------------------
     # Inbound IRC command handling
@@ -302,12 +310,7 @@ class IRCSession:
         elif cmd == "JOIN":
             channel = parts[1].split(",")[0].strip() if len(parts) > 1 else ""
             if channel.lower() == CHANNEL.lower():
-                await self._send(
-                    f":{self.nick}!{self.nick}@localhost JOIN {CHANNEL}"
-                )
-                await self._num(332, CHANNEL, "ON4KST 144/432 MHz chat bridge")
-                await self._num(333, CHANNEL, SERVER_NAME, "0")
-                await self._send_names()
+                await self._do_join()
 
         elif cmd == "PRIVMSG":
             if len(parts) >= 3:
@@ -327,15 +330,26 @@ class IRCSession:
                     await self._bridge.kst.send("/SET HERE")
 
         elif cmd == "WHO":
-            target = parts[1].strip() if len(parts) > 1 else CHANNEL
+            target     = parts[1].strip() if len(parts) > 1 else CHANNEL
+            whox_arg   = parts[2].strip() if len(parts) > 2 else ""
+            # WHOX: WHO <mask> %fields[,querytype]  — irssi uses this by default
+            is_whox    = whox_arg.startswith("%")
+            query_type = whox_arg.split(",", 1)[1] if (is_whox and "," in whox_arg) else ""
             if target.lower() == CHANNEL.lower() and self._bridge.kst:
                 for call, user in self._bridge.kst.online_users.items():
                     flag  = "G" if user.get("away") else "H"
                     gecos = user.get("info") or user["loc"]
-                    await self._send(
-                        f":{SERVER_NAME} 352 {self.nick} {CHANNEL} {call} on4kst "
-                        f"{SERVER_NAME} {call} {flag} :0 {gecos} [{user['loc']}]"
-                    )
+                    if is_whox:
+                        # 354: nick querytype channel user host nick flags :realname
+                        await self._send(
+                            f":{SERVER_NAME} 354 {self.nick} {query_type} {CHANNEL} "
+                            f"{call} on4kst {call} {flag} :0 {gecos} [{user['loc']}]"
+                        )
+                    else:
+                        await self._send(
+                            f":{SERVER_NAME} 352 {self.nick} {CHANNEL} {call} on4kst "
+                            f"{SERVER_NAME} {call} {flag} :0 {gecos} [{user['loc']}]"
+                        )
             await self._num(315, CHANNEL, "End of WHO list.")
 
         elif cmd == "WHOIS":
