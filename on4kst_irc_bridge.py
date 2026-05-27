@@ -194,7 +194,7 @@ class IRCSession:
         self._writer = writer
         self._bridge = bridge
         self.nick          = ""
-        self._user         = ""
+        self._got_user     = False
         self._reg          = False   # registration complete
         self._cap_pending  = False   # True between CAP LS and CAP END
 
@@ -224,9 +224,6 @@ class IRCSession:
 
     async def send_part(self, callsign: str):
         await self._send(f":{callsign}!{callsign}@on4kst PART {CHANNEL}")
-
-    async def send_notice(self, text: str):
-        await self._send(f":{SERVER_NAME} NOTICE {self.nick or '*'} :{text}")
 
     async def _send_names(self):
         kst     = self._bridge.kst
@@ -290,16 +287,16 @@ class IRCSession:
                 await self._send(f":{SERVER_NAME} CAP * NAK :{caps}")
             elif subcmd == "END":
                 self._cap_pending = False
-                if self.nick and self._user and not self._reg:
+                if self.nick and self._got_user and not self._reg:
                     await self._welcome()
 
         elif cmd == "NICK":
             self.nick = parts[1].strip() if len(parts) > 1 else "?"
-            if self._user and not self._reg and not self._cap_pending:
+            if self._got_user and not self._reg and not self._cap_pending:
                 await self._welcome()
 
         elif cmd == "USER":
-            self._user = parts[1].strip() if len(parts) > 1 else "?"
+            self._got_user = True
             if self.nick and not self._reg and not self._cap_pending:
                 await self._welcome()
 
@@ -330,26 +327,15 @@ class IRCSession:
                     await self._bridge.kst.send("/SET HERE")
 
         elif cmd == "WHO":
-            target     = parts[1].strip() if len(parts) > 1 else CHANNEL
-            whox_arg   = parts[2].strip() if len(parts) > 2 else ""
-            # WHOX: WHO <mask> %fields[,querytype]  — irssi uses this by default
-            is_whox    = whox_arg.startswith("%")
-            query_type = whox_arg.split(",", 1)[1] if (is_whox and "," in whox_arg) else ""
+            target = parts[1].strip() if len(parts) > 1 else CHANNEL
             if target.lower() == CHANNEL.lower() and self._bridge.kst:
                 for call, user in self._bridge.kst.online_users.items():
                     flag  = "G" if user.get("away") else "H"
                     gecos = user.get("info") or user["loc"]
-                    if is_whox:
-                        # 354: nick querytype channel user host nick flags :realname
-                        await self._send(
-                            f":{SERVER_NAME} 354 {self.nick} {query_type} {CHANNEL} "
-                            f"{call} on4kst {call} {flag} :0 {gecos} [{user['loc']}]"
-                        )
-                    else:
-                        await self._send(
-                            f":{SERVER_NAME} 352 {self.nick} {CHANNEL} {call} on4kst "
-                            f"{SERVER_NAME} {call} {flag} :0 {gecos} [{user['loc']}]"
-                        )
+                    await self._send(
+                        f":{SERVER_NAME} 352 {self.nick} {CHANNEL} {call} on4kst "
+                        f"{SERVER_NAME} {call} {flag} :0 {gecos} [{user['loc']}]"
+                    )
             await self._num(315, CHANNEL, "End of WHO list.")
 
         elif cmd == "WHOIS":
@@ -424,8 +410,6 @@ class ON4KSTClient:
         self._collecting  = False
         self._new_users: dict[str, dict] = {}
         self.online_users: dict[str, dict] = {}
-        self.first_userlist = asyncio.Event()
-        self.locator  = ""
 
     async def connect(self) -> bool:
         try:
@@ -560,7 +544,6 @@ class ON4KSTClient:
         old = self.online_users
         self.online_users = dict(self._new_users)
         self._new_users   = {}
-        self.first_userlist.set()
         asyncio.create_task(self._bridge.kst_userlist(old, self.online_users))
 
     async def read_loop(self):
@@ -597,7 +580,6 @@ async def _run_kst(bridge: Bridge, callsign: str, password: str):
             if await kst.login():
                 loc = await kst.fetch_locator()
                 if loc:
-                    kst.locator = loc
                     print(f"[KST] Locator: {loc}")
                 # Mirror presence state: HERE if any IRC client is connected
                 if bridge._sessions:

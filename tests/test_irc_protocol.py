@@ -196,7 +196,7 @@ class TestChannelSync:
         line = await client.recv()
         assert "347" in line
 
-    async def test_whox_returns_354(self, make_registered):
+    async def test_who_with_args_still_returns_352(self, make_registered):
         bridge = MockBridge()
         bridge.kst.online_users = {
             "G6DDN": {"loc": "IO83", "info": "Ian", "away": False}
@@ -204,8 +204,8 @@ class TestChannelSync:
         _, client, _ = await make_registered(bridge)
         await client.send(f"WHO {CHANNEL} %uhsnfar,152")
         lines = await client.recv_until("315")
-        assert any("354" in l for l in lines), "WHOX must produce 354 replies"
-        assert any("315" in l for l in lines), "WHOX must end with 315"
+        assert any("352" in l for l in lines), "WHO must produce 352 replies"
+        assert any("315" in l for l in lines), "WHO must end with 315"
 
     async def test_plain_who_returns_352(self, make_registered):
         bridge = MockBridge()
