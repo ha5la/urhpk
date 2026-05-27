@@ -367,9 +367,17 @@ class IRCSession:
             await self._num(318, target, "End of WHOIS list.")
 
         elif cmd == "MODE":
-            ch = parts[1].strip() if len(parts) > 1 else ""
+            ch   = parts[1].strip() if len(parts) > 1 else ""
+            flag = parts[2].strip() if len(parts) > 2 else ""
             if ch.lower() == CHANNEL.lower():
-                await self._num(324, CHANNEL, "+")
+                if flag == "b":
+                    await self._num(368, CHANNEL, "End of channel ban list.")
+                elif flag == "e":
+                    await self._num(349, CHANNEL, "End of channel exception list.")
+                elif flag == "I":
+                    await self._num(347, CHANNEL, "End of channel invite list.")
+                else:
+                    await self._num(324, CHANNEL, "+")
 
         elif cmd == "QUIT":
             self._writer.close()
