@@ -84,6 +84,33 @@ irssi quick-start:
 /connect on4kst
 ```
 
+## Raspberry Pi deployment
+The bridge runs permanently on a Raspberry Pi (Debian trixie, Python 3.13) with irssi
+in tmux. It is distributed as a `.deb` package built by GitHub Actions.
+
+**To release a new version:**
+```
+git tag v1.2.3
+git push origin v1.2.3
+```
+The `release.yml` workflow builds `on4kst-irc-bridge_1.2.3_all.deb` and attaches it to
+a GitHub Release automatically.
+
+**To install / upgrade on the Pi:**
+```
+wget https://github.com/ha5la/urhpk/releases/latest/download/on4kst-irc-bridge_VERSION_all.deb
+sudo dpkg -i on4kst-irc-bridge_VERSION_all.deb
+```
+postinst enables and starts the service; prerm stops and disables it before upgrade/removal.
+
+**Service details:**
+- Unit file: `on4kst-irc-bridge.service` (checked into repo, installed to `/lib/systemd/system/`)
+- Script installed to: `/usr/lib/on4kst-irc-bridge/on4kst_irc_bridge.py`
+- Runs as `User=pi` — `~/.netrc` must exist for that user
+- No runtime dependency on `uv`; the script is pure stdlib and run directly with `/usr/bin/python3`
+- Logs: `journalctl -u on4kst-irc-bridge -f`
+- To change the service user without losing it on upgrade: `sudo systemctl edit on4kst-irc-bridge`
+
 ## Running
 ```
 uv run puskas_kst.py        # interactive prompt_toolkit client
