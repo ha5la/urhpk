@@ -46,14 +46,18 @@ CHAT_CHOICE  = "2"          # 144/432 MHz
 STATIONS_CSV = "puskas_stations.csv"
 REFRESH_SEC  = 120
 SEND_DELAY   = 1.5
+AWAY_SEC     = 30 * 60   # seconds of inactivity before /UNSET HERE
 
-_online_count = 0
+_online_count   = 0
+_is_away        = False
+_last_activity  = 0.0   # monotonic time of last user input
 
 def current_prompt() -> str:
     ts = datetime.now(timezone.utc).strftime("%H%MZ")
+    away_tag = " [away]" if _is_away else ""
     if _online_count:
-        return f"{ts} [online:{_online_count}] {MY_CALLSIGN}> "
-    return f"{ts} {MY_CALLSIGN}> "
+        return f"{ts} [online:{_online_count}]{away_tag} {MY_CALLSIGN}> "
+    return f"{ts}{away_tag} {MY_CALLSIGN}> "
 
 # ============================================================
 
@@ -522,12 +526,32 @@ async def minute_ticker(session: PromptSession):
             pass  # prompt_async not yet active
 
 
+async def away_watcher(client: KSTClient, session: PromptSession):
+    """Sends /UNSET HERE after AWAY_SEC of inactivity; prompt shows [away]."""
+    global _is_away
+    while True:
+        await asyncio.sleep(60)
+        if _is_away:
+            continue
+        idle = time.monotonic() - _last_activity
+        if idle >= AWAY_SEC:
+            _is_away = True
+            await client._send("/UNSET HERE")
+            print_formatted_text(ANSI(
+                f"{_SERVER}  [away] No input for {int(idle / 60)} min — set away (/UNSET HERE){_RESET}"
+            ))
+            try:
+                session.app.invalidate()
+            except AttributeError:
+                pass
+
+
 # ============================================================
 # Entry point
 # ============================================================
 
 async def _main():
-    global MY_CALLSIGN, MY_LOCATOR
+    global MY_CALLSIGN, MY_LOCATOR, _last_activity, _is_away
 
     print(BANNER)
 
@@ -550,6 +574,9 @@ async def _main():
     else:
         print("[warning] Could not fetch locator – sked messages will omit it.")
 
+    await client._send("/SET HERE")
+    _last_activity = time.monotonic()
+
     session = PromptSession(
         completer=KSTCompleter(list(known.keys()), lambda: client.online_users.keys()),
     )
@@ -560,6 +587,7 @@ async def _main():
     with patch_stdout():
         reader_task = asyncio.create_task(client.read_loop())
         asyncio.create_task(minute_ticker(session))
+        asyncio.create_task(away_watcher(client, session))
 
         # Wait for first userlist so the prompt shows a count immediately
         try:
@@ -575,6 +603,17 @@ async def _main():
                     break
                 except KeyboardInterrupt:
                     break
+                if _is_away:
+                    _is_away = False
+                    await client._send("/SET HERE")
+                    print_formatted_text(ANSI(
+                        f"{_SERVER}  [back] Marked as back (/SET HERE){_RESET}"
+                    ))
+                    try:
+                        session.app.invalidate()
+                    except AttributeError:
+                        pass
+                _last_activity = time.monotonic()
                 if not await handle_command(cmd.strip(), client, known):
                     break
         finally:

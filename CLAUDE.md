@@ -22,11 +22,16 @@ Amateur radio contest (Puskás URH Kupa) toolset, two scripts:
   plain `print()` for uncoloured lines; the prompt is redrawn cleanly after every print
 - TAB completion: `KSTCompleter` (prompt_toolkit `Completer`) — CSV known stations first,
   then currently online stations (union, deduped)
-- Prompt format: `1917Z [online:80] HA5LA>` — callable passed to `prompt_async`;
+- Prompt format: `1917Z [online:80] HA5LA>` (or `… [away] HA5LA>` when away) —
+  callable passed to `prompt_async`;
   `minute_ticker()` coroutine wakes at each UTC minute boundary and calls
   `session.app.invalidate()` to sync the timestamp;
   `client.first_userlist` (`asyncio.Event`) is awaited before showing the first prompt
   so the online count is present from the start
+- Away tracking: `away_watcher()` coroutine checks idle time every 60 s;
+  after `AWAY_SEC` (30 min) of no user input it sends `/UNSET HERE` and sets `_is_away`;
+  the first command after being away sends `/SET HERE` to return;
+  `/SET HERE` is also sent once immediately after login
 - Message highlighting via `colored_chat()`:
   - Bold bright-yellow (`\033[1;93m`) — message addressed to MY_CALLSIGN
   - Bright cyan (`\033[96m`) — broadcast / no explicit recipient
