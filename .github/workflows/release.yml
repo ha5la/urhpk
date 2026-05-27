@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Build .deb
+        run: |
+          PKG=pkg
+          mkdir -p "$PKG/DEBIAN"
+          mkdir -p "$PKG/usr/lib/on4kst-irc-bridge"
+          mkdir -p "$PKG/lib/systemd/system"
+
+          cp on4kst_irc_bridge.py "$PKG/usr/lib/on4kst-irc-bridge/"
+          cp on4kst-irc-bridge.service "$PKG/lib/systemd/system/"
+
+          cat > "$PKG/DEBIAN/control" <<EOF
+          Package: on4kst-irc-bridge
+          Version: ${VERSION}
+          Architecture: all
+          Maintainer: Laszlo Ashin <ashinlaszlo@gmail.com>
+          Depends: python3
+          Description: ON4KST IRC Bridge
+           Bridges the ON4KST 144/432 MHz chat server to a local IRC server on
+           127.0.0.1:6667. Connect irssi or any IRC client to participate in chat.
+          EOF
+
+          cat > "$PKG/DEBIAN/postinst" <<'EOF'
+          #!/bin/sh
+          set -e
+          systemctl daemon-reload
+          systemctl enable on4kst-irc-bridge.service
+          systemctl start on4kst-irc-bridge.service || true
+          EOF
+          chmod 0755 "$PKG/DEBIAN/postinst"
+
+          cat > "$PKG/DEBIAN/prerm" <<'EOF'
+          #!/bin/sh
+          set -e
+          systemctl stop on4kst-irc-bridge.service || true
+          systemctl disable on4kst-irc-bridge.service || true
+          EOF
+          chmod 0755 "$PKG/DEBIAN/prerm"
+
+          dpkg-deb --build "$PKG" "on4kst-irc-bridge_${VERSION}_all.deb"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "on4kst-irc-bridge ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            "on4kst-irc-bridge_${VERSION}_all.deb"
