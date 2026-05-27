@@ -8,3 +8,8 @@ puskas_map.html
 *.json
 *.url
 *.txt
+
+# Python cache
+__pycache__/
+*.pyc
+.venv/
