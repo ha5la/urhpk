@@ -105,14 +105,15 @@ a GitHub Release automatically.
 wget https://github.com/ha5la/urhpk/releases/latest/download/on4kst-irc-bridge_VERSION_all.deb
 sudo dpkg -i on4kst-irc-bridge_VERSION_all.deb
 ```
-postinst enables and starts the service; prerm stops and disables it before upgrade/removal.
+postinst enables and starts both services; prerm stops irssi first, then the bridge, before upgrade/removal.
 
 **Service details:**
-- Unit file: `on4kst-irc-bridge.service` (checked into repo, installed to `/lib/systemd/system/`)
-- Script installed to: `/usr/lib/on4kst-irc-bridge/on4kst_irc_bridge.py`
-- Runs as `User=pi` — `~/.netrc` must exist for that user
-- No runtime dependency on `uv`; the script is pure stdlib and run directly with `/usr/bin/python3`
-- Logs: `journalctl -u on4kst-irc-bridge -f`
+- `on4kst-irc-bridge.service` — the bridge; script at `/usr/lib/on4kst-irc-bridge/on4kst_irc_bridge.py`
+- `irssi.service` — runs irssi in a tmux session (`tmux new-session -d -s irssi irssi`); `Type=oneshot RemainAfterExit=yes` because tmux daemonizes
+- Both unit files are checked into the repo and installed to `/lib/systemd/system/`
+- Both run as `User=pi` — `~/.netrc` must exist for that user
+- No runtime dependency on `uv`; the bridge script is pure stdlib, run directly with `/usr/bin/python3`
+- Bridge logs: `journalctl -u on4kst-irc-bridge -f`
 - To change the service user without losing it on upgrade: `sudo systemctl edit on4kst-irc-bridge`
 
 ## Running
@@ -122,7 +123,7 @@ uv run on4kst_irc_bridge.py # IRC bridge (then connect irssi to localhost:6667)
 
 ## Testing
 ```
-uv run pytest tests/ -v     # 82 tests: parsing, IRC protocol, integration
+uv run pytest tests/ -v     # 80 tests: parsing, IRC protocol, integration
 ```
 CI runs the same suite on every push via GitHub Actions.
 
