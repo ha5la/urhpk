@@ -230,6 +230,31 @@ class TestChannelSync:
         assert "Ian" in full
         assert "IO83RJ" in full
 
+    async def test_whois_shows_distance_and_bearing(self, make_registered):
+        bridge = MockBridge()
+        bridge.my_locator = "JN97MX"
+        bridge.kst.online_users = {
+            "G6DDN": {"loc": "IO83RJ", "info": "Ian", "away": False}
+        }
+        _, client, _ = await make_registered(bridge)
+        await client.send("WHOIS G6DDN")
+        lines = await client.recv_until("318")
+        full = " ".join(lines)
+        assert "km" in full
+        assert "°" in full
+
+    async def test_whois_no_distance_without_my_locator(self, make_registered):
+        bridge = MockBridge()
+        bridge.my_locator = ""  # locator not yet known
+        bridge.kst.online_users = {
+            "G6DDN": {"loc": "IO83RJ", "info": "Ian", "away": False}
+        }
+        _, client, _ = await make_registered(bridge)
+        await client.send("WHOIS G6DDN")
+        lines = await client.recv_until("318")
+        full = " ".join(lines)
+        assert "km" not in full
+
     async def test_whois_away_shows_301(self, make_registered):
         bridge = MockBridge()
         bridge.kst.online_users = {

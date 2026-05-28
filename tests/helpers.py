@@ -119,6 +119,8 @@ class MockBridge:
 
     def __init__(self):
         self.kst            = MockKSTProxy()
+        self.my_locator     = ""
+        self.stations: dict = {}
         self.irc_messages:   list[tuple[str, str]] = []
         self.connected:      list = []
         self.disconnected:   list = []

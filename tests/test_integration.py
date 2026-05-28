@@ -254,3 +254,57 @@ class TestUserList:
             assert any("PART" in l and "G6DDN" in l for l in lines)
         finally:
             w.close()
+
+
+# ============================================================
+# Sked commands
+# ============================================================
+
+class TestSkedCommands:
+    async def test_channel_sked_sends_sked_text(self, bridge_env):
+        bridge, kst_server, irc_port = bridge_env
+        bridge.my_locator = "JN97MX"
+        bridge.stations   = {"G6DDN": {"bands": ["2M"]}}
+        bridge.kst.online_users["G6DDN"] = {
+            "loc": "IO83RJ", "info": "Ian", "away": False
+        }
+        client, w = await irc_connect(irc_port)
+        try:
+            pre = len(kst_server.received)
+            await client.send(f"PRIVMSG {CHANNEL} :!sked G6DDN")
+            await asyncio.sleep(0.1)
+            new_sent = " ".join(kst_server.received[pre:])
+            assert "sked?" in new_sent
+            assert "G6DDN" in new_sent
+            assert "km" in new_sent
+        finally:
+            w.close()
+
+    async def test_pm_sked_sends_cq_with_sked_text(self, bridge_env):
+        bridge, kst_server, irc_port = bridge_env
+        bridge.my_locator = "JN97MX"
+        bridge.kst.online_users["G6DDN"] = {
+            "loc": "IO83RJ", "info": "Ian", "away": False
+        }
+        client, w = await irc_connect(irc_port)
+        try:
+            pre = len(kst_server.received)
+            await client.send("PRIVMSG G6DDN :sked")
+            await asyncio.sleep(0.1)
+            new_sent = " ".join(kst_server.received[pre:])
+            assert "/CQ G6DDN" in new_sent
+            assert "sked?" in new_sent
+        finally:
+            w.close()
+
+    async def test_non_sked_pm_forwarded_unchanged(self, bridge_env):
+        _, kst_server, irc_port = bridge_env
+        client, w = await irc_connect(irc_port)
+        try:
+            pre = len(kst_server.received)
+            await client.send("PRIVMSG G6DDN :Hello there")
+            await asyncio.sleep(0.1)
+            new_sent = " ".join(kst_server.received[pre:])
+            assert "/CQ G6DDN Hello there" in new_sent
+        finally:
+            w.close()

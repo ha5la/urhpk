@@ -3,7 +3,10 @@ import html
 
 import pytest
 
-from on4kst_irc_bridge import RE_CHAT_MSG, RE_RECIPIENT, RE_USR, strip_iac
+from on4kst_irc_bridge import (
+    RE_CHAT_MSG, RE_RECIPIENT, RE_USR, strip_iac,
+    maidenhead_to_latlon, haversine_km, initial_bearing, sked_text,
+)
 
 
 class TestStripIAC:
@@ -101,3 +104,66 @@ class TestHTMLEntities:
     def test_ampersand(self):
         assert html.unescape("&amp;") == "&"
         assert html.unescape("6&amp;2m") == "6&2m"
+
+
+class TestLocatorMath:
+    def test_maidenhead_center_4char(self):
+        lat, lon = maidenhead_to_latlon("JN97")
+        assert abs(lat - 47.5) < 0.01
+        assert abs(lon - 19.0) < 0.01
+
+    def test_maidenhead_center_6char(self):
+        lat, lon = maidenhead_to_latlon("JN97MX")
+        assert 47.0 < lat < 48.5
+        assert 18.5 < lon < 19.5
+
+    def test_haversine_same_point(self):
+        assert haversine_km(47.5, 19.0, 47.5, 19.0) == pytest.approx(0.0, abs=0.01)
+
+    def test_haversine_known_range(self):
+        lat1, lon1 = maidenhead_to_latlon("JN97")
+        lat2, lon2 = maidenhead_to_latlon("IO83")
+        d = haversine_km(lat1, lon1, lat2, lon2)
+        assert 1400 < d < 1700  # JN97→IO83 ≈ 1550 km
+
+    def test_bearing_due_north(self):
+        assert abs(initial_bearing(0, 0, 10, 0)) < 1.0
+
+    def test_bearing_due_east(self):
+        assert abs(initial_bearing(0, 0, 0, 10) - 90.0) < 1.0
+
+    def test_bearing_due_south(self):
+        assert abs(initial_bearing(10, 0, 0, 0) - 180.0) < 1.0
+
+    def test_bearing_jn97_to_io83_is_northwest(self):
+        lat1, lon1 = maidenhead_to_latlon("JN97")
+        lat2, lon2 = maidenhead_to_latlon("IO83")
+        b = initial_bearing(lat1, lon1, lat2, lon2)
+        assert 280 < b < 330  # northwest
+
+
+class TestSkedText:
+    def test_full_info(self):
+        text = sked_text("G6DDN", "HA5LA", "JN97MX", "IO83RJ", ["2M"])
+        assert "G6DDN" in text
+        assert "HA5LA" in text
+        assert "JN97MX" in text
+        assert "2M" in text
+        assert "km" in text
+        assert "sked?" in text
+
+    def test_no_locators(self):
+        text = sked_text("G6DDN", "HA5LA", "", "", ["2M"])
+        assert "G6DDN" in text
+        assert "km" not in text
+
+    def test_no_bands(self):
+        text = sked_text("G6DDN", "HA5LA", "JN97MX", "IO83RJ", [])
+        assert "km" in text
+        assert "2M" not in text
+
+    def test_multiple_bands_sorted(self):
+        text = sked_text("G6DDN", "HA5LA", "JN97MX", "IO83RJ", ["70CM", "2M"])
+        assert "2M" in text
+        assert "70CM" in text
+        assert text.index("2M") < text.index("70CM")  # sorted

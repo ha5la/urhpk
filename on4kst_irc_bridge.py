@@ -37,24 +37,28 @@ irssi quick-start:
 from __future__ import annotations
 
 import asyncio
+import csv
 import html
+import math
 import netrc
 import re
 import sys
 import time
+from pathlib import Path
 
 # ============================================================
 # Configuration
 # ============================================================
-KST_HOST    = "www.on4kst.info"
-KST_PORT    = 23000
-CHAT_CHOICE = "2"           # 144/432 MHz
-IRC_HOST    = "127.0.0.1"
-IRC_PORT    = 6667
-SERVER_NAME = "on4kst.bridge"
-CHANNEL     = "#on4kst"
-REFRESH_SEC = 120
-RECONNECT_S = 30
+KST_HOST     = "www.on4kst.info"
+KST_PORT     = 23000
+CHAT_CHOICE  = "2"           # 144/432 MHz
+IRC_HOST     = "127.0.0.1"
+IRC_PORT     = 6667
+SERVER_NAME  = "on4kst.bridge"
+CHANNEL      = "#on4kst"
+REFRESH_SEC  = 120
+RECONNECT_S  = 30
+STATIONS_CSV = "puskas_stations.csv"
 
 # ============================================================
 # Credentials
@@ -75,6 +79,90 @@ def load_credentials() -> tuple[str, str]:
     print("[error] No credentials found in ~/.netrc.")
     print(f"  Add: machine {KST_HOST} login <callsign> password SECRET")
     sys.exit(1)
+
+# ============================================================
+# Locator math (Maidenhead → lat/lon, haversine, bearing)
+# ============================================================
+
+def maidenhead_to_latlon(loc: str) -> tuple[float, float]:
+    loc = loc.upper().strip()
+    lon = (ord(loc[0]) - ord('A')) * 20 - 180 + int(loc[2]) * 2
+    lat = (ord(loc[1]) - ord('A')) * 10 - 90  + int(loc[3]) * 1
+    if len(loc) >= 6:
+        lon += (ord(loc[4]) - ord('A')) * (2 / 24) + (1 / 24)
+        lat += (ord(loc[5]) - ord('A')) * (1 / 24) + (1 / 48)
+    else:
+        lon += 1.0
+        lat += 0.5
+    return lat, lon
+
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    p = math.pi / 180
+    a = (math.sin((lat2 - lat1) * p / 2) ** 2
+         + math.cos(lat1 * p) * math.cos(lat2 * p)
+         * math.sin((lon2 - lon1) * p / 2) ** 2)
+    return 2 * 6371.0 * math.asin(math.sqrt(a))
+
+def initial_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    p = math.pi / 180
+    la1, la2 = lat1 * p, lat2 * p
+    dlon = (lon2 - lon1) * p
+    x = math.sin(dlon) * math.cos(la2)
+    y = math.cos(la1) * math.sin(la2) - math.sin(la1) * math.cos(la2) * math.cos(dlon)
+    return (math.degrees(math.atan2(x, y)) + 360) % 360
+
+def _loc_distance_str(my_loc: str, their_loc: str) -> str:
+    """Returns ' | dist km bear°' or '' if either locator is missing/invalid."""
+    if not my_loc or not their_loc:
+        return ""
+    try:
+        lat1, lon1 = maidenhead_to_latlon(my_loc)
+        lat2, lon2 = maidenhead_to_latlon(their_loc)
+        dist = int(haversine_km(lat1, lon1, lat2, lon2))
+        bear = int(initial_bearing(lat1, lon1, lat2, lon2))
+        return f" | {dist} km {bear}°"
+    except Exception:
+        return ""
+
+# ============================================================
+# Contest stations CSV (optional, for sked messages)
+# ============================================================
+
+def load_stations(csv_path: str = STATIONS_CSV) -> dict[str, dict]:
+    path = Path(csv_path)
+    if not path.exists():
+        print(f"[bridge] {csv_path} not found – sked messages will omit band info")
+        return {}
+    stations: dict[str, dict] = {}
+    with open(path, encoding="utf-8-sig") as f:
+        for row in csv.DictReader(f):
+            call = row["callsign"].upper().strip()
+            if call not in stations:
+                stations[call] = {"bands": []}
+            band = row["band"].strip()
+            if band and band != "?" and band not in stations[call]["bands"]:
+                stations[call]["bands"].append(band)
+    print(f"[bridge] {len(stations)} contest stations loaded from {csv_path}")
+    return stations
+
+def sked_text(call: str, my_call: str, my_loc: str,
+              their_loc: str, bands: list[str]) -> str:
+    msg = f"Hi {call}, sked? Puskás URH Kupa"
+    if bands:
+        msg += f" – {', '.join(sorted(bands))}"
+    if my_loc and their_loc:
+        try:
+            lat1, lon1 = maidenhead_to_latlon(my_loc)
+            lat2, lon2 = maidenhead_to_latlon(their_loc)
+            dist = int(haversine_km(lat1, lon1, lat2, lon2))
+            bear = int(initial_bearing(lat1, lon1, lat2, lon2))
+            msg += f" – {dist} km, {bear}°"
+        except Exception:
+            pass
+    if my_loc:
+        msg += f" ({my_loc})"
+    msg += f". 73 {my_call}"
+    return msg
 
 # ============================================================
 # Telnet IAC filter
@@ -113,8 +201,11 @@ RE_LOCATOR   = re.compile(r"\b([A-R]{2}\d{2}[A-X]{2})\b", re.I)
 # ============================================================
 
 class Bridge:
-    def __init__(self, callsign: str):
+    def __init__(self, callsign: str,
+                 stations: dict[str, dict] | None = None):
         self.callsign    = callsign
+        self.my_locator  = ""
+        self.stations    = stations or {}
         self.kst: ON4KSTClient | None = None
         self._sessions: set[IRCSession] = set()
 
@@ -140,9 +231,27 @@ class Bridge:
         if not self.kst:
             return
         if target.lower() == CHANNEL.lower():
-            await self.kst.send(text)
+            words = text.split(None, 1)
+            if len(words) == 2 and words[0].lower() == "!sked":
+                call = words[1].strip().upper()
+                user = self.kst.online_users.get(call) or {}
+                info = self.stations.get(call) or {}
+                await self.kst.send(
+                    sked_text(call, self.callsign, self.my_locator,
+                              user.get("loc", ""), info.get("bands", []))
+                )
+            else:
+                await self.kst.send(text)
         else:
-            await self.kst.send(f"/CQ {target.upper()} {text}")
+            if text.strip().lower() == "sked":
+                call = target.upper()
+                user = self.kst.online_users.get(call) or {}
+                info = self.stations.get(call) or {}
+                await self.kst.send(
+                    f"/CQ {call} {sked_text(call, self.callsign, self.my_locator, user.get('loc', ''), info.get('bands', []))}"
+                )
+            else:
+                await self.kst.send(f"/CQ {target.upper()} {text}")
 
     # ----------------------------------------------------------
     # Messages from ON4KST → IRC clients
@@ -342,11 +451,13 @@ class IRCSession:
             kst    = self._bridge.kst
             user   = kst.online_users.get(target) if kst else None
             if user:
-                gecos = user.get("info") or user["loc"]
+                gecos    = user.get("info") or user["loc"]
+                loc      = user["loc"]
+                dist_str = _loc_distance_str(self._bridge.my_locator, loc)
                 await self._num(311, target, target, "on4kst", "*",
-                                f"{gecos} [{user['loc']}]")
+                                f"{gecos} [{loc}]{dist_str}")
                 await self._num(319, target, CHANNEL)
-                await self._num(312, target, SERVER_NAME, f"ON4KST {user['loc']}")
+                await self._num(312, target, SERVER_NAME, f"ON4KST {loc}{dist_str}")
                 if user.get("away"):
                     await self._num(301, target, "Away (UNSET HERE)")
             await self._num(318, target, "End of WHOIS list.")
@@ -578,6 +689,7 @@ async def _run_kst(bridge: Bridge, callsign: str, password: str):
                 loc = await kst.fetch_locator()
                 if loc:
                     print(f"[KST] Locator: {loc}")
+                    bridge.my_locator = loc
                 # Mirror presence state: HERE if any IRC client is connected
                 if bridge._sessions:
                     await kst.send("/SET HERE")
@@ -595,7 +707,8 @@ async def _main():
     callsign, password = load_credentials()
     print(f"[bridge] Callsign: {callsign}")
 
-    bridge = Bridge(callsign)
+    stations = load_stations()
+    bridge   = Bridge(callsign, stations)
 
     async def _irc_handler(reader: asyncio.StreamReader,
                            writer: asyncio.StreamWriter):
