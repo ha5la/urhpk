@@ -465,7 +465,7 @@ class IRCSession:
                 await self._num(311, target, target, "on4kst", "*",
                                 f"{gecos} [{loc}]{dist_str}")
                 await self._num(319, target, CHANNEL)
-                await self._num(312, target, SERVER_NAME, f"ON4KST {loc}{dist_str}")
+                await self._num(312, target, SERVER_NAME, f"ON4KST {loc}")
                 if user.get("away"):
                     await self._num(301, target, "Away (UNSET HERE)")
             await self._num(318, target, "End of WHOIS list.")
