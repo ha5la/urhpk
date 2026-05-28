@@ -11,6 +11,7 @@ Amateur radio contest toolset for the Puskás URH Kupa, plus a general-purpose
 | File | Purpose |
 |---|---|
 | `on4kst_irc_bridge.py` | ON4KST ↔ IRC bridge; connect any IRC client to ON4KST chat |
+| `puskas_logger.py` | Contest QSO logger with rigctld integration; exports EDI files |
 | `puskas_log_analyzer.py` | Contest log analyser, generates `puskas_stations.csv` |
 
 ## Quick start — IRC bridge

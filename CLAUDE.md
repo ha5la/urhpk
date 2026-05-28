@@ -116,6 +116,29 @@ postinst enables and starts both services; prerm stops irssi first, then the bri
 - Bridge logs: `journalctl -u on4kst-irc-bridge -f`
 - To change the service user without losing it on upgrade: `sudo systemctl edit on4kst-irc-bridge`
 
+## puskas_logger.py – Contest QSO Logger
+
+Purpose-built for Puskás URH Kupa rules. Requires `prompt_toolkit` (declared in uv script header).
+
+```
+uv run puskas_logger.py
+```
+
+- Reads band/QRG/mode from rigctld (same `RIGCTLD_HOST:PORT` as the bridge); falls back to `!band`/`!mode` commands if rig offline
+- Input format: `CALL NR_R [LOC] [RST_R]` on one line — e.g. `HA7NS 015` or `HA7NS 015 JN97WM`
+- Locator prefilled from cache: Stage 1 parses all `my-logs/*.EDI`; Stage 2 queries `bb.mrasz.hu` API for each event ID in `EVENT_IDS`
+- RST defaults: `59` for SSB/FM, `599` for CW (based on current rig mode)
+- Serial auto-increments per band; all QSOs (including dups) get a serial
+- Dup check key: `(callsign, band, mode)` — 9 valid combos per station (3 bands × 3 modes)
+- Dup QSOs shown in red; can still be logged (operator decides); EDI export marks them `D`
+- Auto-saves EDI after every QSO; files named `YYMMDD-CALL-BAND.EDI` in current directory
+- Commands: `!save`, `!undo`, `!band 2M|70CM|23CM`, `!mode SSB|CW|FM`, `!help`
+- Ctrl-D → final save and exit
+
+EDI export: one file per band, `[REG1TEST;1]` format compatible with bb.mrasz.hu submission.
+
+To add a new round to the locator cache: append its event ID to `EVENT_IDS` in the script.
+
 ## Running
 ```
 uv run on4kst_irc_bridge.py # IRC bridge (then connect irssi to localhost:6667)
