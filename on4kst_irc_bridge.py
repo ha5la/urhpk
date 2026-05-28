@@ -34,7 +34,6 @@ irssi quick-start:
 from __future__ import annotations
 
 import asyncio
-import csv
 import html
 import math
 import netrc
@@ -57,7 +56,6 @@ SERVER_NAME  = "on4kst.bridge"
 CHANNEL      = "#on4kst"
 REFRESH_SEC  = 120
 RECONNECT_S  = 30
-STATIONS_CSV   = "puskas_stations.csv"
 RIGCTLD_HOST   = "localhost"
 RIGCTLD_PORT   = 4532
 RIGCTLD_POLL_S = 5
@@ -246,33 +244,10 @@ async def fetch_rig_info() -> tuple[str, str]:
     except Exception:
         return "", ""
 
-# ============================================================
-# Contest stations CSV (optional, for sked messages)
-# ============================================================
-
-def load_stations(csv_path: str = STATIONS_CSV) -> dict[str, dict]:
-    path = Path(csv_path)
-    if not path.exists():
-        print(f"[bridge] {csv_path} not found – sked messages will omit band info")
-        return {}
-    stations: dict[str, dict] = {}
-    with open(path, encoding="utf-8-sig") as f:
-        for row in csv.DictReader(f):
-            call = row["callsign"].upper().strip()
-            if call not in stations:
-                stations[call] = {"bands": []}
-            band = row["band"].strip()
-            if band and band != "?" and band not in stations[call]["bands"]:
-                stations[call]["bands"].append(band)
-    print(f"[bridge] {len(stations)} contest stations loaded from {csv_path}")
-    return stations
-
 def sked_text(call: str, my_call: str, my_loc: str,
-              their_loc: str, bands: list[str],
+              their_loc: str,
               qrg: str = "", mode: str = "") -> str:
     msg = f"Hi {call}, sked? Puskás URH Kupa"
-    if bands:
-        msg += f" – {', '.join(sorted(bands))}"
     if my_loc and their_loc:
         try:
             lat1, lon1 = maidenhead_to_latlon(my_loc)
@@ -328,11 +303,9 @@ RE_LOCATOR   = re.compile(r"\b([A-R]{2}\d{2}[A-X]{2})\b", re.I)
 # ============================================================
 
 class Bridge:
-    def __init__(self, callsign: str,
-                 stations: dict[str, dict] | None = None):
+    def __init__(self, callsign: str):
         self.callsign    = callsign
         self.my_locator  = ""
-        self.stations    = stations or {}
         self.rig_qrg     = ""
         self.rig_mode    = ""
         self.kst: ON4KSTClient | None = None
@@ -368,9 +341,8 @@ class Bridge:
             if text.strip().lower() == "sked":
                 call = target.upper()
                 user = self.kst.online_users.get(call) or {}
-                info = self.stations.get(call) or {}
                 msg  = sked_text(call, self.callsign, self.my_locator,
-                                 user.get("loc", ""), info.get("bands", []),
+                                 user.get("loc", ""),
                                  self.rig_qrg, self.rig_mode)
                 await self.kst.send(f"/CQ {call} {msg}")
                 await self._notify(f"→ /CQ {call}: {msg}")
@@ -947,8 +919,7 @@ async def _main():
     callsign, password = load_credentials()
     print(f"[bridge] Callsign: {callsign}")
 
-    stations = load_stations()
-    bridge   = Bridge(callsign, stations)
+    bridge = Bridge(callsign)
 
     async def _irc_handler(reader: asyncio.StreamReader,
                            writer: asyncio.StreamWriter):

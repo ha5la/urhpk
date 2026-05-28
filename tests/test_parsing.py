@@ -145,32 +145,20 @@ class TestLocatorMath:
 
 class TestSkedText:
     def test_full_info(self):
-        text = sked_text("G6DDN", "HA5LA", "JN97MX", "IO83RJ", ["2M"])
+        text = sked_text("G6DDN", "HA5LA", "JN97MX", "IO83RJ")
         assert "G6DDN" in text
         assert "HA5LA" in text
         assert "JN97MX" in text
-        assert "2M" in text
         assert "km" in text
         assert "sked?" in text
 
     def test_no_locators(self):
-        text = sked_text("G6DDN", "HA5LA", "", "", ["2M"])
+        text = sked_text("G6DDN", "HA5LA", "", "")
         assert "G6DDN" in text
         assert "km" not in text
 
-    def test_no_bands(self):
-        text = sked_text("G6DDN", "HA5LA", "JN97MX", "IO83RJ", [])
-        assert "km" in text
-        assert "2M" not in text
-
-    def test_multiple_bands_sorted(self):
-        text = sked_text("G6DDN", "HA5LA", "JN97MX", "IO83RJ", ["70CM", "2M"])
-        assert "2M" in text
-        assert "70CM" in text
-        assert text.index("2M") < text.index("70CM")  # sorted
-
     def test_with_qrg_and_mode(self):
-        text = sked_text("G6DDN", "HA5LA", "JN97MX", "IO83RJ", [],
+        text = sked_text("G6DDN", "HA5LA", "JN97MX", "IO83RJ",
                          qrg="144.174", mode="USB")
         assert "144.174 MHz" in text
         assert "USB" in text
@@ -178,7 +166,7 @@ class TestSkedText:
         assert text.index("144.174") < text.index("JN97MX")
 
     def test_with_qrg_no_mode(self):
-        text = sked_text("G6DDN", "HA5LA", "JN97MX", "IO83RJ", [],
+        text = sked_text("G6DDN", "HA5LA", "JN97MX", "IO83RJ",
                          qrg="144.174", mode="")
         assert "144.174 MHz" in text
         assert "USB" not in text
