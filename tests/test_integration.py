@@ -8,6 +8,7 @@ import pytest
 
 from on4kst_irc_bridge import Bridge, IRCSession, ON4KSTClient
 from on4kst_irc_bridge import CHANNEL
+import on4kst_irc_bridge as bridge_module
 from tests.helpers import (
     CALLSIGN, PASSWORD,
     IRCClientHelper, MockKSTServer,
@@ -377,3 +378,146 @@ class TestLocalCommands:
             assert any("NOTICE" in l and "bogus" in l for l in lines)
         finally:
             w.close()
+
+
+# ============================================================
+# rigctld integration
+# ============================================================
+
+class MockRigctld:
+    """Minimal rigctld stub: responds to f\n+m\n with fixed freq and mode."""
+
+    def __init__(self, freq_hz: str = "144174000", mode: str = "USB"):
+        self._freq_hz = freq_hz
+        self._mode    = mode
+        self._server  = None
+        self.port: int = 0
+
+    async def start(self):
+        self._server = await asyncio.start_server(
+            self._handle, "127.0.0.1", 0
+        )
+        self.port = self._server.sockets[0].getsockname()[1]
+
+    async def stop(self):
+        if self._server:
+            self._server.close()
+            try:
+                await asyncio.wait_for(self._server.wait_closed(), timeout=1.0)
+            except asyncio.TimeoutError:
+                pass
+
+    async def _handle(self, reader: asyncio.StreamReader,
+                      writer: asyncio.StreamWriter):
+        try:
+            while True:
+                line = await reader.readline()
+                if not line:
+                    break
+                cmd = line.strip()
+                if cmd == b"f":
+                    writer.write(f"{self._freq_hz}\n".encode())
+                elif cmd == b"m":
+                    writer.write(f"{self._mode}\n2700\n".encode())
+                await writer.drain()
+        except (ConnectionResetError, BrokenPipeError, OSError):
+            pass
+        finally:
+            writer.close()
+
+
+class TestRigctld:
+    async def test_sked_includes_qrg_when_cache_populated(self, bridge_env):
+        bridge, kst_server, irc_port = bridge_env
+        bridge.my_locator = "JN97MX"
+        bridge.rig_qrg  = "144.174"
+        bridge.rig_mode = "USB"
+        bridge.kst.online_users["G6DDN"] = {
+            "loc": "IO83RJ", "info": "Ian", "away": False
+        }
+        client, w = await irc_connect(irc_port)
+        try:
+            await client.send("PRIVMSG G6DDN :sked")
+            await asyncio.sleep(0.1)
+            new_sent = " ".join(kst_server.received)
+            assert "144.174 MHz" in new_sent
+            assert "USB" in new_sent
+        finally:
+            w.close()
+
+    async def test_sked_omits_qrg_when_rigctld_unavailable(self, bridge_env):
+        bridge, kst_server, irc_port = bridge_env
+        bridge.my_locator = "JN97MX"
+        bridge.rig_qrg  = ""
+        bridge.rig_mode = ""
+        bridge.kst.online_users["G6DDN"] = {
+            "loc": "IO83RJ", "info": "Ian", "away": False
+        }
+        client, w = await irc_connect(irc_port)
+        try:
+            await client.send("PRIVMSG G6DDN :sked")
+            await asyncio.sleep(0.1)
+            new_sent = " ".join(kst_server.received)
+            assert "MHz" not in new_sent
+        finally:
+            w.close()
+
+    async def test_rig_poller_notifies_status_on_connect(self):
+        bridge = Bridge(CALLSIGN)
+        rig = MockRigctld(freq_hz="144174000", mode="USB")
+        await rig.start()
+        orig_host, orig_port = bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT
+        orig_poll  = bridge_module.RIGCTLD_POLL_S
+        bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT = "127.0.0.1", rig.port
+        bridge_module.RIGCTLD_POLL_S = 0.1
+        notices = []
+
+        async def fake_notify_status(text):
+            notices.append(text)
+
+        bridge._notify_status = fake_notify_status
+        task = asyncio.create_task(bridge_module._rig_poller(bridge))
+        try:
+            await asyncio.sleep(0.4)
+            assert any("Connected" in n for n in notices)
+            assert any("144.174" in n for n in notices)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            bridge_module.RIGCTLD_HOST   = orig_host
+            bridge_module.RIGCTLD_PORT   = orig_port
+            bridge_module.RIGCTLD_POLL_S = orig_poll
+            await rig.stop()
+
+    async def test_rig_poller_notifies_status_on_disconnect(self):
+        bridge = Bridge(CALLSIGN)
+        rig = MockRigctld()
+        await rig.start()
+        orig_host, orig_port = bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT
+        orig_poll  = bridge_module.RIGCTLD_POLL_S
+        bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT = "127.0.0.1", rig.port
+        bridge_module.RIGCTLD_POLL_S = 0.1
+        notices = []
+
+        async def fake_notify_status(text):
+            notices.append(text)
+
+        bridge._notify_status = fake_notify_status
+        task = asyncio.create_task(bridge_module._rig_poller(bridge))
+        try:
+            await asyncio.sleep(0.3)   # let it connect
+            await rig.stop()
+            await asyncio.sleep(0.4)   # let it detect disconnect
+            assert any("Disconnected" in n for n in notices)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            bridge_module.RIGCTLD_HOST   = orig_host
+            bridge_module.RIGCTLD_PORT   = orig_port
+            bridge_module.RIGCTLD_POLL_S = orig_poll

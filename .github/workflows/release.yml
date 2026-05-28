@@ -45,6 +45,20 @@ jobs:
           systemctl daemon-reload
           systemctl enable on4kst-irc-bridge.service
           systemctl start on4kst-irc-bridge.service || true
+
+          # Install tmux_away.pl into irssi scripts dir and set up autorun symlink.
+          # The script is expected at /home/pi/tmux_away.pl on first install.
+          SCRIPTS=/home/pi/.irssi/scripts
+          AUTORUN=$SCRIPTS/autorun
+          mkdir -p "$AUTORUN"
+          if [ -f /home/pi/tmux_away.pl ] && [ ! -f "$SCRIPTS/tmux_away.pl" ]; then
+              mv /home/pi/tmux_away.pl "$SCRIPTS/tmux_away.pl"
+          fi
+          chown -R pi:pi /home/pi/.irssi 2>/dev/null || true
+          if [ -f "$SCRIPTS/tmux_away.pl" ] && [ ! -e "$AUTORUN/tmux_away.pl" ]; then
+              ln -s ../tmux_away.pl "$AUTORUN/tmux_away.pl"
+          fi
+
           systemctl enable irssi.service
           systemctl start irssi.service || true
           EOF

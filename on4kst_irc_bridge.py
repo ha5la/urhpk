@@ -57,7 +57,10 @@ SERVER_NAME  = "on4kst.bridge"
 CHANNEL      = "#on4kst"
 REFRESH_SEC  = 120
 RECONNECT_S  = 30
-STATIONS_CSV = "puskas_stations.csv"
+STATIONS_CSV   = "puskas_stations.csv"
+RIGCTLD_HOST   = "localhost"
+RIGCTLD_PORT   = 4532
+RIGCTLD_POLL_S = 5
 
 # ============================================================
 # Credentials
@@ -225,6 +228,25 @@ async def scatter_candidates(my_loc: str,
     return candidates
 
 # ============================================================
+# Rig control (rigctld TCP client)
+# ============================================================
+
+async def fetch_rig_info() -> tuple[str, str]:
+    """Returns (freq_mhz_str, mode) from rigctld, or ('', '') if unavailable."""
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(RIGCTLD_HOST, RIGCTLD_PORT), timeout=2.0
+        )
+        writer.write(b"f\nm\n")
+        await writer.drain()
+        freq_line = (await asyncio.wait_for(reader.readline(), timeout=2.0)).decode().strip()
+        mode_line = (await asyncio.wait_for(reader.readline(), timeout=2.0)).decode().strip()
+        writer.close()
+        return f"{float(freq_line) / 1e6:.3f}", mode_line
+    except Exception:
+        return "", ""
+
+# ============================================================
 # Contest stations CSV (optional, for sked messages)
 # ============================================================
 
@@ -246,7 +268,8 @@ def load_stations(csv_path: str = STATIONS_CSV) -> dict[str, dict]:
     return stations
 
 def sked_text(call: str, my_call: str, my_loc: str,
-              their_loc: str, bands: list[str]) -> str:
+              their_loc: str, bands: list[str],
+              qrg: str = "", mode: str = "") -> str:
     msg = f"Hi {call}, sked? Puskás URH Kupa"
     if bands:
         msg += f" – {', '.join(sorted(bands))}"
@@ -259,6 +282,10 @@ def sked_text(call: str, my_call: str, my_loc: str,
             msg += f" – {dist} km, {bear}°"
         except Exception:
             pass
+    if qrg:
+        msg += f" – {qrg} MHz"
+        if mode:
+            msg += f" {mode}"
     if my_loc:
         msg += f" ({my_loc})"
     msg += f". 73 {my_call}"
@@ -306,6 +333,8 @@ class Bridge:
         self.callsign    = callsign
         self.my_locator  = ""
         self.stations    = stations or {}
+        self.rig_qrg     = ""
+        self.rig_mode    = ""
         self.kst: ON4KSTClient | None = None
         self._sessions: set[IRCSession] = set()
 
@@ -341,7 +370,8 @@ class Bridge:
                 user = self.kst.online_users.get(call) or {}
                 info = self.stations.get(call) or {}
                 msg  = sked_text(call, self.callsign, self.my_locator,
-                                 user.get("loc", ""), info.get("bands", []))
+                                 user.get("loc", ""), info.get("bands", []),
+                                 self.rig_qrg, self.rig_mode)
                 await self.kst.send(f"/CQ {call} {msg}")
                 await self._notify(f"→ /CQ {call}: {msg}")
             else:
@@ -355,6 +385,13 @@ class Bridge:
         for s in list(self._sessions):
             try:
                 await s._send(f":{SERVER_NAME} NOTICE {CHANNEL} :{text}")
+            except Exception:
+                pass
+
+    async def _notify_status(self, text: str):
+        for s in list(self._sessions):
+            try:
+                await s._send(f":{SERVER_NAME} NOTICE {self.callsign} :{text}")
             except Exception:
                 pass
 
@@ -374,6 +411,10 @@ class Bridge:
         await self._notify("  !scatter  – airplane scatter paths with live aircraft data")
         await self._notify("  !help     – this help")
         await self._notify("  /msg CALL sked  – send contest sked proposal via /CQ")
+        if self.rig_qrg:
+            await self._notify(f"  Rig: {self.rig_qrg} MHz {self.rig_mode} (included in sked automatically)")
+        else:
+            await self._notify("  Rig: rigctld not connected (start rigctld to include QRG in sked)")
 
     async def _run_list(self):
         if not self.kst:
@@ -857,6 +898,25 @@ class ON4KSTClient:
 # Entry point
 # ============================================================
 
+async def _rig_poller(bridge: Bridge):
+    """Poll rigctld every RIGCTLD_POLL_S seconds and cache freq/mode on bridge."""
+    was_connected = False
+    while True:
+        qrg, mode = await fetch_rig_info()
+        if qrg:
+            if not was_connected:
+                await bridge._notify_status(f"[rig] Connected – {qrg} MHz {mode}")
+                was_connected = True
+            bridge.rig_qrg  = qrg
+            bridge.rig_mode = mode
+        else:
+            if was_connected:
+                await bridge._notify_status("[rig] Disconnected – rig info unavailable")
+                was_connected = False
+            bridge.rig_qrg  = ""
+            bridge.rig_mode = ""
+        await asyncio.sleep(RIGCTLD_POLL_S)
+
 async def _run_kst(bridge: Bridge, callsign: str, password: str):
     """Keep ON4KST connected, reconnecting as needed."""
     while True:
@@ -906,6 +966,7 @@ async def _main():
         await asyncio.gather(
             server.serve_forever(),
             _run_kst(bridge, callsign, password),
+            _rig_poller(bridge),
         )
 
 

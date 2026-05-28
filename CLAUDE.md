@@ -39,10 +39,18 @@ Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
 - WHOIS shows distance and bearing (e.g. `1534 km 305°`) computed from own locator
   (fetched via `/SHow CONFig` at login) to the target's current KST locator
 - Sked commands (require `puskas_stations.csv` for band info, optional):
-  - `!sked CALL` in `#on4kst` → sends public sked message to the channel
-  - `/msg CALL sked` (IRC PM) → sends sked via `/CQ CALL …` on KST
-  - Sked text: `"Hi CALL, sked? Puskás URH Kupa – 2M – 1534 km, 305° (JN97MX). 73 HA5LA"`
-  - Bands come from `puskas_stations.csv`; distance/bearing computed at runtime
+  - `/msg CALL sked` (IRC PM) → sends sked via `/CQ CALL …` on KST, echoes NOTICE to channel
+  - Sked text: `"Hi CALL, sked? Puskás URH Kupa – 2M – 1534 km, 305° – 144.174 MHz USB (JN97MX). 73 HA5LA"`
+  - Bands from `puskas_stations.csv`; distance/bearing computed at runtime; QRG/mode from rigctld cache
+- Local commands (not forwarded to KST, response NOTICE goes to `#on4kst`):
+  - `!scatter CALL` — real-time airplane scatter check via OpenSky Network API
+  - `!list` — lists online stations by distance and bearing
+  - `!help` — lists available commands
+- rigctld integration (optional, no-op when rigctld not running):
+  - Background poller (`_rig_poller`) queries `RIGCTLD_HOST:RIGCTLD_PORT` every `RIGCTLD_POLL_S` (5 s)
+  - Caches latest `(rig_qrg, rig_mode)` on the `Bridge` object; sked reads the cache — zero latency
+  - Connect/disconnect events shown as NOTICE to own nick (irssi status window), not the channel
+  - To start rigctld: `rigctld -m MODEL -r /dev/ttyUSB0` (see Hamlib docs for MODEL number)
 
 irssi quick-start:
 ```
@@ -116,7 +124,7 @@ loads it at startup for band info in sked messages. The bridge works without it.
 
 ## Testing
 ```
-uv run pytest tests/ -v     # 50 tests: parsing, IRC protocol, integration
+uv run pytest tests/ -v     # 82 tests: parsing, IRC protocol, integration
 ```
 CI runs the same suite on every push via GitHub Actions.
 

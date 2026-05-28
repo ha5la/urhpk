@@ -169,6 +169,20 @@ class TestSkedText:
         assert "70CM" in text
         assert text.index("2M") < text.index("70CM")  # sorted
 
+    def test_with_qrg_and_mode(self):
+        text = sked_text("G6DDN", "HA5LA", "JN97MX", "IO83RJ", [],
+                         qrg="144.174", mode="USB")
+        assert "144.174 MHz" in text
+        assert "USB" in text
+        # QRG appears before locator
+        assert text.index("144.174") < text.index("JN97MX")
+
+    def test_with_qrg_no_mode(self):
+        text = sked_text("G6DDN", "HA5LA", "JN97MX", "IO83RJ", [],
+                         qrg="144.174", mode="")
+        assert "144.174 MHz" in text
+        assert "USB" not in text
+
 
 class TestScatterGeometry:
     def test_midpoint_is_equidistant(self):
