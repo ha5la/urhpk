@@ -3,8 +3,10 @@
 ## What is this?
 Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
 - `puskas_log_analyzer.py` – contest log analyser, generates `puskas_stations.csv`
-- `puskas_kst.py` – ON4KST 144/432 MHz chat client, monitors online stations
 - `on4kst_irc_bridge.py` – general ON4KST↔IRC bridge; use with irssi or any IRC client
+
+## Housekeeping reminders
+- When adding or removing components, update the components table in **README.md**
 
 ## Development principles
 - **Kent Beck's simplicity rule**: always implement the simplest thing that works.
