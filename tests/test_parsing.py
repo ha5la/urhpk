@@ -6,6 +6,7 @@ import pytest
 from on4kst_irc_bridge import (
     RE_CHAT_MSG, RE_RECIPIENT, RE_USR, strip_iac,
     maidenhead_to_latlon, haversine_km, initial_bearing, sked_text,
+    latlon_to_maidenhead, great_circle_midpoint,
 )
 
 
@@ -167,3 +168,32 @@ class TestSkedText:
         assert "2M" in text
         assert "70CM" in text
         assert text.index("2M") < text.index("70CM")  # sorted
+
+
+class TestScatterGeometry:
+    def test_midpoint_is_equidistant(self):
+        lat1, lon1 = maidenhead_to_latlon("JN97")
+        lat2, lon2 = maidenhead_to_latlon("IO83")
+        mlat, mlon = great_circle_midpoint(lat1, lon1, lat2, lon2)
+        d1 = haversine_km(lat1, lon1, mlat, mlon)
+        d2 = haversine_km(lat2, lon2, mlat, mlon)
+        assert abs(d1 - d2) < 1.0
+
+    def test_midpoint_of_same_point_is_same_point(self):
+        lat, lon = maidenhead_to_latlon("JN97MX")
+        mlat, mlon = great_circle_midpoint(lat, lon, lat, lon)
+        assert abs(mlat - lat) < 0.01
+        assert abs(mlon - lon) < 0.01
+
+    def test_latlon_to_maidenhead_roundtrip(self):
+        for loc in ("JN97", "IO83", "JO62"):
+            lat, lon = maidenhead_to_latlon(loc)
+            result = latlon_to_maidenhead(lat, lon)
+            assert result[:4] == loc  # at least field+square match
+
+    def test_midpoint_loc_is_between_endpoints(self):
+        lat1, lon1 = maidenhead_to_latlon("JN97")  # Budapest
+        lat2, lon2 = maidenhead_to_latlon("IO83")  # UK
+        mlat, mlon = great_circle_midpoint(lat1, lon1, lat2, lon2)
+        # midpoint must be west of JN97 and east of IO83
+        assert lon2 < mlon < lon1

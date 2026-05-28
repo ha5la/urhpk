@@ -18,9 +18,6 @@ Channel:     #on4kst
   • Private msg  ↔  /CQ CALLSIGN  (mapped to IRC PRIVMSG <callsign>)
   • /SET HERE when first IRC client connects; /UNSET HERE when last disconnects
   • ON4KST connection is kept alive and reconnects automatically
-  • Messages received while no IRC client is connected are buffered (up to
-    HISTORY_MAX) and replayed with their original timestamp when a client
-    connects
 
 Prerequisites:
   ~/.netrc must contain:
@@ -44,6 +41,8 @@ import netrc
 import re
 import sys
 import time
+import urllib.request
+import json
 from pathlib import Path
 
 # ============================================================
@@ -123,6 +122,107 @@ def _loc_distance_str(my_loc: str, their_loc: str) -> str:
         return f" | {dist} km {bear}°"
     except Exception:
         return ""
+
+# ============================================================
+# Airplane scatter
+# ============================================================
+
+SCATTER_MIN_KM  = 200
+SCATTER_MAX_KM  = 1500
+SCATTER_RADIUS_KM = 50   # aircraft search radius around path midpoint
+OPENSKY_URL     = "https://opensky-network.org/api/states/all"
+
+def latlon_to_maidenhead(lat: float, lon: float) -> str:
+    lon += 180
+    lat += 90
+    loc  = chr(ord('A') + int(lon / 20))
+    loc += chr(ord('A') + int(lat / 10))
+    loc += str(int((lon % 20) / 2))
+    loc += str(int(lat % 10))
+    loc += chr(ord('A') + int((lon % 2) / (2 / 24)))
+    loc += chr(ord('A') + int((lat % 1) / (1 / 24)))
+    return loc
+
+def great_circle_midpoint(lat1: float, lon1: float,
+                           lat2: float, lon2: float) -> tuple[float, float]:
+    p  = math.pi / 180
+    la1, la2 = lat1 * p, lat2 * p
+    lo1, lo2 = lon1 * p, lon2 * p
+    Bx = math.cos(la2) * math.cos(lo2 - lo1)
+    By = math.cos(la2) * math.sin(lo2 - lo1)
+    lat_m = math.atan2(math.sin(la1) + math.sin(la2),
+                       math.sqrt((math.cos(la1) + Bx) ** 2 + By ** 2))
+    lon_m = lo1 + math.atan2(By, math.cos(la1) + Bx)
+    return lat_m / p, lon_m / p
+
+def fetch_aircraft_near(lat: float, lon: float,
+                         radius_km: float) -> list[dict]:
+    """Query OpenSky Network for aircraft within radius_km of (lat, lon).
+    Returns a list of dicts with keys: callsign, lat, lon, altitude_m, distance_km.
+    Returns [] on any error (network, rate-limit, etc.).
+    """
+    deg = radius_km / 111.0
+    params = (f"?lamin={lat - deg:.4f}&lomin={lon - deg:.4f}"
+              f"&lamax={lat + deg:.4f}&lomax={lon + deg:.4f}")
+    try:
+        with urllib.request.urlopen(OPENSKY_URL + params, timeout=5) as r:
+            data = json.loads(r.read())
+    except Exception:
+        return []
+
+    aircraft = []
+    for s in (data.get("states") or []):
+        # state vector: [icao, callsign, origin, ?, ?, lon, lat, baro_alt, ...]
+        if s[5] is None or s[6] is None or s[7] is None:
+            continue
+        ac_lat, ac_lon, alt = s[6], s[5], s[7]
+        dist = haversine_km(lat, lon, ac_lat, ac_lon)
+        if dist <= radius_km:
+            aircraft.append({
+                "callsign":    (s[1] or "").strip() or s[0],
+                "lat":         ac_lat,
+                "lon":         ac_lon,
+                "altitude_m":  alt,
+                "distance_km": dist,
+            })
+    aircraft.sort(key=lambda a: a["distance_km"])
+    return aircraft
+
+async def scatter_candidates(my_loc: str,
+                              online_users: dict[str, dict]) -> list[dict]:
+    """Return scatter-feasible online stations with nearest aircraft info."""
+    if not my_loc:
+        return []
+    my_lat, my_lon = maidenhead_to_latlon(my_loc)
+    candidates = []
+    for call, user in online_users.items():
+        loc = user.get("loc", "")
+        if not loc:
+            continue
+        try:
+            th_lat, th_lon = maidenhead_to_latlon(loc)
+        except Exception:
+            continue
+        dist = haversine_km(my_lat, my_lon, th_lat, th_lon)
+        if not (SCATTER_MIN_KM <= dist <= SCATTER_MAX_KM):
+            continue
+        mid_lat, mid_lon = great_circle_midpoint(my_lat, my_lon, th_lat, th_lon)
+        bear_to_mid = initial_bearing(my_lat, my_lon, mid_lat, mid_lon)
+        mid_loc = latlon_to_maidenhead(mid_lat, mid_lon)
+        # aircraft query runs in a thread to avoid blocking the event loop
+        aircraft = await asyncio.get_event_loop().run_in_executor(
+            None, fetch_aircraft_near, mid_lat, mid_lon, SCATTER_RADIUS_KM
+        )
+        candidates.append({
+            "call":       call,
+            "loc":        loc,
+            "dist_km":    dist,
+            "bear_to_mid": bear_to_mid,
+            "mid_loc":    mid_loc,
+            "aircraft":   aircraft,
+        })
+    candidates.sort(key=lambda c: c["dist_km"])
+    return candidates
 
 # ============================================================
 # Contest stations CSV (optional, for sked messages)
@@ -231,15 +331,8 @@ class Bridge:
         if not self.kst:
             return
         if target.lower() == CHANNEL.lower():
-            words = text.split(None, 1)
-            if len(words) == 2 and words[0].lower() == "!sked":
-                call = words[1].strip().upper()
-                user = self.kst.online_users.get(call) or {}
-                info = self.stations.get(call) or {}
-                msg  = sked_text(call, self.callsign, self.my_locator,
-                                 user.get("loc", ""), info.get("bands", []))
-                await self.kst.send(msg)
-                await self._notify(f"→ {msg}")
+            if text.strip().lower() == "!scatter":
+                asyncio.create_task(self._run_scatter())
             else:
                 await self.kst.send(text)
         else:
@@ -264,6 +357,36 @@ class Bridge:
                 await s._send(f":{SERVER_NAME} NOTICE {self.callsign} :{text}")
             except Exception:
                 pass
+
+    async def _run_scatter(self):
+        if not self.kst:
+            return
+        await self._notify("Querying aircraft positions, please wait…")
+        candidates = await scatter_candidates(self.my_locator, self.kst.online_users)
+        if not candidates:
+            await self._notify(
+                f"No scatter candidates online ({SCATTER_MIN_KM}–{SCATTER_MAX_KM} km)."
+            )
+            return
+        await self._notify(
+            f"Scatter candidates ({SCATTER_MIN_KM}–{SCATTER_MAX_KM} km), "
+            f"aircraft within {SCATTER_RADIUS_KM} km of midpoint:"
+        )
+        for c in candidates:
+            ac = c["aircraft"]
+            if ac:
+                a = ac[0]
+                ac_str = (f"✈ {a['callsign']} "
+                          f"{int(a['altitude_m'])} m, "
+                          f"{int(a['distance_km'])} km off midpoint")
+            else:
+                ac_str = "no aircraft near midpoint"
+            await self._notify(
+                f"  {c['call']:<10} {c['loc']:<8} "
+                f"{int(c['dist_km']):>5} km  "
+                f"aim {int(c['bear_to_mid']):>3}° → {c['mid_loc']}  "
+                f"{ac_str}"
+            )
 
     async def kst_message(self, utc: str, from_call: str,
                           recipient: str | None, text: str):
