@@ -297,6 +297,40 @@ class TestSkedCommands:
         finally:
             w.close()
 
+    async def test_channel_sked_echoes_notice(self, bridge_env):
+        bridge, kst_server, irc_port = bridge_env
+        bridge.my_locator = "JN97MX"
+        bridge.kst.online_users["G6DDN"] = {
+            "loc": "IO83RJ", "info": "Ian", "away": False
+        }
+        client, w = await irc_connect(irc_port)
+        try:
+            await client.send(f"PRIVMSG {CHANNEL} :!sked G6DDN")
+            lines = await client.drain()
+            notice = next((l for l in lines if "NOTICE" in l), None)
+            assert notice is not None, "Bridge must echo a NOTICE after !sked"
+            assert "sked?" in notice
+            assert "G6DDN" in notice
+        finally:
+            w.close()
+
+    async def test_pm_sked_echoes_notice(self, bridge_env):
+        bridge, kst_server, irc_port = bridge_env
+        bridge.my_locator = "JN97MX"
+        bridge.kst.online_users["G6DDN"] = {
+            "loc": "IO83RJ", "info": "Ian", "away": False
+        }
+        client, w = await irc_connect(irc_port)
+        try:
+            await client.send("PRIVMSG G6DDN :sked")
+            lines = await client.drain()
+            notice = next((l for l in lines if "NOTICE" in l), None)
+            assert notice is not None, "Bridge must echo a NOTICE after PM sked"
+            assert "/CQ G6DDN" in notice
+            assert "sked?" in notice
+        finally:
+            w.close()
+
     async def test_non_sked_pm_forwarded_unchanged(self, bridge_env):
         _, kst_server, irc_port = bridge_env
         client, w = await irc_connect(irc_port)

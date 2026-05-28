@@ -236,10 +236,10 @@ class Bridge:
                 call = words[1].strip().upper()
                 user = self.kst.online_users.get(call) or {}
                 info = self.stations.get(call) or {}
-                await self.kst.send(
-                    sked_text(call, self.callsign, self.my_locator,
-                              user.get("loc", ""), info.get("bands", []))
-                )
+                msg  = sked_text(call, self.callsign, self.my_locator,
+                                 user.get("loc", ""), info.get("bands", []))
+                await self.kst.send(msg)
+                await self._notify(f"→ {msg}")
             else:
                 await self.kst.send(text)
         else:
@@ -247,15 +247,23 @@ class Bridge:
                 call = target.upper()
                 user = self.kst.online_users.get(call) or {}
                 info = self.stations.get(call) or {}
-                await self.kst.send(
-                    f"/CQ {call} {sked_text(call, self.callsign, self.my_locator, user.get('loc', ''), info.get('bands', []))}"
-                )
+                msg  = sked_text(call, self.callsign, self.my_locator,
+                                 user.get("loc", ""), info.get("bands", []))
+                await self.kst.send(f"/CQ {call} {msg}")
+                await self._notify(f"→ /CQ {call}: {msg}")
             else:
                 await self.kst.send(f"/CQ {target.upper()} {text}")
 
     # ----------------------------------------------------------
     # Messages from ON4KST → IRC clients
     # ----------------------------------------------------------
+
+    async def _notify(self, text: str):
+        for s in list(self._sessions):
+            try:
+                await s._send(f":{SERVER_NAME} NOTICE {self.callsign} :{text}")
+            except Exception:
+                pass
 
     async def kst_message(self, utc: str, from_call: str,
                           recipient: str | None, text: str):
