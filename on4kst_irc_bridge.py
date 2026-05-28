@@ -331,8 +331,8 @@ class Bridge:
         if not self.kst:
             return
         if target.lower() == CHANNEL.lower():
-            if text.strip().lower() == "!scatter":
-                asyncio.create_task(self._run_scatter())
+            if text.startswith("!"):
+                await self._handle_local_command(text.split()[0].lower())
             else:
                 await self.kst.send(text)
         else:
@@ -354,9 +354,58 @@ class Bridge:
     async def _notify(self, text: str):
         for s in list(self._sessions):
             try:
-                await s._send(f":{SERVER_NAME} NOTICE {self.callsign} :{text}")
+                await s._send(f":{SERVER_NAME} NOTICE {CHANNEL} :{text}")
             except Exception:
                 pass
+
+    async def _handle_local_command(self, cmd: str):
+        if cmd == "!scatter":
+            asyncio.create_task(self._run_scatter())
+        elif cmd == "!list":
+            await self._run_list()
+        elif cmd == "!help":
+            await self._run_help()
+        else:
+            await self._notify(f"Unknown command: {cmd}  –  try !help")
+
+    async def _run_help(self):
+        await self._notify("Local commands (not sent to the channel):")
+        await self._notify("  !list     – online stations sorted by distance and bearing")
+        await self._notify("  !scatter  – airplane scatter paths with live aircraft data")
+        await self._notify("  !help     – this help")
+        await self._notify("  /msg CALL sked  – send contest sked proposal via /CQ")
+
+    async def _run_list(self):
+        if not self.kst:
+            return
+        if not self.my_locator:
+            await self._notify("Own locator not yet known, try again in a moment.")
+            return
+        my_lat, my_lon = maidenhead_to_latlon(self.my_locator)
+        rows = []
+        for call, user in self.kst.online_users.items():
+            if call == self.callsign:
+                continue
+            loc = user.get("loc", "")
+            if not loc:
+                continue
+            try:
+                th_lat, th_lon = maidenhead_to_latlon(loc)
+                dist = haversine_km(my_lat, my_lon, th_lat, th_lon)
+                bear = initial_bearing(my_lat, my_lon, th_lat, th_lon)
+                rows.append((call, loc, dist, bear, user.get("away", False)))
+            except Exception:
+                continue
+        rows.sort(key=lambda r: r[2])
+        if not rows:
+            await self._notify("No other stations online.")
+            return
+        await self._notify(f"Online stations ({len(rows)}), sorted by distance:")
+        for call, loc, dist, bear, away in rows:
+            away_str = " (away)" if away else ""
+            await self._notify(
+                f"  {call:<10} {loc:<8} {int(dist):>5} km  {int(bear):>3}°{away_str}"
+            )
 
     async def _run_scatter(self):
         if not self.kst:

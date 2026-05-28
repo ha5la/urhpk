@@ -306,3 +306,74 @@ class TestSkedCommands:
             assert "/CQ G6DDN Hello there" in new_sent
         finally:
             w.close()
+
+
+# ============================================================
+# Local channel commands (!list, !help, !scatter, unknown)
+# ============================================================
+
+class TestLocalCommands:
+    async def test_exclamation_not_forwarded_to_kst(self, bridge_env):
+        _, kst_server, irc_port = bridge_env
+        client, w = await irc_connect(irc_port)
+        try:
+            pre = len(kst_server.received)
+            await client.send(f"PRIVMSG {CHANNEL} :!help")
+            await asyncio.sleep(0.1)
+            assert kst_server.received[pre:] == []
+        finally:
+            w.close()
+
+    async def test_notice_targets_channel(self, bridge_env):
+        bridge, kst_server, irc_port = bridge_env
+        bridge.my_locator = "JN97MX"
+        client, w = await irc_connect(irc_port)
+        try:
+            await client.send(f"PRIVMSG {CHANNEL} :!help")
+            lines = await client.drain()
+            notices = [l for l in lines if "NOTICE" in l]
+            assert notices, "!help must produce NOTICE lines"
+            assert all(CHANNEL in l for l in notices), \
+                "NOTICEs must target the channel, not the status window"
+        finally:
+            w.close()
+
+    async def test_help_lists_commands(self, bridge_env):
+        bridge, kst_server, irc_port = bridge_env
+        bridge.my_locator = "JN97MX"
+        client, w = await irc_connect(irc_port)
+        try:
+            await client.send(f"PRIVMSG {CHANNEL} :!help")
+            lines = await client.drain()
+            full = " ".join(lines)
+            assert "!list" in full
+            assert "!scatter" in full
+        finally:
+            w.close()
+
+    async def test_list_shows_stations_by_distance(self, bridge_env):
+        bridge, kst_server, irc_port = bridge_env
+        bridge.my_locator = "JN97MX"
+        bridge.kst.online_users["G6DDN"] = {
+            "loc": "IO83RJ", "info": "Ian", "away": False
+        }
+        client, w = await irc_connect(irc_port)
+        try:
+            await client.send(f"PRIVMSG {CHANNEL} :!list")
+            lines = await client.drain()
+            full = " ".join(lines)
+            assert "G6DDN" in full
+            assert "km" in full
+            assert "°" in full
+        finally:
+            w.close()
+
+    async def test_unknown_command_returns_notice(self, bridge_env):
+        _, kst_server, irc_port = bridge_env
+        client, w = await irc_connect(irc_port)
+        try:
+            await client.send(f"PRIVMSG {CHANNEL} :!bogus")
+            lines = await client.drain()
+            assert any("NOTICE" in l and "bogus" in l for l in lines)
+        finally:
+            w.close()
