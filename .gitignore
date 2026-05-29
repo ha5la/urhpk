@@ -6,6 +6,11 @@ puskas_map.html
 *.json
 *.url
 *.txt
+*.EDI
+*.edi
+*.csv
+my-logs/
+.puskas_cache/
 
 # Python cache
 __pycache__/

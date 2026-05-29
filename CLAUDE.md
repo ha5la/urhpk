@@ -178,10 +178,22 @@ These requirements must be preserved across all future changes:
   the prompt was first drawn.
 - **Rig thread must never die**: `_rig_thread` wraps its loop body in `try/except` so a
   transient rigctld error cannot kill the thread.
-- **Backspace un-logs**: pressing Backspace on an empty input removes the last QSO from
-  the log, saves EDI immediately, and populates the input buffer with the removed QSO's
-  data (`CALL RST NR LOC`) so it can be corrected and re-entered. The screen is fully
-  redrawn so the QSO disappears from the visible list immediately.
+- **Backspace enters edit mode**: pressing Backspace on an empty input enters edit mode
+  for the last QSO (does NOT remove it from the log). Up/Down navigate to earlier/later
+  QSOs. Escape exits edit mode. All three actions use `get_app().exit(result=_REDRAW)` to
+  force a full screen redraw — this is the only way to scroll the printed QSO list while
+  the prompt is active.
+- **Scrolling edit view**: when editing, `_print_recent` shows a centered window of 8 rows
+  with the focused QSO highlighted as `> …` (bold) instead of `  …`. Up to `n//2` QSOs are
+  shown both above and below the focused row so the operator can see surrounding context and
+  is not misled into thinking QSOs outside the window have been deleted.
+- **Edit preserves immutable fields**: dt, band, mode, nr_s, rst_s are kept from the
+  original QSO; only the received side (call, rst_r, nr_r, loc) can change. Band and mode
+  come from the original QSO, not the current rig state — this is intentional. Escape in
+  edit mode triggers `_REDRAW` so the highlight clears immediately.
+- **Header band summary is compact**: format is `{band}:{count}q/{pts}pt` (e.g.
+  `2M:12q/4321pt  70CM:3q/891pt`) so the full three-band line still fits within the
+  64-character header width.
 - **CW abort on first Escape**: Escape must abort an in-progress CW transmission on the
   very first keypress with no perceptible delay. prompt_toolkit's default `ttimeoutlen`
   of 0.5 s causes a half-second lag — set it to `0.05` s via `pre_run` on every
@@ -216,8 +228,9 @@ HA7NS 599 014 JN97WM   → CW with locator
 - Tab-complete callsigns (prefix-match from locator cache)
 - Space after callsign → auto-fills RST (59 or 599) + space
 - Space after NR → auto-fills cached locator (if known)
-- Backspace on empty input → removes last QSO, puts it back in the buffer for correction
-- Up/Down on empty input → navigates log for editing; Escape cancels edit
+- Backspace on empty input → enters edit mode for last QSO (no removal)
+- Up/Down → navigate log in edit mode; window scrolls to keep focused row centred
+- Escape → exits edit mode (screen redraws to clear highlight) or stops CW
 - Escape → aborts CW transmission immediately, clears buffer
 
 **CW macros** (F1–F7, requires rigctld):
@@ -258,7 +271,7 @@ uv run puskas_visualizer.py   # generate map and polar after the contest
 
 ## Testing
 ```
-uv run pytest tests/ -v     # 143 tests: parsing, IRC protocol, logger, integration
+uv run pytest tests/ -v     # 154 tests: parsing, IRC protocol, logger, integration
 ```
 CI runs the same suite on every push via GitHub Actions.
 

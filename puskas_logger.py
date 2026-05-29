@@ -378,6 +378,7 @@ def load_from_edi(paths: list[Path],
         except Exception:
             pass
 
+    lb.qsos.sort(key=lambda q: (q.dt, q.nr_s))
     return lb, tname
 
 # ──────────────────────────────────────────────────────────────
@@ -472,9 +473,14 @@ def _cw_stop() -> None:
     threading.Thread(target=_do, daemon=True).start()
 
 def _band_summary(lb: LogBook) -> str:
-    parts = [f"{b}:{sum(1 for q in lb.qsos if q.band == b)}"
-             for b in ("2M", "70CM", "23CM")
-             if any(q.band == b for q in lb.qsos)]
+    parts = []
+    for b in ("2M", "70CM", "23CM"):
+        qsos = [q for q in lb.qsos if q.band == b]
+        if not qsos:
+            continue
+        valid = [q for q in qsos if not _is_dup_in_log(qsos, q)]
+        pts = sum(q.dist_km for q in valid)
+        parts.append(f"{b}:{len(qsos)}q/{pts}pt")
     return "  ".join(parts) or "no QSOs yet"
 
 _CW_LEGEND = "  F1:CQ  F2:MYCALL  F3:EXCH  F4:TU  F5:HIS  F6:DE  F7:?   ESC:STOP"
@@ -486,13 +492,25 @@ def _print_header(lb: LogBook):
     print(f"\033[2m{_CW_LEGEND}\033[0m")
     print(f"\033[1m{bar}\033[0m")
 
-def _print_recent(lb: LogBook, n: int = 8):
-    for q in lb.qsos[-n:]:
-        dup    = _is_dup_in_log(lb.qsos, q)
-        dist   = f"  {q.dist_km} km" if q.dist_km else ""
+def _print_recent(lb: LogBook, n: int = 8, focus: int | None = None):
+    qsos = lb.qsos
+    if focus is not None:
+        before = n // 2
+        start  = max(0, min(focus - before, len(qsos) - n))
+        window = qsos[start:start + n]
+    else:
+        start  = max(0, len(qsos) - n)
+        window = qsos[-n:]
+    for abs_idx, q in enumerate(window, start=start):
+        dup    = _is_dup_in_log(qsos, q)
+        dist   = f"  {q.dist_km:3d} km" if q.dist_km else "        "
         marker = "  \033[31mDUP\033[0m" if dup else ""
-        print(f"  {q.dt.strftime('%H:%M')}  {q.call:<10}  {q.band:<5} {q.mode:<4}"
-              f"  {q.rst_s:>3} {q.nr_s:03d}  {q.rst_r:>3} {q.nr_r:03d}  {q.loc:<6}{dist}{marker}")
+        row    = (f"{q.dt.strftime('%H:%M')}  {q.call:<10}  {q.band:<5} {q.mode:<4}"
+                  f"  {q.rst_s:>3} {q.nr_s:03d}  {q.rst_r:>3} {q.nr_r:03d}  {q.loc:<6}{dist}{marker}")
+        if abs_idx == focus:
+            print(f"\033[1m> {row}\033[0m")
+        else:
+            print(f"  {row}")
     print("─" * W)
 
 
@@ -560,17 +578,20 @@ def run(lb: LogBook, tname: str):
     # 0 = last QSO selected for edit, 1 = second-to-last, None = no edit in progress
     _state: dict = {'edit_idx': None, 'restore_text': ''}
 
-    def _fill_edit_buffer(buf) -> None:
-        idx      = _state['edit_idx']
-        real_idx = len(lb.qsos) - 1 - idx
-        if real_idx < 0 or real_idx >= len(lb.qsos):
-            return
-        q     = lb.qsos[real_idx]
+    def _qso_to_input(q: QSO) -> str:
         parts = [q.call, q.rst_r, f"{q.nr_r:03d}"]
         if q.loc:
             parts.append(q.loc)
-        text = ' '.join(parts)
-        buf.set_document(Document(text, cursor_position=len(text)))
+        return ' '.join(parts)
+
+    def _enter_edit(idx: int) -> None:
+        """Set edit_idx and queue a REDRAW with the QSO's data in the buffer."""
+        real_idx = len(lb.qsos) - 1 - idx
+        if real_idx < 0 or real_idx >= len(lb.qsos):
+            return
+        _state['edit_idx']    = idx
+        _state['restore_text'] = _qso_to_input(lb.qsos[real_idx])
+        get_app().exit(result=_REDRAW)
 
     def _rprompt() -> HTML | str:
         if _state['edit_idx'] is not None:
@@ -620,13 +641,7 @@ def run(lb: LogBook, tname: str):
             return
         if not lb.qsos:
             return
-        q = lb.undo()
-        save_all(lb, tname)
-        text = f"{q.call} {q.rst_r} {q.nr_r:03d}"
-        if q.loc:
-            text += f" {q.loc}"
-        _state['restore_text'] = text
-        get_app().exit(result=_REDRAW)
+        _enter_edit(0)
 
     @kb.add('up')
     def _on_up(event):
@@ -634,18 +649,14 @@ def run(lb: LogBook, tname: str):
         if buf.complete_state:
             buf.complete_previous()
             return
-        # Buffer has user-typed content and no edit in progress → history
         if _state['edit_idx'] is None and buf.text:
             buf.history_backward()
             return
         n = len(lb.qsos)
         if n == 0:
             return
-        if _state['edit_idx'] is None:
-            _state['edit_idx'] = 0
-        elif _state['edit_idx'] < n - 1:
-            _state['edit_idx'] += 1
-        _fill_edit_buffer(buf)
+        new_idx = 0 if _state['edit_idx'] is None else min(_state['edit_idx'] + 1, n - 1)
+        _enter_edit(new_idx)
 
     @kb.add('down')
     def _on_down(event):
@@ -658,11 +669,11 @@ def run(lb: LogBook, tname: str):
                 buf.history_forward()
             return
         if _state['edit_idx'] > 0:
-            _state['edit_idx'] -= 1
-            _fill_edit_buffer(buf)
+            _enter_edit(_state['edit_idx'] - 1)
         else:
             _state['edit_idx'] = None
-            buf.set_document(Document(''))
+            _state['restore_text'] = ''
+            get_app().exit(result=_REDRAW)
 
     @kb.add('escape')
     def _on_escape(event):
@@ -671,8 +682,12 @@ def run(lb: LogBook, tname: str):
         if buf.complete_state:
             buf.cancel_completion()
             return
-        _state['edit_idx'] = None
-        buf.set_document(Document(''))
+        if _state['edit_idx'] is not None:
+            _state['edit_idx'] = None
+            _state['restore_text'] = ''
+            get_app().exit(result=_REDRAW)
+        else:
+            buf.set_document(Document(''))
 
     for _fn_idx, _macro in enumerate(CW_MACROS, 1):
         @kb.add(f'f{_fn_idx}')
@@ -702,7 +717,9 @@ def run(lb: LogBook, tname: str):
         band, mode, qrg, online = current_rig()
         os.write(1, b"\033[2J\033[H")
         _print_header(lb)
-        _print_recent(lb)
+        focus = (len(lb.qsos) - 1 - _state['edit_idx']
+                 if _state['edit_idx'] is not None else None)
+        _print_recent(lb, focus=focus)
         if not band:
             print("\033[33m  No band — use !band 2M or !band 70CM or !band 23CM\033[0m")
 

@@ -1,4 +1,5 @@
 """Tests for puskas_logger pure functions — no rig, no network, no prompts."""
+import io
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,7 +8,7 @@ import pytest
 
 from puskas_logger import (
     QSO, LogBook,
-    _edi_qso_count, _is_dup_in_log,
+    _band_summary, _edi_qso_count, _is_dup_in_log, _print_recent,
     load_from_edi,
     parse_input,
     tname_for,
@@ -455,6 +456,116 @@ class TestQsoEdit:
         lb2, _ = load_from_edi(list(tmp_path.glob("*.EDI")), {})
         assert lb2.qsos[2].call == "HA8RM"
         assert lb2.qsos[2].loc  == "JN96UW"
+
+
+# ──────────────────────────────────────────────────────────────
+# _band_summary
+# ──────────────────────────────────────────────────────────────
+
+class TestBandSummary:
+    def test_no_qsos(self):
+        lb = LogBook("HA5LA", "JN97TF", {})
+        assert _band_summary(lb) == "no QSOs yet"
+
+    def test_single_band(self):
+        lb = LogBook("HA5LA", "JN97TF", {})
+        lb.add(_qso(band="2M", dist_km=100, nr_s=1, h=16))
+        assert _band_summary(lb) == "2M:1q/100pt"
+
+    def test_dups_excluded_from_pts(self):
+        lb = LogBook("HA5LA", "JN97TF", {})
+        lb.add(_qso(call="HA7NS", band="2M", dist_km=100, nr_s=1, h=16))
+        lb.add(_qso(call="HA7NS", band="2M", dist_km=100, nr_s=2, h=17))  # dup
+        assert _band_summary(lb) == "2M:2q/100pt"
+
+    def test_three_bands(self):
+        lb = LogBook("HA5LA", "JN97TF", {})
+        lb.add(_qso(band="2M",   dist_km=100, nr_s=1, h=16))
+        lb.add(_qso(band="70CM", dist_km=200, nr_s=1, h=17))
+        lb.add(_qso(band="23CM", dist_km=50,  nr_s=1, h=18))
+        s = _band_summary(lb)
+        assert "2M:1q/100pt" in s
+        assert "70CM:1q/200pt" in s
+        assert "23CM:1q/50pt" in s
+
+    def test_fits_in_header_width(self):
+        lb = LogBook("HA5LA", "JN97TF", {})
+        for i, (band, km) in enumerate([("2M", 9999), ("70CM", 9999), ("23CM", 9999)], 1):
+            lb.add(_qso(band=band, dist_km=km, nr_s=i, h=16 + i))
+        prefix = " PUSKÁS LOGGER  │  "
+        full = prefix + _band_summary(lb)
+        assert len(full) <= 64
+
+
+# ──────────────────────────────────────────────────────────────
+# _print_recent
+# ──────────────────────────────────────────────────────────────
+
+class TestPrintRecent:
+    def _lb(self):
+        lb = LogBook("HA5LA", "JN97TF", {})
+        for i in range(10):
+            lb.add(_qso(call=f"HA{i}AA", nr_s=i + 1, h=14, m=i * 5, dist_km=100 + i))
+        return lb
+
+    def _lines(self, lb, **kwargs):
+        buf = io.StringIO()
+        import sys
+        old, sys.stdout = sys.stdout, buf
+        try:
+            _print_recent(lb, **kwargs)
+        finally:
+            sys.stdout = old
+        return buf.getvalue().splitlines()
+
+    def test_normal_shows_last_n(self):
+        lb = self._lb()
+        lines = self._lines(lb, n=4)
+        data = [l for l in lines if "HA" in l]
+        assert len(data) == 4
+        assert "HA9AA" in data[-1]   # last QSO at bottom
+
+    def test_focus_row_has_arrow_prefix(self):
+        lb = self._lb()
+        focus = 5   # 6th QSO (0-indexed)
+        lines = self._lines(lb, n=8, focus=focus)
+        focused = [l for l in lines if "HA5AA" in l]
+        assert len(focused) == 1
+        assert focused[0].startswith("> ") or "\033[1m>" in focused[0]
+
+    def test_unfocused_rows_have_space_prefix(self):
+        lb = self._lb()
+        focus = 5
+        lines = self._lines(lb, n=8, focus=focus)
+        for line in lines:
+            if "HA" in line and "HA5AA" not in line:
+                assert not line.lstrip("\033[1m").startswith(">")
+
+    def test_focus_shows_rows_after(self):
+        lb = self._lb()
+        focus = 3   # middle of log
+        lines = self._lines(lb, n=8, focus=focus)
+        calls = [l for l in lines if "HA" in l]
+        # QSO at index > focus must appear
+        assert any("HA4AA" in l or "HA5AA" in l for l in calls)
+
+    def test_focus_near_start_shows_enough_rows(self):
+        lb = self._lb()
+        lines = self._lines(lb, n=8, focus=1)
+        calls = [l for l in lines if "HA" in l]
+        assert len(calls) >= 2
+
+    def test_multiband_load_sorted_by_timestamp(self, tmp_path):
+        lb = LogBook("HA5LA", "JN97TF", {})
+        lb.add(_qso(call="HA7NS",  band="2M",   mode="SSB", nr_s=1, h=14, m=0))
+        lb.add(_qso(call="HA3KHB", band="70CM",  mode="FM",  nr_s=1, h=14, m=10))
+        lb.add(_qso(call="HA8RM",  band="2M",   mode="SSB", nr_s=2, h=14, m=20))
+        write_edi(lb, "2M",   "T", tmp_path)
+        write_edi(lb, "70CM", "T", tmp_path)
+        # Load in 70CM-first order to exercise sorting
+        paths = sorted(tmp_path.glob("*.EDI"), reverse=True)
+        lb2, _ = load_from_edi(paths, {})
+        assert [q.call for q in lb2.qsos] == ["HA7NS", "HA3KHB", "HA8RM"]
 
 
 # ──────────────────────────────────────────────────────────────
