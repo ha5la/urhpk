@@ -25,8 +25,18 @@ jobs:
           mkdir -p "$PKG/lib/systemd/system"
 
           cp on4kst_irc_bridge.py "$PKG/usr/lib/on4kst-irc-bridge/"
+          cp puskas_harvester.py  "$PKG/usr/lib/on4kst-irc-bridge/"
+          cp puskas_logger.py     "$PKG/usr/lib/on4kst-irc-bridge/"
+          cp puskas_visualizer.py "$PKG/usr/lib/on4kst-irc-bridge/"
           cp on4kst-irc-bridge.service "$PKG/lib/systemd/system/"
           cp irssi.service "$PKG/lib/systemd/system/"
+
+          mkdir -p "$PKG/usr/local/bin"
+          for script in puskas_harvester puskas_logger puskas_visualizer; do
+            wrapper="$PKG/usr/local/bin/${script//_/-}"
+            printf '#!/bin/sh\nexec uv run /usr/lib/on4kst-irc-bridge/%s.py "$@"\n' "$script" > "$wrapper"
+            chmod 0755 "$wrapper"
+          done
 
           cat > "$PKG/DEBIAN/control" <<EOF
           Package: on4kst-irc-bridge

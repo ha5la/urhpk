@@ -8,10 +8,10 @@
 Puskás URH Kupa – Contest QSO Logger
 =====================================
 Usage:  uv run puskas_logger.py
-Input:  CALL NR_R [LOC] [RST_R]
-          HA7NS 015           → locator from cache
-          HA7NS 015 JN97WM    → explicit locator
-          HA7NS 015 JN97WM 58 → also override received RST
+Input:  CALL RST NR [LOC]
+          HA7NS 59 015           → locator from cache
+          HA7NS 59 015 JN97WM    → explicit locator
+          HA7NS 599 014 JN97WM   → CW with locator
 Commands: !save  !undo  !band 2M|70CM|23CM  !mode SSB|CW|FM  !help
 Ctrl-D at empty prompt → save EDI files and exit
 """
@@ -24,28 +24,26 @@ import re
 import socket
 import threading
 import time
-import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.application import get_app
+from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.document import Document
+from prompt_toolkit.filters import has_completions
 from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.key_binding import KeyBindings
 
 # ──────────────────────────────────────────────────────────────
 # Configuration
 # ──────────────────────────────────────────────────────────────
 RIGCTLD_HOST   = "localhost"
 RIGCTLD_PORT   = 4532
-RIGCTLD_POLL_S = 5
-MY_LOGS_DIR    = Path(__file__).parent / "my-logs"
-BASE_URL       = "https://bb.mrasz.hu/nest"
-EVENT_IDS: list[str] = [
-    "69f763f0e0f63251aa32f0f1",  # 2026-05
-    # Add new round event IDs here as they become available
-]
-REQUEST_TIMEOUT = 10
-REQUEST_DELAY   = 0.3
+RIGCTLD_POLL_S = 1
+MY_LOGS_DIR    = Path("my-logs")
+SEEN_STATIONS  = Path("seen_stations.json")
 
 # ──────────────────────────────────────────────────────────────
 # Geo helpers
@@ -95,52 +93,34 @@ def _parse_edi_files() -> dict[str, str]:
                     call = f[2].strip().upper()
                     loc  = f[9].strip().upper()
                     if call and RE_LOC.match(loc):
-                        cache[call] = loc   # later file (sorted by name) wins
+                        cache[call] = loc
         except Exception:
             pass
     return cache
 
-def _fetch_api_locators() -> dict[str, str]:
-    cache: dict[str, str] = {}
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; PuskasLogger/1.0)",
-        "Accept":     "application/json",
-    }
-    for event_id in EVENT_IDS:
+def load_loc_cache() -> dict[str, str]:
+    if SEEN_STATIONS.exists():
         try:
-            url = f"{BASE_URL}/claimed?eventId={event_id}"
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
-                data = json.loads(resp.read())
-            for cat in data:
-                for log in cat.get("logs", []):
-                    call = log.get("_id", {}).get("callsign", "").upper().strip()
-                    wwl  = log.get("_id", {}).get("WWL", "").upper().strip()
-                    if call and RE_LOC.match(wwl):
-                        cache[call] = wwl
-            time.sleep(REQUEST_DELAY)
+            data = json.loads(SEEN_STATIONS.read_text(encoding="utf-8"))
+            cache = {call: v["wwl"] for call, v in data.items() if v.get("wwl")}
+            print(f"  {len(cache)} stations from seen_stations.json")
+            return cache
         except Exception:
             pass
-    return cache
-
-def build_loc_cache() -> dict[str, str]:
-    print("Building locator cache...")
     cache = _parse_edi_files()
-    print(f"  {len(cache)} callsigns from local EDI files in {MY_LOGS_DIR}")
-    if EVENT_IDS:
-        print(f"  Querying bb.mrasz.hu ({len(EVENT_IDS)} event(s))...", flush=True)
-        api = _fetch_api_locators()
-        new = sum(1 for k in api if k not in cache)
-        cache.update(api)
-        print(f"  {len(api)} from API, {new} new — total {len(cache)}")
+    if cache:
+        print(f"  {len(cache)} stations from my-logs/ "
+              f"(run puskas_harvester.py for full cache)")
+    else:
+        print("  No locator cache (run puskas_harvester.py to build one)")
     return cache
 
 # ──────────────────────────────────────────────────────────────
 # rigctld — background daemon thread
 # ──────────────────────────────────────────────────────────────
-_rig: dict       = {"band": "", "mode": "", "qrg": "", "online": False}
-_rig_lock        = threading.Lock()
-_rig_manual: dict = {"band": "", "mode": ""}   # manual override when rig offline
+_rig: dict        = {"band": "", "mode": "", "qrg": "", "online": False}
+_rig_lock         = threading.Lock()
+_rig_manual: dict = {"band": "", "mode": ""}
 
 def _mode_str(raw: str) -> str:
     r = raw.upper()
@@ -174,13 +154,16 @@ def _read_rig() -> tuple[str, str]:
 
 def _rig_thread():
     while True:
-        qrg, raw = _read_rig()
-        with _rig_lock:
-            if qrg:
-                _rig.update(band=_band_from_qrg(float(qrg)),
-                            mode=_mode_str(raw), qrg=qrg, online=True)
-            else:
-                _rig.update(band="", mode="", qrg="", online=False)
+        try:
+            qrg, raw = _read_rig()
+            with _rig_lock:
+                if qrg:
+                    _rig.update(band=_band_from_qrg(float(qrg)),
+                                mode=_mode_str(raw), qrg=qrg, online=True)
+                else:
+                    _rig.update(band="", mode="", qrg="", online=False)
+        except Exception:
+            pass
         time.sleep(RIGCTLD_POLL_S)
 
 def current_rig() -> tuple[str, str, str, bool]:
@@ -329,38 +312,164 @@ def save_all(lb: LogBook, tname: str) -> list[Path]:
             if (p := write_edi(lb, band, tname, Path("."))) is not None]
 
 # ──────────────────────────────────────────────────────────────
+# EDI crash recovery
+# ──────────────────────────────────────────────────────────────
+_BAND_FROM_FREQ = {"145 MHz": "2M", "435 MHz": "70CM", "1296 MHz": "23CM"}
+_MODE_FROM_CODE = {"1": "SSB", "2": "CW", "6": "FM"}
+
+def load_from_edi(paths: list[Path],
+                  loc_cache: dict[str, str]) -> tuple[LogBook, str] | None:
+    """Parse EDI files and return (logbook, tname), or None on failure."""
+    my_call = my_loc = tname = ""
+
+    for path in paths:
+        try:
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.startswith("PCall=") and not my_call:
+                    my_call = line[6:].strip().upper()
+                elif line.startswith("PWWLo=") and not my_loc:
+                    my_loc = line[6:].strip().upper()
+                elif line.startswith("TName=") and not tname:
+                    tname = line[6:].strip()
+        except Exception:
+            pass
+        if my_call:
+            break
+
+    if not my_call:
+        return None
+
+    lb = LogBook(my_call, my_loc, loc_cache)
+
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            band = ""
+            in_qso = False
+            for line in text.splitlines():
+                if line.startswith("PBand="):
+                    band = _BAND_FROM_FREQ.get(line[6:].strip(), "")
+                elif line.startswith("[QSORecords"):
+                    in_qso = True
+                elif in_qso and ";" in line:
+                    f = line.split(";")
+                    if len(f) < 10:
+                        continue
+                    try:
+                        dt = datetime.strptime(
+                            f[0].strip() + f[1].strip(), "%y%m%d%H%M"
+                        ).replace(tzinfo=timezone.utc)
+                        call    = f[2].strip().upper()
+                        mode    = _MODE_FROM_CODE.get(f[3].strip(), "SSB")
+                        rst_s   = f[4].strip()
+                        nr_s    = int(f[5].strip())
+                        rst_r   = f[6].strip()
+                        nr_r    = int(f[7].strip())
+                        loc     = f[9].strip().upper()
+                        dist_km = int(f[10].strip()) if len(f) > 10 and f[10].strip().isdigit() else 0
+                        if not dist_km and loc and RE_LOC.match(loc):
+                            dist_km = lb.dist(loc)
+                        if call and band:
+                            lb.add(QSO(dt=dt, band=band, mode=mode, call=call,
+                                       rst_s=rst_s, nr_s=nr_s, rst_r=rst_r, nr_r=nr_r,
+                                       loc=loc, dist_km=dist_km))
+                    except (ValueError, IndexError):
+                        pass
+        except Exception:
+            pass
+
+    return lb, tname
+
+# ──────────────────────────────────────────────────────────────
 # Input parser
 # ──────────────────────────────────────────────────────────────
-RE_CALL = re.compile(r'^[A-Z0-9]{2,}(/[A-Z0-9P/]+)?$')
+RE_CALL = re.compile(r'^(?=[A-Z0-9]*[A-Z])[A-Z0-9]{2,}(/[A-Z0-9P/]+)?$')
 
 def parse_input(line: str) -> dict | str:
-    """Parse 'CALL NR_R [LOC] [RST_R]'. Returns dict or error string."""
+    """Parse 'CALL RST NR [LOC]'. Returns dict or error string."""
     tokens = line.upper().split()
     if not tokens:
         return ""
-    if len(tokens) < 2:
-        return "Usage: CALL NR_R [LOC]   e.g.  HA7NS 015"
+    if len(tokens) < 3:
+        return "Usage: CALL RST NR [LOC]   e.g.  HA7NS 59 015"
     call = tokens[0]
     if not RE_CALL.match(call):
         return f"Invalid callsign: {call!r}"
+    rst_r = tokens[1]
     try:
-        nr_r = int(tokens[1])
+        nr_r = int(tokens[2])
         if not (0 < nr_r < 10000):
             raise ValueError
     except ValueError:
-        return f"Expected serial number as second token, got {tokens[1]!r}"
-    loc = rst_r = ""
-    for tok in tokens[2:]:
-        if not loc and RE_LOC.match(tok):
+        return f"Expected serial number as third token, got {tokens[2]!r}"
+    loc = ""
+    for tok in tokens[3:]:
+        if RE_LOC.match(tok):
             loc = tok[:6]
-        elif not rst_r and tok.isdigit():
-            rst_r = tok
-    return dict(call=call, nr_r=nr_r, loc=loc, rst_r=rst_r)
+            break
+    return dict(call=call, rst_r=rst_r, nr_r=nr_r, loc=loc)
+
+# ──────────────────────────────────────────────────────────────
+# Callsign autocomplete
+# ──────────────────────────────────────────────────────────────
+class CallCompleter(Completer):
+    def __init__(self, loc_cache: dict[str, str]):
+        self._calls = sorted(loc_cache.keys())
+
+    def get_completions(self, document, complete_event):
+        text = document.text_before_cursor
+        tokens = text.split()
+        # only complete on the first token (callsign)
+        if len(tokens) > 1 or (tokens and text[-1] == " "):
+            return
+        prefix = tokens[0] if tokens else ""
+        for call in self._calls:
+            if call.startswith(prefix.upper()):
+                yield Completion(call, start_position=-len(prefix))
 
 # ──────────────────────────────────────────────────────────────
 # Display helpers
 # ──────────────────────────────────────────────────────────────
-W = 56
+W = 64
+_REDRAW = object()  # sentinel: exit prompt to force a full screen refresh
+
+# CW macros bound to F1–F7.  Placeholders: <MYCALL> <HISCALL> <NUMBER> <LOCATOR>
+CW_MACROS = [
+    "CQ <MYCALL> <MYCALL> TEST",                               # F1
+    "<MYCALL>",                                                # F2
+    "<HISCALL> DE <MYCALL> 5NN <NUMBER> <NUMBER> <LOCATOR>",  # F3
+    "TU <MYCALL> TEST",                                        # F4
+    "<HISCALL>",                                               # F5
+    "DE <MYCALL>",                                             # F6
+    "?",                                                       # F7
+]
+
+def _expand_cw(template: str, lb: LogBook, hiscall: str, band: str) -> str:
+    nr = lb.next_nr(band) if band else 0
+    nr_cw = f"{nr:03d}".replace("0", "T").replace("9", "N")
+    return (template
+            .replace("<MYCALL>",  lb.my_call)
+            .replace("<HISCALL>", hiscall or "?")
+            .replace("<NUMBER>",  nr_cw)
+            .replace("<LOCATOR>", lb.my_loc))
+
+def _cw_send(message: str) -> None:
+    def _do():
+        try:
+            with socket.create_connection((RIGCTLD_HOST, RIGCTLD_PORT), timeout=2.0) as s:
+                s.sendall(f"b{message}\n".encode())
+        except Exception:
+            pass
+    threading.Thread(target=_do, daemon=True).start()
+
+def _cw_stop() -> None:
+    def _do():
+        try:
+            with socket.create_connection((RIGCTLD_HOST, RIGCTLD_PORT), timeout=2.0) as s:
+                s.sendall(b"\xbb")
+        except Exception:
+            pass
+    threading.Thread(target=_do, daemon=True).start()
 
 def _band_summary(lb: LogBook) -> str:
     parts = [f"{b}:{sum(1 for q in lb.qsos if q.band == b)}"
@@ -368,14 +477,13 @@ def _band_summary(lb: LogBook) -> str:
              if any(q.band == b for q in lb.qsos)]
     return "  ".join(parts) or "no QSOs yet"
 
-def _print_header(lb: LogBook, band: str, mode: str, qrg: str, online: bool):
-    now     = datetime.now(timezone.utc).strftime("%H:%M UTC")
-    rig_str = f"{qrg} MHz {mode}" if online else "(rig offline)"
-    nr      = lb.next_nr(band) if band else 1
-    bar     = "━" * W
+_CW_LEGEND = "  F1:CQ  F2:MYCALL  F3:EXCH  F4:TU  F5:HIS  F6:DE  F7:?   ESC:STOP"
+
+def _print_header(lb: LogBook):
+    bar = "━" * W
     print(f"\n\033[1m{bar}\033[0m")
-    print(f" PUSKÁS LOGGER  {now}  │  {band or '?'}  {rig_str}  │  Next: {nr:03d}")
-    print(f" {_band_summary(lb)}")
+    print(f" PUSKÁS LOGGER  │  {_band_summary(lb)}")
+    print(f"\033[2m{_CW_LEGEND}\033[0m")
     print(f"\033[1m{bar}\033[0m")
 
 def _print_recent(lb: LogBook, n: int = 8):
@@ -383,17 +491,10 @@ def _print_recent(lb: LogBook, n: int = 8):
         dup    = _is_dup_in_log(lb.qsos, q)
         dist   = f"  {q.dist_km} km" if q.dist_km else ""
         marker = "  \033[31mDUP\033[0m" if dup else ""
-        print(f"  {q.dt.strftime('%H:%M')}  {q.call:<10}  {q.mode:<4}"
-              f"  {q.rst_s} {q.nr_s:03d}  {q.rst_r} {q.nr_r:03d}  {q.loc:<6}{dist}{marker}")
+        print(f"  {q.dt.strftime('%H:%M')}  {q.call:<10}  {q.band:<5} {q.mode:<4}"
+              f"  {q.rst_s:>3} {q.nr_s:03d}  {q.rst_r:>3} {q.nr_r:03d}  {q.loc:<6}{dist}{marker}")
     print("─" * W)
 
-def _toolbar() -> HTML:
-    band, mode, qrg, online = current_rig()
-    t = datetime.now(timezone.utc).strftime("%H:%M:%S")
-    if online:
-        return HTML(f"  <b>Rig:</b> {qrg} MHz {mode}  │  {t} UTC")
-    else:
-        return HTML(f"  <b>Rig:</b> <ansired>offline</ansired>  │  {t} UTC")
 
 # ──────────────────────────────────────────────────────────────
 # Command handler
@@ -430,7 +531,7 @@ def _handle_command(line: str, lb: LogBook, tname: str):
             print(f"  Mode override: {_rig_manual['mode']}")
 
     elif cmd == "!help":
-        print("  CALL NR_R [LOC] [RST_R]  — log a QSO")
+        print("  CALL RST NR [LOC]        — log a QSO")
         print("  !save                    — write EDI files now")
         print("  !undo                    — remove last QSO")
         print("  !band 2M|70CM|23CM       — set band manually (rig offline)")
@@ -447,49 +548,232 @@ def _handle_command(line: str, lb: LogBook, tname: str):
 # Main loop
 # ──────────────────────────────────────────────────────────────
 def run(lb: LogBook, tname: str):
-    session = PromptSession()
+    def _toolbar() -> HTML:
+        band, mode, qrg, online = current_rig()
+        t  = datetime.now(timezone.utc).strftime("%H:%M:%S")
+        nr = lb.next_nr(band) if band else 0
+        b  = f"<b>{band}</b>" if band else "<ansiyellow>?</ansiyellow>"
+        rig = (f"{qrg} MHz {mode}" if online
+               else "<ansired>offline</ansired>")
+        return HTML(f"  {b}  {rig}  │  Next: <b>{nr:03d}</b>  │  {t} UTC")
+
+    # 0 = last QSO selected for edit, 1 = second-to-last, None = no edit in progress
+    _state: dict = {'edit_idx': None, 'restore_text': ''}
+
+    def _fill_edit_buffer(buf) -> None:
+        idx      = _state['edit_idx']
+        real_idx = len(lb.qsos) - 1 - idx
+        if real_idx < 0 or real_idx >= len(lb.qsos):
+            return
+        q     = lb.qsos[real_idx]
+        parts = [q.call, q.rst_r, f"{q.nr_r:03d}"]
+        if q.loc:
+            parts.append(q.loc)
+        text = ' '.join(parts)
+        buf.set_document(Document(text, cursor_position=len(text)))
+
+    def _rprompt() -> HTML | str:
+        if _state['edit_idx'] is not None:
+            idx      = _state['edit_idx']
+            real_idx = len(lb.qsos) - 1 - idx
+            if 0 <= real_idx < len(lb.qsos):
+                nr_s = lb.qsos[real_idx].nr_s
+                return HTML(f"<ansiblue><b>  EDIT #{nr_s:03d}  </b></ansiblue>")
+        try:
+            text = get_app().current_buffer.text
+        except Exception:
+            return ""
+        tokens = text.upper().split()
+        if not tokens:
+            return ""
+        call = tokens[0]
+        if not RE_CALL.match(call):
+            return ""
+        band, mode, *_ = current_rig()
+        if band and mode and lb.is_dup(call, band, mode):
+            return HTML("<ansired><b>  DUP  </b></ansired>")
+        return ""
+
+    kb = KeyBindings()
+
+    @kb.add(' ')
+    def _on_space(event):
+        buf = event.app.current_buffer
+        if buf.cursor_position != len(buf.text):
+            buf.insert_text(' ')
+            return
+        buf.insert_text(' ')
+        tokens = buf.text.strip().split()
+        if len(tokens) == 1:
+            _, mode, *_ = current_rig()
+            buf.insert_text(("599" if mode == "CW" else "59") + ' ')
+        elif len(tokens) == 3:
+            loc = lb.loc_cache.get(tokens[0].upper(), '')
+            if loc:
+                buf.insert_text(loc)
+
+    @kb.add('backspace')
+    def _on_backspace(event):
+        buf = event.app.current_buffer
+        if buf.text:
+            buf.delete_before_cursor()
+            return
+        if not lb.qsos:
+            return
+        q = lb.undo()
+        save_all(lb, tname)
+        text = f"{q.call} {q.rst_r} {q.nr_r:03d}"
+        if q.loc:
+            text += f" {q.loc}"
+        _state['restore_text'] = text
+        get_app().exit(result=_REDRAW)
+
+    @kb.add('up')
+    def _on_up(event):
+        buf = event.app.current_buffer
+        if buf.complete_state:
+            buf.complete_previous()
+            return
+        # Buffer has user-typed content and no edit in progress → history
+        if _state['edit_idx'] is None and buf.text:
+            buf.history_backward()
+            return
+        n = len(lb.qsos)
+        if n == 0:
+            return
+        if _state['edit_idx'] is None:
+            _state['edit_idx'] = 0
+        elif _state['edit_idx'] < n - 1:
+            _state['edit_idx'] += 1
+        _fill_edit_buffer(buf)
+
+    @kb.add('down')
+    def _on_down(event):
+        buf = event.app.current_buffer
+        if buf.complete_state:
+            buf.complete_next()
+            return
+        if _state['edit_idx'] is None:
+            if buf.text:
+                buf.history_forward()
+            return
+        if _state['edit_idx'] > 0:
+            _state['edit_idx'] -= 1
+            _fill_edit_buffer(buf)
+        else:
+            _state['edit_idx'] = None
+            buf.set_document(Document(''))
+
+    @kb.add('escape')
+    def _on_escape(event):
+        buf = event.app.current_buffer
+        _cw_stop()
+        if buf.complete_state:
+            buf.cancel_completion()
+            return
+        _state['edit_idx'] = None
+        buf.set_document(Document(''))
+
+    for _fn_idx, _macro in enumerate(CW_MACROS, 1):
+        @kb.add(f'f{_fn_idx}')
+        def _fn_key(event, _tmpl=_macro):
+            buf = event.app.current_buffer
+            tokens = buf.text.strip().split()
+            hiscall = tokens[0].upper() if tokens else ''
+            band, *_ = current_rig()
+            _cw_send(_expand_cw(_tmpl, lb, hiscall, band))
+
+    @kb.add('enter', filter=has_completions)
+    def _on_enter_completion(event):
+        buf = event.app.current_buffer
+        state = buf.complete_state
+        if state and state.current_completion:
+            buf.apply_completion(state.current_completion)
+        else:
+            buf.cancel_completion()
+
+    session = PromptSession(
+        completer=CallCompleter(lb.loc_cache),
+        key_bindings=kb,
+        complete_while_typing=False,
+    )
+
     while True:
         band, mode, qrg, online = current_rig()
         os.write(1, b"\033[2J\033[H")
-        _print_header(lb, band, mode, qrg, online)
+        _print_header(lb)
         _print_recent(lb)
         if not band:
             print("\033[33m  No band — use !band 2M or !band 70CM or !band 23CM\033[0m")
 
+        default = _state.pop('restore_text', '') or ''
         try:
-            line = session.prompt("> ", bottom_toolbar=_toolbar).strip()
+            result = session.prompt("> ", bottom_toolbar=_toolbar,
+                                    rprompt=_rprompt,
+                                    refresh_interval=1.0,
+                                    default=default,
+                                    pre_run=lambda: setattr(get_app(), 'ttimeoutlen', 0.05))
         except KeyboardInterrupt:
+            _state['edit_idx'] = None
             continue
         except EOFError:
             break
+        if result is _REDRAW:
+            continue
+        line = result.strip()
 
         if not line:
+            _state['edit_idx'] = None
             continue
 
         if line.startswith("!"):
+            _state['edit_idx'] = None
             _handle_command(line, lb, tname)
             continue
 
         parsed = parse_input(line)
         if isinstance(parsed, str):
+            _state['edit_idx'] = None
             if parsed:
                 print(f"\033[31m  {parsed}\033[0m")
                 input("  [Enter to continue]")
             continue
+
+        edit_idx = _state['edit_idx']
+        _state['edit_idx'] = None
+
+        if edit_idx is not None:
+            # Replace an existing QSO; preserve dt, band, mode, nr_s, rst_s
+            real_idx = len(lb.qsos) - 1 - edit_idx
+            if 0 <= real_idx < len(lb.qsos):
+                old = lb.qsos[real_idx]
+                loc = parsed["loc"] or lb.loc_cache.get(parsed["call"], "") or old.loc
+                lb.qsos[real_idx] = QSO(
+                    dt=old.dt, band=old.band, mode=old.mode,
+                    call=parsed["call"], rst_s=old.rst_s, nr_s=old.nr_s,
+                    rst_r=parsed["rst_r"], nr_r=parsed["nr_r"],
+                    loc=loc, dist_km=lb.dist(loc),
+                )
+                lb.worked = {(q.call, q.band, q.mode) for q in lb.qsos}
+                save_all(lb, tname)
+            continue
+
+        # New QSO — re-read rig at the moment Enter is pressed
+        band, mode, qrg, online = current_rig()
 
         if not band:
             print("\033[31m  Cannot log: band unknown. Set with !band 2M\033[0m")
             input("  [Enter to continue]")
             continue
 
-        call     = parsed["call"]
-        nr_r     = parsed["nr_r"]
-        loc      = parsed["loc"] or lb.loc_cache.get(call, "")
-        rst_def  = "599" if mode == "CW" else "59"
-        rst_s    = rst_def
-        rst_r    = parsed["rst_r"] or rst_def
-        nr_s     = lb.next_nr(band)
-        dist_km  = lb.dist(loc)
+        call    = parsed["call"]
+        nr_r    = parsed["nr_r"]
+        loc     = parsed["loc"] or lb.loc_cache.get(call, "")
+        rst_def = "599" if mode == "CW" else "59"
+        rst_s   = rst_def
+        rst_r   = parsed["rst_r"]
+        nr_s    = lb.next_nr(band)
+        dist_km = lb.dist(loc)
 
         qso = QSO(
             dt=datetime.now(timezone.utc).replace(second=0, microsecond=0),
@@ -503,9 +787,8 @@ def run(lb: LogBook, tname: str):
             print(f"\033[31m  *** DUP *** {call} already in log for {band} {mode}\033[0m")
             input("  [Enter to continue]")
 
-        save_all(lb, tname)   # auto-save after every QSO
+        save_all(lb, tname)
 
-    # Ctrl-D — final save
     print("\nSaving EDI files...")
     paths = save_all(lb, tname)
     if paths:
@@ -526,29 +809,59 @@ def _load_callsign() -> str:
         pass
     return "HA5LA"
 
+def _edi_qso_count(path: Path) -> int:
+    try:
+        for line in path.read_text(errors="replace").splitlines():
+            if line.startswith("[QSORecords;"):
+                return int(line.split(";")[1].rstrip("]"))
+    except Exception:
+        pass
+    return 0
+
 def main():
     print("Puskás URH Kupa Logger")
     print("─" * 40)
-    my_call = _load_callsign()
-    print(f"Callsign: {my_call}")
 
-    my_loc = input("Your locator [JN97TF]: ").strip().upper() or "JN97TF"
-    if not RE_LOC.match(my_loc):
-        print(f"Warning: {my_loc!r} doesn't look like a valid Maidenhead locator")
+    lb: LogBook | None = None
+    tname: str = ""
 
-    now = datetime.now(timezone.utc)
-    default_tname = tname_for(now)
-    tname = input(f"Contest name [{default_tname}]: ").strip() or default_tname
+    edi_files = sorted(Path(".").glob("*.[Ee][Dd][Ii]"))
+    if edi_files:
+        summary = ", ".join(
+            f"{p.name} ({_edi_qso_count(p)} QSOs)" for p in edi_files
+        )
+        print(f"Found existing logs: {summary}")
+        ans = input("Resume? [Y/n]: ").strip().lower()
+        if ans in ("", "y", "yes"):
+            print("Building locator cache...")
+            loc_cache = load_loc_cache()
+            result = load_from_edi(edi_files, loc_cache)
+            if result:
+                lb, tname = result
+                print(f"Callsign: {lb.my_call}")
+                print(f"Locator:  {lb.my_loc}")
+                print(f"Contest:  {tname}")
+                print(f"Loaded {len(lb.qsos)} QSOs")
 
-    loc_cache = build_loc_cache()
+    if lb is None:
+        my_call = _load_callsign()
+        print(f"Callsign: {my_call}")
+        my_loc = input("Your locator [JN97TF]: ").strip().upper() or "JN97TF"
+        if not RE_LOC.match(my_loc):
+            print(f"Warning: {my_loc!r} doesn't look like a valid Maidenhead locator")
+        now = datetime.now(timezone.utc)
+        default_tname = tname_for(now)
+        tname = input(f"Contest name [{default_tname}]: ").strip() or default_tname
+        print("Building locator cache...")
+        loc_cache = load_loc_cache()
+        lb = LogBook(my_call, my_loc, loc_cache)
 
     t = threading.Thread(target=_rig_thread, daemon=True)
     t.start()
 
-    lb = LogBook(my_call, my_loc, loc_cache)
-
     print()
-    print("Input: CALL NR_R [LOC]   e.g.  HA7NS 015   or  HA7NS 015 JN97WM")
+    print("Input: CALL RST NR [LOC]   e.g.  HA7NS 59 015   or  HA7NS 59 015 JN97WM")
+    print("Tab-complete callsigns  │  Space after callsign fills RST  │  Space after NR fills locator")
     print("!help for commands  │  Ctrl-D to save and exit")
     print()
     input("[Enter to start]")

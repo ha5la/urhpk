@@ -2,8 +2,10 @@
 
 ## What is this?
 Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
-- `puskas_log_analyzer.py` – contest log analyser, generates `puskas_stations.csv`
 - `on4kst_irc_bridge.py` – general ON4KST↔IRC bridge; use with irssi or any IRC client
+- `puskas_logger.py` – contest QSO logger with rigctld integration; exports EDI files
+- `puskas_harvester.py` – pre-contest data collector; fetches all stations → `seen_stations.json`
+- `puskas_visualizer.py` – map and polar diagram from `seen_stations.json`
 
 ## Housekeeping reminders
 - When adding or removing components, update the components table in **README.md**
@@ -112,9 +114,81 @@ postinst enables and starts both services; prerm stops irssi first, then the bri
 - `irssi.service` — runs irssi in a tmux session (`tmux new-session -d -s irssi irssi`); `Type=oneshot RemainAfterExit=yes` because tmux daemonizes
 - Both unit files are checked into the repo and installed to `/lib/systemd/system/`
 - Both run as `User=pi` — `~/.netrc` must exist for that user
-- No runtime dependency on `uv`; the bridge script is pure stdlib, run directly with `/usr/bin/python3`
+- No runtime dependency on `uv` for the bridge; the bridge script is pure stdlib, run directly with `/usr/bin/python3`
 - Bridge logs: `journalctl -u on4kst-irc-bridge -f`
 - To change the service user without losing it on upgrade: `sudo systemctl edit on4kst-irc-bridge`
+
+**Contest tools on the Pi:**
+The package also installs `puskas_harvester.py`, `puskas_logger.py`, and
+`puskas_visualizer.py` to `/usr/lib/on4kst-irc-bridge/`, with wrapper scripts in
+`/usr/local/bin/` (`puskas-harvester`, `puskas-logger`, `puskas-visualizer`).
+These require `uv` on the Pi — install once with:
+```
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+All contest-tool files (`seen_stations.json`, `.puskas_cache/`, EDI logs) are read from
+and written to the **current working directory** — run the tools from a contest directory:
+```
+mkdir ~/contest-2026 && cd ~/contest-2026
+puskas-harvester     # fetch seen_stations.json
+puskas-logger        # log QSOs; writes *.EDI here
+puskas-visualizer    # generate map/polar from seen_stations.json + my-logs/
+```
+
+## puskas_harvester.py – Pre-contest station harvester
+
+Run once before the contest to build `seen_stations.json`:
+```
+uv run puskas_harvester.py
+```
+- No external dependencies — pure stdlib
+- Fetches event list from `bb.mrasz.hu`, filters for Puskás URH Kupa rounds with `isClaimed==true`
+- For each event: fetches submitters, their QSO logs, and QSO partners
+- Output: `seen_stations.json` in the project root — `{call: {wwl, bands}}`
+- All API responses cached in `.puskas_cache/`; delete it to force a fresh fetch
+
+## puskas_visualizer.py – Map and polar diagram
+
+```
+uv run puskas_visualizer.py [CALLSIGN LOCATOR]
+```
+- Loads `seen_stations.json` (built by harvester)
+- Loads own log EDI files from `my-logs/` for callsign, locator, and worked-station marking
+- Generates `puskas_map.html` (interactive Folium map) and `puskas_polar.png` (polar scatter)
+- Missed stations (in seen_stations but not worked) shown in red on map
+- Dependencies: `folium`, `matplotlib`, `numpy`
+
+## puskas_logger.py – UX requirements (non-negotiable)
+
+These requirements must be preserved across all future changes:
+
+- **Live rig status**: band, mode, QRG, and next serial must update every second in the
+  bottom toolbar while the prompt is active. A band change on the radio must be visible
+  immediately — never require Enter to see the updated state.
+- **Dup warning before Enter**: as soon as the callsign token is recognisable, the right
+  prompt must show a red `DUP` indicator if `(call, band, mode)` is already in `lb.worked`.
+  The operator must not need to press Enter to discover a duplicate. The dup check must
+  re-evaluate when the band changes on the radio — `RIGCTLD_POLL_S = 1` keeps the cached
+  rig state fresh so the rprompt (redrawn every second via `refresh_interval`) always
+  reflects the current band.
+- **Band always visible in log**: every QSO row must show its band. RST columns must be
+  3 chars wide so CW (599) and SSB/FM (59) rows stay aligned.
+- **Rig read at Enter time**: band and mode for a new QSO are captured by a fresh
+  `current_rig()` call immediately after Enter, never from the stale snapshot taken when
+  the prompt was first drawn.
+- **Rig thread must never die**: `_rig_thread` wraps its loop body in `try/except` so a
+  transient rigctld error cannot kill the thread.
+- **Backspace un-logs**: pressing Backspace on an empty input removes the last QSO from
+  the log, saves EDI immediately, and populates the input buffer with the removed QSO's
+  data (`CALL RST NR LOC`) so it can be corrected and re-entered. The screen is fully
+  redrawn so the QSO disappears from the visible list immediately.
+- **CW abort on first Escape**: Escape must abort an in-progress CW transmission on the
+  very first keypress with no perceptible delay. prompt_toolkit's default `ttimeoutlen`
+  of 0.5 s causes a half-second lag — set it to `0.05` s via `pre_run` on every
+  `session.prompt()` call. Escape must also call `_cw_stop()` before checking
+  `buf.complete_state`, so it fires even when a completion menu is open.
+- **CW number abbreviation**: the `<NUMBER>` placeholder in CW macro templates must
+  substitute `0→T` and `9→N` (e.g. serial 014 → `T14`). This is standard contest CW.
 
 ## puskas_logger.py – Contest QSO Logger
 
@@ -124,32 +198,70 @@ Purpose-built for Puskás URH Kupa rules. Requires `prompt_toolkit` (declared in
 uv run puskas_logger.py
 ```
 
-- Reads band/QRG/mode from rigctld (same `RIGCTLD_HOST:PORT` as the bridge); falls back to `!band`/`!mode` commands if rig offline
-- Input format: `CALL NR_R [LOC] [RST_R]` on one line — e.g. `HA7NS 015` or `HA7NS 015 JN97WM`
-- Locator prefilled from cache: Stage 1 parses all `my-logs/*.EDI`; Stage 2 queries `bb.mrasz.hu` API for each event ID in `EVENT_IDS`
-- RST defaults: `59` for SSB/FM, `599` for CW (based on current rig mode)
+**Locator cache**: loaded from `seen_stations.json` if present (built by `puskas_harvester.py`),
+falls back to own `my-logs/*.EDI` files. No API calls during contest.
+
+**Crash recovery**: at startup, scans `*.EDI` in the current directory. If found, shows a summary
+and offers to resume — all QSOs, serials, and dup state are rebuilt from the EDI records.
+EDI files are the sole persistence format (no separate session file).
+
+**Input format**: `CALL RST NR [LOC]`
+```
+HA7NS 59 015           → locator filled from cache
+HA7NS 59 015 JN97WM    → explicit locator
+HA7NS 599 014 JN97WM   → CW with locator
+```
+
+**UX shortcuts**:
+- Tab-complete callsigns (prefix-match from locator cache)
+- Space after callsign → auto-fills RST (59 or 599) + space
+- Space after NR → auto-fills cached locator (if known)
+- Backspace on empty input → removes last QSO, puts it back in the buffer for correction
+- Up/Down on empty input → navigates log for editing; Escape cancels edit
+- Escape → aborts CW transmission immediately, clears buffer
+
+**CW macros** (F1–F7, requires rigctld):
+| Key | Template |
+|-----|----------|
+| F1  | `CQ <MYCALL> <MYCALL> TEST` |
+| F2  | `<MYCALL>` |
+| F3  | `<HISCALL> DE <MYCALL> 5NN <NUMBER> <NUMBER> <LOCATOR>` |
+| F4  | `TU <MYCALL> TEST` |
+| F5  | `<HISCALL>` |
+| F6  | `DE <MYCALL>` |
+| F7  | `?` |
+
+`<HISCALL>` is the first token in the input buffer at key-press time.
+`<NUMBER>` uses CW abbreviations: `0→T`, `9→N` (e.g. 014 → `T14`).
+Macros silently no-op when rigctld is offline.
+
+**Contest rules**:
+- Reads band/QRG/mode from rigctld; falls back to `!band`/`!mode` commands if rig offline
+- RST defaults: `59` for SSB/FM, `599` for CW
 - Serial auto-increments per band; all QSOs (including dups) get a serial
 - Dup check key: `(callsign, band, mode)` — 9 valid combos per station (3 bands × 3 modes)
-- Dup QSOs shown in red; can still be logged (operator decides); EDI export marks them `D`
+- Dup QSOs shown in red and EDI-flagged `D`
 - Auto-saves EDI after every QSO; files named `YYMMDD-CALL-BAND.EDI` in current directory
-- Commands: `!save`, `!undo`, `!band 2M|70CM|23CM`, `!mode SSB|CW|FM`, `!help`
-- Ctrl-D → final save and exit
+
+**Commands**: `!save`, `!undo`, `!band 2M|70CM|23CM`, `!mode SSB|CW|FM`, `!help`  
+Ctrl-D → final save and exit
 
 EDI export: one file per band, `[REG1TEST;1]` format compatible with bb.mrasz.hu submission.
 
-To add a new round to the locator cache: append its event ID to `EVENT_IDS` in the script.
-
 ## Running
 ```
-uv run on4kst_irc_bridge.py # IRC bridge (then connect irssi to localhost:6667)
+uv run on4kst_irc_bridge.py   # IRC bridge (then connect irssi to localhost:6667)
+uv run puskas_harvester.py    # build seen_stations.json before a contest
+uv run puskas_logger.py       # log QSOs during the contest
+uv run puskas_visualizer.py   # generate map and polar after the contest
 ```
 
 ## Testing
 ```
-uv run pytest tests/ -v     # 80 tests: parsing, IRC protocol, integration
+uv run pytest tests/ -v     # 143 tests: parsing, IRC protocol, logger, integration
 ```
 CI runs the same suite on every push via GitHub Actions.
 
 ## Repository
-- `.gitignore` excludes generated files (`puskas_stations.csv`, `puskas_missed.csv`,
-  `puskas_map.html`, `puskas_polar.png`) and scratch files (`*.json`, `*.url`, `*.txt`)
+- `.gitignore` excludes generated files (`puskas_map.html`, `puskas_polar.png`) and scratch
+  files (`*.json`, `*.url`, `*.txt`)
