@@ -16,6 +16,13 @@ Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
   it "just in case". Dead code is technical debt.
 - **Tests must always pass**: never commit with a failing test. The test suite is the
   safety net for refactoring and simplification.
+- **No visual glitches**: the logger UI must look professional at all times. Transient
+  incorrect states (e.g. a dup highlight flashing for one frame during a state transition)
+  are bugs. The root cause is usually a final prompt_toolkit render that fires between a
+  key handler updating `_state` and the next loop iteration clearing the screen. Fix:
+  clear the buffer with `buf.set_document(Document(''))` before calling
+  `get_app().exit(result=_REDRAW)` whenever leaving edit mode, so the final render sees
+  an empty buffer and has nothing to mis-highlight.
 
 ## Credentials / locator
 - Callsign and password: `~/.netrc` (`machine www.on4kst.info login ha5la password ...`)
@@ -165,12 +172,13 @@ These requirements must be preserved across all future changes:
 - **Live rig status**: band, mode, QRG, and next serial must update every second in the
   bottom toolbar while the prompt is active. A band change on the radio must be visible
   immediately — never require Enter to see the updated state.
-- **Dup warning before Enter**: as soon as the callsign token is recognisable, the right
-  prompt must show a red `DUP` indicator if `(call, band, mode)` is already in `lb.worked`.
-  The operator must not need to press Enter to discover a duplicate. The dup check must
-  re-evaluate when the band changes on the radio — `RIGCTLD_POLL_S = 1` keeps the cached
-  rig state fresh so the rprompt (redrawn every second via `refresh_interval`) always
-  reflects the current band.
+- **Dup warning before Enter**: as soon as the callsign token is recognisable, the entire
+  input line background turns red (`DynamicStyle({'': 'bg:ansired fg:white'})`) and the
+  right prompt shows a red `DUP` label. The operator must not need to press Enter to
+  discover a duplicate. The dup check must re-evaluate when the band changes on the radio —
+  `RIGCTLD_POLL_S = 1` keeps cached rig state fresh so the style (redrawn every second via
+  `refresh_interval`) always reflects the current band. The dup style is suppressed during
+  edit mode (`_state['edit_idx'] is not None`) to avoid false positives.
 - **Band always visible in log**: every QSO row must show its band. RST columns must be
   3 chars wide so CW (599) and SSB/FM (59) rows stay aligned.
 - **Rig read at Enter time**: band and mode for a new QSO are captured by a fresh
@@ -183,17 +191,21 @@ These requirements must be preserved across all future changes:
   QSOs. Escape exits edit mode. All three actions use `get_app().exit(result=_REDRAW)` to
   force a full screen redraw — this is the only way to scroll the printed QSO list while
   the prompt is active.
-- **Scrolling edit view**: when editing, `_print_recent` shows a centered window of 8 rows
-  with the focused QSO highlighted as `> …` (bold) instead of `  …`. Up to `n//2` QSOs are
-  shown both above and below the focused row so the operator can see surrounding context and
-  is not misled into thinking QSOs outside the window have been deleted.
+- **Scrolling edit view**: when editing, `_print_recent` shows a centered window (height
+  determined by terminal size, same formula as normal mode) with the focused QSO highlighted
+  as `> …` (bold) instead of `  …`. QSOs are shown both above and below the focused row so
+  the operator can see surrounding context and is not misled into thinking QSOs outside the
+  window have been deleted.
 - **Edit preserves immutable fields**: dt, band, mode, nr_s, rst_s are kept from the
   original QSO; only the received side (call, rst_r, nr_r, loc) can change. Band and mode
   come from the original QSO, not the current rig state — this is intentional. Escape in
   edit mode triggers `_REDRAW` so the highlight clears immediately.
 - **Header band summary is compact**: format is `{band}:{count}q/{pts}pt` (e.g.
-  `2M:12q/4321pt  70CM:3q/891pt`) so the full three-band line still fits within the
-  64-character header width.
+  `2M:12q/4321pt  70CM:3q/891pt`) so the full three-band line fits within the 64-character
+  header width. Points = sum of `dist_km` for non-dup QSOs (matches EDI `CQSOP`).
+- **QSO list fills the terminal**: `_print_recent` receives `n = max(3, rows - 8)` where
+  `rows = os.get_terminal_size().lines` (falls back to 24). The constant 8 accounts for the
+  fixed header lines (blank, two bars, summary, legend, separator, prompt, toolbar).
 - **CW abort on first Escape**: Escape must abort an in-progress CW transmission on the
   very first keypress with no perceptible delay. prompt_toolkit's default `ttimeoutlen`
   of 0.5 s causes a half-second lag — set it to `0.05` s via `pre_run` on every
@@ -211,11 +223,14 @@ uv run puskas_logger.py
 ```
 
 **Locator cache**: loaded from `seen_stations.json` if present (built by `puskas_harvester.py`),
-falls back to own `my-logs/*.EDI` files. No API calls during contest.
+falls back to own `my-logs/*.edi` files. No API calls during contest.
 
-**Crash recovery**: at startup, scans `*.EDI` in the current directory. If found, shows a summary
-and offers to resume — all QSOs, serials, and dup state are rebuilt from the EDI records.
-EDI files are the sole persistence format (no separate session file).
+**Crash recovery**: at startup, scans `*.edi` / `*.EDI` (case-insensitive) in the current
+directory. If found, shows a summary and offers to resume — all QSOs, serials, and dup state
+are rebuilt from the EDI records. EDI files are the sole persistence format (no session file).
+Files are saved as lowercase `YYMMDD-CALL-BAND.edi`; `write_edi` automatically removes any
+stale uppercase `.EDI` sibling of the same name (migration from pre-v1.6 saves).
+`load_from_edi` deduplicates by stem (case-insensitive) as a safety backstop.
 
 **Input format**: `CALL RST NR [LOC]`
 ```
@@ -230,8 +245,7 @@ HA7NS 599 014 JN97WM   → CW with locator
 - Space after NR → auto-fills cached locator (if known)
 - Backspace on empty input → enters edit mode for last QSO (no removal)
 - Up/Down → navigate log in edit mode; window scrolls to keep focused row centred
-- Escape → exits edit mode (screen redraws to clear highlight) or stops CW
-- Escape → aborts CW transmission immediately, clears buffer
+- Escape → exits edit mode (screen redraws immediately) and/or aborts CW transmission
 
 **CW macros** (F1–F7, requires rigctld):
 | Key | Template |
@@ -271,7 +285,7 @@ uv run puskas_visualizer.py   # generate map and polar after the contest
 
 ## Testing
 ```
-uv run pytest tests/ -v     # 154 tests: parsing, IRC protocol, logger, integration
+uv run pytest tests/ -v     # 156 tests: parsing, IRC protocol, logger, integration
 ```
 CI runs the same suite on every push via GitHub Actions.
 

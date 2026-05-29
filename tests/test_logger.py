@@ -229,7 +229,7 @@ class TestWriteEdi:
         lb = LogBook("HA5LA", "JN97TF", {})
         lb.add(_qso(band="2M", nr_s=1))
         p = write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path)
-        assert p.name == "260504-HA5LA-2M.EDI"
+        assert p.name == "260504-HA5LA-2M.edi"
 
     def test_header_fields(self, tmp_path):
         lb = LogBook("HA5LA", "JN97TF", {})
@@ -313,7 +313,7 @@ class TestLoadFromEdi:
     def test_roundtrip_preserves_qso_count(self, tmp_path):
         lb = self._make_logbook()
         write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path)
-        paths = list(tmp_path.glob("*.EDI"))
+        paths = list(tmp_path.glob("*.[Ee][Dd][Ii]"))
         result = load_from_edi(paths, {})
         assert result is not None
         lb2, tname = result
@@ -322,20 +322,20 @@ class TestLoadFromEdi:
     def test_roundtrip_preserves_callsign_and_locator(self, tmp_path):
         lb = self._make_logbook()
         write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path)
-        lb2, _ = load_from_edi(list(tmp_path.glob("*.EDI")), {})
+        lb2, _ = load_from_edi(list(tmp_path.glob("*.[Ee][Dd][Ii]")), {})
         assert lb2.my_call == "HA5LA"
         assert lb2.my_loc == "JN97TF"
 
     def test_roundtrip_preserves_tname(self, tmp_path):
         lb = self._make_logbook()
         write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path)
-        _, tname = load_from_edi(list(tmp_path.glob("*.EDI")), {})
+        _, tname = load_from_edi(list(tmp_path.glob("*.[Ee][Dd][Ii]")), {})
         assert tname == "PUSKAS2026MAJUS"
 
     def test_roundtrip_rebuilds_dup_state(self, tmp_path):
         lb = self._make_logbook()
         write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path)
-        lb2, _ = load_from_edi(list(tmp_path.glob("*.EDI")), {})
+        lb2, _ = load_from_edi(list(tmp_path.glob("*.[Ee][Dd][Ii]")), {})
         # HA7NS SSB 2M was worked first → second entry is a dup
         assert ("HA7NS", "2M", "SSB") in lb2.worked
         # adding again should be detected as dup
@@ -344,7 +344,7 @@ class TestLoadFromEdi:
     def test_roundtrip_next_nr_continues(self, tmp_path):
         lb = self._make_logbook()
         write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path)
-        lb2, _ = load_from_edi(list(tmp_path.glob("*.EDI")), {})
+        lb2, _ = load_from_edi(list(tmp_path.glob("*.[Ee][Dd][Ii]")), {})
         assert lb2.next_nr("2M") == 4
 
     def test_multiband_roundtrip(self, tmp_path):
@@ -353,7 +353,7 @@ class TestLoadFromEdi:
         lb.add(_qso(call="HA7NS", band="70CM", mode="FM",  nr_s=1, h=17))
         write_edi(lb, "2M",   "PUSKAS2026MAJUS", tmp_path)
         write_edi(lb, "70CM", "PUSKAS2026MAJUS", tmp_path)
-        paths = sorted(tmp_path.glob("*.EDI"))
+        paths = sorted(tmp_path.glob("*.[Ee][Dd][Ii]"))
         lb2, _ = load_from_edi(paths, {})
         assert len(lb2.qsos) == 2
         assert lb2.next_nr("2M") == 2
@@ -362,11 +362,31 @@ class TestLoadFromEdi:
     def test_returns_none_for_empty_list(self):
         assert load_from_edi([], {}) is None
 
+    def test_uppercase_and_lowercase_edi_not_doubled(self, tmp_path):
+        """Coexisting foo.EDI and foo.edi (case-change migration) must not double QSOs."""
+        lb = self._make_logbook()
+        p = write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path)
+        # Simulate a stale uppercase sibling from a pre-lowercase-change save
+        stale = p.with_suffix(".EDI")
+        stale.write_text(p.read_text())
+        paths = sorted(tmp_path.glob("*.[Ee][Dd][Ii]"))
+        assert len(paths) == 2          # both files visible on Linux
+        lb2, _ = load_from_edi(paths, {})
+        assert len(lb2.qsos) == len(lb.qsos)   # no doubling
+
+    def test_write_edi_removes_uppercase_sibling(self, tmp_path):
+        lb = self._make_logbook()
+        # Create a stale uppercase file first
+        stale = tmp_path / "260504-HA5LA-2M.EDI"
+        stale.write_text("stale")
+        write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path)
+        assert not stale.exists()
+
     def test_loc_cache_passed_through(self, tmp_path):
         lb = self._make_logbook()
         write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path)
         cache = {"HA7NS": "JN97WM"}
-        lb2, _ = load_from_edi(list(tmp_path.glob("*.EDI")), cache)
+        lb2, _ = load_from_edi(list(tmp_path.glob("*.[Ee][Dd][Ii]")), cache)
         assert lb2.loc_cache == cache
 
 
@@ -453,7 +473,7 @@ class TestQsoEdit:
         parsed = parse_input("HA8RM 59 012 JN96UW")
         self._apply_edit(lb, 0, parsed)
         write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path)
-        lb2, _ = load_from_edi(list(tmp_path.glob("*.EDI")), {})
+        lb2, _ = load_from_edi(list(tmp_path.glob("*.[Ee][Dd][Ii]")), {})
         assert lb2.qsos[2].call == "HA8RM"
         assert lb2.qsos[2].loc  == "JN96UW"
 
@@ -563,7 +583,7 @@ class TestPrintRecent:
         write_edi(lb, "2M",   "T", tmp_path)
         write_edi(lb, "70CM", "T", tmp_path)
         # Load in 70CM-first order to exercise sorting
-        paths = sorted(tmp_path.glob("*.EDI"), reverse=True)
+        paths = sorted(tmp_path.glob("*.[Ee][Dd][Ii]"), reverse=True)
         lb2, _ = load_from_edi(paths, {})
         assert [q.call for q in lb2.qsos] == ["HA7NS", "HA3KHB", "HA8RM"]
 
@@ -581,4 +601,4 @@ class TestEdiQsoCount:
         assert _edi_qso_count(p) == 2
 
     def test_missing_file_returns_zero(self, tmp_path):
-        assert _edi_qso_count(tmp_path / "nonexistent.EDI") == 0
+        assert _edi_qso_count(tmp_path / "nonexistent.edi") == 0

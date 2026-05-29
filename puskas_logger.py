@@ -35,6 +35,7 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.filters import has_completions
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.styles import DynamicStyle, Style
 
 # ──────────────────────────────────────────────────────────────
 # Configuration
@@ -303,7 +304,10 @@ def write_edi(lb: LogBook, band: str, tname: str, out_dir: Path) -> Path | None:
             f"{q.loc};{0 if dup else q.dist_km};;;{'D' if dup else ''};"
         )
 
-    path = out_dir / f"{date_6}-{lb.my_call}-{band}.EDI"
+    path = out_dir / f"{date_6}-{lb.my_call}-{band}.edi"
+    stale = path.with_suffix(".EDI")   # remove uppercase sibling from pre-1.6 saves
+    if stale.exists():
+        stale.unlink()
     path.write_text("\n".join(hdr + records) + "\n", encoding="utf-8")
     return path
 
@@ -320,6 +324,16 @@ _MODE_FROM_CODE = {"1": "SSB", "2": "CW", "6": "FM"}
 def load_from_edi(paths: list[Path],
                   loc_cache: dict[str, str]) -> tuple[LogBook, str] | None:
     """Parse EDI files and return (logbook, tname), or None on failure."""
+    # Deduplicate by stem (case-insensitive) — guards against foo.EDI + foo.edi coexisting
+    seen_stems: set[str] = set()
+    unique: list[Path] = []
+    for p in paths:
+        key = p.stem.lower()
+        if key not in seen_stems:
+            seen_stems.add(key)
+            unique.append(p)
+    paths = unique
+
     my_call = my_loc = tname = ""
 
     for path in paths:
@@ -615,6 +629,19 @@ def run(lb: LogBook, tname: str):
             return HTML("<ansired><b>  DUP  </b></ansired>")
         return ""
 
+    def _get_input_style() -> Style:
+        if _state['edit_idx'] is not None:
+            return Style.from_dict({})
+        try:
+            text = get_app().current_buffer.text.upper().split()
+            if text and RE_CALL.match(text[0]):
+                band, mode, *_ = current_rig()
+                if band and mode and lb.is_dup(text[0], band, mode):
+                    return Style.from_dict({'': 'bg:ansired fg:white'})
+        except Exception:
+            pass
+        return Style.from_dict({})
+
     kb = KeyBindings()
 
     @kb.add(' ')
@@ -673,6 +700,7 @@ def run(lb: LogBook, tname: str):
         else:
             _state['edit_idx'] = None
             _state['restore_text'] = ''
+            buf.set_document(Document(''))
             get_app().exit(result=_REDRAW)
 
     @kb.add('escape')
@@ -685,6 +713,7 @@ def run(lb: LogBook, tname: str):
         if _state['edit_idx'] is not None:
             _state['edit_idx'] = None
             _state['restore_text'] = ''
+            buf.set_document(Document(''))
             get_app().exit(result=_REDRAW)
         else:
             buf.set_document(Document(''))
@@ -719,7 +748,11 @@ def run(lb: LogBook, tname: str):
         _print_header(lb)
         focus = (len(lb.qsos) - 1 - _state['edit_idx']
                  if _state['edit_idx'] is not None else None)
-        _print_recent(lb, focus=focus)
+        try:
+            rows = os.get_terminal_size().lines
+        except OSError:
+            rows = 24
+        _print_recent(lb, n=max(3, rows - 8), focus=focus)
         if not band:
             print("\033[33m  No band — use !band 2M or !band 70CM or !band 23CM\033[0m")
 
@@ -727,6 +760,7 @@ def run(lb: LogBook, tname: str):
         try:
             result = session.prompt("> ", bottom_toolbar=_toolbar,
                                     rprompt=_rprompt,
+                                    style=DynamicStyle(_get_input_style),
                                     refresh_interval=1.0,
                                     default=default,
                                     pre_run=lambda: setattr(get_app(), 'ttimeoutlen', 0.05))
