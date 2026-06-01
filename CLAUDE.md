@@ -36,6 +36,12 @@ Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
   but supports multiple simultaneous connections
 - Public chat maps to `#on4kst`; `/CQ CALLSIGN` maps to IRC PM (PRIVMSG to nick)
 - ON4KST connection is kept permanently and reconnects after drops (`RECONNECT_S = 30`)
+- **TCP keepalives are mandatory on the KST socket** to detect silent drops (e.g. WiFi
+  disconnect) without waiting for the OS default timeout (30+ min). Parameters set in
+  `connect()`: `SO_KEEPALIVE=1`, `TCP_KEEPIDLE=30`, `TCP_KEEPINTVL=10`, `TCP_KEEPCNT=3`
+  → dead connection detected by the OS within ~60 s, which raises `OSError` on the next
+  read. `read_loop` catches `OSError`/`ConnectionResetError`/`BrokenPipeError` and breaks,
+  letting `_run_kst` reconnect. Do not remove this error handling.
 - Bridge auto-joins the IRC client to `#on4kst` on connect — no client-side autojoin needed
 - `/SET HERE` sent when first IRC client connects; `/UNSET HERE` when last disconnects;
   AWAY command from IRC client forwards the same

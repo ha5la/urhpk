@@ -38,6 +38,7 @@ import html
 import math
 import netrc
 import re
+import socket
 import sys
 import time
 import urllib.request
@@ -717,6 +718,15 @@ class ON4KSTClient:
             self._reader, self._writer = await asyncio.open_connection(
                 self.host, self.port
             )
+            sock = self._writer.get_extra_info("socket")
+            if sock is not None:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                try:
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30)
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+                except AttributeError:
+                    pass  # Linux-specific; silently skip elsewhere
             return True
         except Exception as e:
             print(f"[KST] Connection error: {e}")
@@ -860,6 +870,9 @@ class ON4KSTClient:
                 await self.send("/SHow USer")
                 last_refresh = time.monotonic()
                 continue
+            except (ConnectionResetError, BrokenPipeError, OSError) as e:
+                print(f"[KST] Connection lost: {e}")
+                break
             if not chunk:
                 print("[KST] Connection closed by server.")
                 break
@@ -891,6 +904,7 @@ async def _rig_poller(bridge: Bridge):
 
 async def _run_kst(bridge: Bridge, callsign: str, password: str):
     """Keep ON4KST connected, reconnecting as needed."""
+    was_connected = False
     while True:
         kst = ON4KSTClient(KST_HOST, KST_PORT, callsign, password, bridge)
         bridge.kst = kst
@@ -907,10 +921,18 @@ async def _run_kst(bridge: Bridge, callsign: str, password: str):
                     await kst.send("/SET HERE")
                 else:
                     await kst.send("/UNSET HERE")
+                await bridge._notify_status("[kst] Connected to ON4KST")
+                was_connected = True
                 await kst.read_loop()
+                await bridge._notify_status(f"[kst] Disconnected – reconnecting in {RECONNECT_S} s")
             else:
                 print("[KST] Login failed.")
+                await bridge._notify_status(f"[kst] Login failed – reconnecting in {RECONNECT_S} s")
+        else:
+            if was_connected:
+                await bridge._notify_status(f"[kst] Connection lost – reconnecting in {RECONNECT_S} s")
         bridge.kst = None
+        was_connected = False
         print(f"[KST] Reconnecting in {RECONNECT_S} s ...")
         await asyncio.sleep(RECONNECT_S)
 
