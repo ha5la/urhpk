@@ -453,10 +453,11 @@ CW_MACROS = [
     "CQ <MYCALL> <MYCALL> TEST",                               # F1
     "<MYCALL>",                                                # F2
     "<HISCALL> DE <MYCALL> 5NN <NUMBER> <NUMBER> <LOCATOR>",  # F3
-    "TU <MYCALL> TEST",                                        # F4
+    "TU 73 EE",                                               # F4
     "<HISCALL>",                                               # F5
     "DE <MYCALL>",                                             # F6
     "?",                                                       # F7
+    "272 272 SSB",                                             # F8
 ]
 
 def _expand_cw(template: str, lb: LogBook, hiscall: str, band: str) -> str:
@@ -497,7 +498,7 @@ def _band_summary(lb: LogBook) -> str:
         parts.append(f"{b}:{len(qsos)}q/{pts}pt")
     return "  ".join(parts) or "no QSOs yet"
 
-_CW_LEGEND = "  F1:CQ  F2:MYCALL  F3:EXCH  F4:TU  F5:HIS  F6:DE  F7:?   ESC:STOP"
+_CW_LEGEND = "  F1:CQ  F2:MYCALL  F3:EXCH  F4:TU73  F5:HIS  F6:DE  F7:?  F8:QSY  ESC:STOP"
 
 def _print_header(lb: LogBook):
     bar = "━" * W
