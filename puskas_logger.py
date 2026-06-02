@@ -498,7 +498,7 @@ def _band_summary(lb: LogBook) -> str:
         parts.append(f"{b}:{len(qsos)}q/{pts}pt")
     return "  ".join(parts) or "no QSOs yet"
 
-_CW_LEGEND = "  F1:CQ  F2:MYCALL  F3:EXCH  F4:TU73  F5:HIS  F6:DE  F7:?  F8:QSY  ESC:STOP"
+_CW_LEGEND = "  F1:CQ  F2:MYCALL  F3:EXCH  A+F3:SHORT  F4:TU73  F5:HIS  F6:DE  F7:?  F8:QSY  ESC:STOP"
 
 def _print_header(lb: LogBook):
     bar = "━" * W
@@ -666,10 +666,6 @@ def run(lb: LogBook, tname: str):
         buf = event.app.current_buffer
         if buf.text:
             buf.delete_before_cursor()
-            return
-        if not lb.qsos:
-            return
-        _enter_edit(0)
 
     @kb.add('up')
     def _on_up(event):
@@ -728,6 +724,14 @@ def run(lb: LogBook, tname: str):
             band, *_ = current_rig()
             _cw_send(_expand_cw(_tmpl, lb, hiscall, band))
 
+    @kb.add('escape', 'f3')
+    def _on_alt_f3(event):
+        buf = event.app.current_buffer
+        tokens = buf.text.strip().split()
+        hiscall = tokens[0].upper() if tokens else ''
+        band, *_ = current_rig()
+        _cw_send(_expand_cw("5NN <NUMBER> <NUMBER>", lb, hiscall, band))
+
     @kb.add('enter', filter=has_completions)
     def _on_enter_completion(event):
         buf = event.app.current_buffer
@@ -753,9 +757,14 @@ def run(lb: LogBook, tname: str):
             rows = os.get_terminal_size().lines
         except OSError:
             rows = 24
-        _print_recent(lb, n=max(3, rows - 8), focus=focus)
+        _print_recent(lb, n=max(3, rows - 9), focus=focus)
         if not band:
             print("\033[33m  No band — use !band 2M or !band 70CM or !band 23CM\033[0m")
+
+        band, mode, _, _ = current_rig()
+        nr  = lb.next_nr(band) if band else 0
+        rst = "599" if mode == "CW" else "59"
+        print(f"\033[1;92m  TX ► {lb.my_call}  {rst}  {nr:03d}  {lb.my_loc}\033[0m")
 
         default = _state.pop('restore_text', '') or ''
         try:

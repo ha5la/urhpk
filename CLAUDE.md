@@ -192,9 +192,10 @@ These requirements must be preserved across all future changes:
   the prompt was first drawn.
 - **Rig thread must never die**: `_rig_thread` wraps its loop body in `try/except` so a
   transient rigctld error cannot kill the thread.
-- **Backspace enters edit mode**: pressing Backspace on an empty input enters edit mode
-  for the last QSO (does NOT remove it from the log). Up/Down navigate to earlier/later
-  QSOs. Escape exits edit mode. All three actions use `get_app().exit(result=_REDRAW)` to
+- **Backspace stops at column 0**: pressing Backspace when the input buffer is empty does
+  nothing. Edit mode is entered with the Up arrow key only.
+- **Edit mode via Up/Down**: Up/Down navigate to earlier/later QSOs in edit mode.
+  Escape exits edit mode. All three actions use `get_app().exit(result=_REDRAW)` to
   force a full screen redraw — this is the only way to scroll the printed QSO list while
   the prompt is active.
 - **Scrolling edit view**: when editing, `_print_recent` shows a centered window (height
@@ -209,9 +210,12 @@ These requirements must be preserved across all future changes:
 - **Header band summary is compact**: format is `{band}:{count}q/{pts}pt` (e.g.
   `2M:12q/4321pt  70CM:3q/891pt`) so the full three-band line fits within the 64-character
   header width. Points = sum of `dist_km` for non-dup QSOs (matches EDI `CQSOP`).
-- **QSO list fills the terminal**: `_print_recent` receives `n = max(3, rows - 8)` where
-  `rows = os.get_terminal_size().lines` (falls back to 24). The constant 8 accounts for the
-  fixed header lines (blank, two bars, summary, legend, separator, prompt, toolbar).
+- **My-exchange line**: printed in bold bright green between `_print_header` and
+  `_print_recent` in `run()`. Format: `TX ► MYCALL  RST  NR  LOCATOR` (e.g.
+  `TX ► HA5LA  59  010  JN97TF`). RST is `599` in CW mode, `59` otherwise.
+- **QSO list fills the terminal**: `_print_recent` receives `n = max(3, rows - 9)` where
+  `rows = os.get_terminal_size().lines` (falls back to 24). The constant 9 accounts for the
+  fixed header lines (blank, two bars, summary, legend, my-exchange, separator, prompt, toolbar).
 - **CW abort on first Escape**: Escape must abort an in-progress CW transmission on the
   very first keypress with no perceptible delay. prompt_toolkit's default `ttimeoutlen`
   of 0.5 s causes a half-second lag — set it to `0.05` s via `pre_run` on every
@@ -259,6 +263,7 @@ HA7NS 599 014 JN97WM   → CW with locator
 | F1  | `CQ <MYCALL> <MYCALL> TEST` |
 | F2  | `<MYCALL>` |
 | F3  | `<HISCALL> DE <MYCALL> 5NN <NUMBER> <NUMBER> <LOCATOR>` |
+| Alt+F3 | `5NN <NUMBER> <NUMBER>` (short exchange for scatter/time pressure) |
 | F4  | `TU 73 EE` |
 | F5  | `<HISCALL>` |
 | F6  | `DE <MYCALL>` |
