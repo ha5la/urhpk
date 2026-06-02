@@ -157,7 +157,9 @@ uv run puskas_harvester.py
 - No external dependencies — pure stdlib
 - Fetches event list from `bb.mrasz.hu`, filters for Puskás URH Kupa rounds with `isClaimed==true`
 - For each event: fetches submitters, their QSO logs, and QSO partners
-- Output: `seen_stations.json` in the project root — `{call: {wwl, bands}}`
+- Output: `seen_stations.json` in the project root — `{call: {wwls: [most_recent, ...], bands}}`
+  where `wwls` is a list of all known locators in reverse-chronological order (most recently
+  observed in any Puskás round appears first)
 - All API responses cached in `.puskas_cache/`; delete it to force a fresh fetch
 
 ## puskas_visualizer.py – Map and polar diagram
@@ -242,17 +244,18 @@ Files are saved as lowercase `YYMMDD-CALL-BAND.edi`; `write_edi` automatically r
 stale uppercase `.EDI` sibling of the same name (migration from pre-v1.6 saves).
 `load_from_edi` deduplicates by stem (case-insensitive) as a safety backstop.
 
-**Input format**: `CALL RST NR [LOC]`
+**Input format**: `CALL RST NR LOC` (locator is mandatory)
 ```
-HA7NS 59 015           → locator filled from cache
-HA7NS 59 015 JN97WM    → explicit locator
+HA7NS 59 015 JN97WM    → SSB with locator
 HA7NS 599 014 JN97WM   → CW with locator
 ```
 
 **UX shortcuts**:
 - Tab-complete callsigns (prefix-match from locator cache)
+- Tab-complete locators after NR: shows all known locators for the callsign in
+  reverse-chronological order (most recently used first)
 - Space after callsign → auto-fills RST (59 or 599) + space
-- Space after NR → auto-fills cached locator (if known)
+- Space after NR → auto-fills most recent cached locator for the callsign (if known)
 - Backspace on empty input → enters edit mode for last QSO (no removal)
 - Up/Down → navigate log in edit mode; window scrolls to keep focused row centred
 - Escape → exits edit mode (screen redraws immediately) and/or aborts CW transmission

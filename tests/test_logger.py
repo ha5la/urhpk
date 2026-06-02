@@ -35,9 +35,9 @@ def _qso(call="HA7NS", band="2M", mode="SSB", nr_s=1, nr_r=1,
 # ──────────────────────────────────────────────────────────────
 
 class TestParseInput:
-    def test_minimal_three_tokens(self):
+    def test_three_tokens_no_locator_returns_error(self):
         r = parse_input("HA7NS 59 015")
-        assert r == {"call": "HA7NS", "rst_r": "59", "nr_r": 15, "loc": ""}
+        assert "Usage" in r
 
     def test_with_locator(self):
         r = parse_input("HA7NS 59 015 JN97WM")
@@ -57,9 +57,9 @@ class TestParseInput:
         assert r["loc"] == "JN97"
 
     def test_eight_char_locator_not_accepted(self):
-        # RE_LOC is anchored — 8-char string doesn't match, so loc stays empty
+        # RE_LOC is anchored — 8-char string doesn't match, so loc stays empty → error
         r = parse_input("HA7NS 59 001 JN97WMXX")
-        assert r["loc"] == ""
+        assert "Usage" in r
 
     def test_portable_callsign(self):
         r = parse_input("HA5LA/P 59 007 JN97TF")
@@ -98,7 +98,7 @@ class TestParseInput:
         assert isinstance(r, str) and r
 
     def test_rst_is_verbatim(self):
-        r = parse_input("HA7NS 57 003")
+        r = parse_input("HA7NS 57 003 JN97WM")
         assert r["rst_r"] == "57"
 
     def test_extra_tokens_before_locator_ignored(self):
@@ -113,7 +113,7 @@ class TestParseInput:
 
 class TestLogBook:
     def setup_method(self):
-        self.lb = LogBook("HA5LA", "JN97TF", {"HA7NS": "JN97WM"})
+        self.lb = LogBook("HA5LA", "JN97TF", {"HA7NS": ["JN97WM"]})
 
     def test_next_nr_starts_at_one(self):
         assert self.lb.next_nr("2M") == 1
@@ -385,7 +385,7 @@ class TestLoadFromEdi:
     def test_loc_cache_passed_through(self, tmp_path):
         lb = self._make_logbook()
         write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path)
-        cache = {"HA7NS": "JN97WM"}
+        cache = {"HA7NS": ["JN97WM"]}
         lb2, _ = load_from_edi(list(tmp_path.glob("*.[Ee][Dd][Ii]")), cache)
         assert lb2.loc_cache == cache
 
@@ -396,7 +396,7 @@ class TestLoadFromEdi:
 
 class TestQsoEdit:
     def _lb_with_qsos(self):
-        lb = LogBook("HA5LA", "JN97TF", {"HA7NS": "JN97WM", "HA3KHB": "JN86SR"})
+        lb = LogBook("HA5LA", "JN97TF", {"HA7NS": ["JN97WM"], "HA3KHB": ["JN86SR"]})
         lb.add(_qso(call="HA7NS",  band="2M", mode="SSB", nr_s=1, nr_r=1,  h=16, m=1))
         lb.add(_qso(call="HA3KHB", band="2M", mode="SSB", nr_s=2, nr_r=14, h=16, m=59))
         lb.add(_qso(call="HA8RM",  band="2M", mode="SSB", nr_s=3, nr_r=12, h=17, m=4))
@@ -405,7 +405,7 @@ class TestQsoEdit:
     def _apply_edit(self, lb, edit_idx, parsed):
         real_idx = len(lb.qsos) - 1 - edit_idx
         old = lb.qsos[real_idx]
-        loc = parsed["loc"] or lb.loc_cache.get(parsed["call"], "") or old.loc
+        loc = parsed["loc"]  # mandatory
         lb.qsos[real_idx] = QSO(
             dt=old.dt, band=old.band, mode=old.mode,
             call=parsed["call"], rst_s=old.rst_s, nr_s=old.nr_s,
@@ -444,7 +444,7 @@ class TestQsoEdit:
 
     def test_edit_rebuilds_worked_set(self):
         lb = self._lb_with_qsos()
-        parsed = parse_input("HA5OO 59 012")
+        parsed = parse_input("HA5OO 59 012 JN96UW")
         self._apply_edit(lb, 0, parsed)    # replace HA8RM with HA5OO
         assert ("HA5OO", "2M", "SSB") in lb.worked
         assert ("HA8RM", "2M", "SSB") not in lb.worked
@@ -452,21 +452,16 @@ class TestQsoEdit:
     def test_edit_fixes_callsign_dup_detection(self):
         lb = self._lb_with_qsos()
         # HA7NS is in worked; edit first QSO to change its callsign
-        parsed = parse_input("HA5OO 59 001")
+        parsed = parse_input("HA5OO 59 001 JN96UW")
         self._apply_edit(lb, 2, parsed)    # edit_idx=2 → first QSO
         # HA7NS should no longer be in worked (it was the only one)
         assert ("HA7NS", "2M", "SSB") not in lb.worked
         # Adding HA7NS now should not be a dup
         assert lb.add(_qso(call="HA7NS", band="2M", mode="SSB")) is False
 
-    def test_edit_loc_falls_back_to_cache(self):
-        lb = self._lb_with_qsos()
-        # No loc in input, old loc was empty, but cache has it
-        parsed = parse_input("HA7NS 59 001")
-        assert parsed["loc"] == ""
-        old = lb.qsos[0]
-        loc = parsed["loc"] or lb.loc_cache.get(parsed["call"], "") or old.loc
-        assert loc == "JN97WM"   # from loc_cache
+    def test_missing_locator_returns_error(self):
+        r = parse_input("HA7NS 59 001")
+        assert "Usage" in r
 
     def test_edit_roundtrip_via_edi(self, tmp_path):
         lb = self._lb_with_qsos()

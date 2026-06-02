@@ -156,8 +156,19 @@ def main():
         print("[!] No events found — check network or delete .puskas_cache/")
         return
 
-    # call → {"wwl": str, "bands": list[str]}
+    # call → {"wwls": list[str] most-recent-first, "bands": list[str]}
     stations: dict[str, dict] = {}
+
+    def _record(call: str, wwl: str) -> None:
+        """Add wwl to station's list; move to front if already seen (most recent = front)."""
+        if call not in stations:
+            stations[call] = {"wwls": [], "bands": []}
+        if not wwl:
+            return
+        wwls = stations[call]["wwls"]
+        if wwl in wwls:
+            wwls.remove(wwl)
+        wwls.insert(0, wwl)
 
     for i, event_id in enumerate(event_ids, 1):
         print(f"\n[{i}/{len(event_ids)}] {event_id}")
@@ -167,24 +178,14 @@ def main():
         for j, s in enumerate(claimed, 1):
             call = s["callsign"]
             wwl  = s["wwl"]
-
-            if call not in stations:
-                stations[call] = {"wwl": "", "bands": []}
-            # prefer the longer (more precise) locator
-            if len(wwl) > len(stations[call]["wwl"]):
-                stations[call]["wwl"] = wwl
+            _record(call, wwl)
 
             for code in fetch_round_codes(event_id, call):
                 for q in fetch_qsos(event_id, call, code):
-                    dx_call = q["callsign"]
-                    dx_wwl  = q["wwl"]
-                    band    = q["band"]
-                    if dx_call not in stations:
-                        stations[dx_call] = {"wwl": "", "bands": []}
-                    if len(dx_wwl) > len(stations[dx_call]["wwl"]):
-                        stations[dx_call]["wwl"] = dx_wwl
-                    if band and band not in stations[dx_call]["bands"]:
-                        stations[dx_call]["bands"].append(band)
+                    _record(q["callsign"], q["wwl"])
+                    band = q["band"]
+                    if band and band not in stations[q["callsign"]]["bands"]:
+                        stations[q["callsign"]]["bands"].append(band)
 
             if j % 10 == 0 or j == len(claimed):
                 print(f"  {j}/{len(claimed)} processed — {len(stations)} total", flush=True)

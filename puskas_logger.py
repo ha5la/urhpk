@@ -8,9 +8,8 @@
 Puskás URH Kupa – Contest QSO Logger
 =====================================
 Usage:  uv run puskas_logger.py
-Input:  CALL RST NR [LOC]
-          HA7NS 59 015           → locator from cache
-          HA7NS 59 015 JN97WM    → explicit locator
+Input:  CALL RST NR LOC
+          HA7NS 59 015 JN97WM    → locator required
           HA7NS 599 014 JN97WM   → CW with locator
 Commands: !save  !undo  !band 2M|70CM|23CM  !mode SSB|CW|FM  !help
 Ctrl-D at empty prompt → save EDI files and exit
@@ -99,16 +98,21 @@ def _parse_edi_files() -> dict[str, str]:
             pass
     return cache
 
-def load_loc_cache() -> dict[str, str]:
+def load_loc_cache() -> dict[str, list[str]]:
     if SEEN_STATIONS.exists():
         try:
             data = json.loads(SEEN_STATIONS.read_text(encoding="utf-8"))
-            cache = {call: v["wwl"] for call, v in data.items() if v.get("wwl")}
+            cache: dict[str, list[str]] = {}
+            for call, v in data.items():
+                wwls = v.get("wwls") or ([v["wwl"]] if v.get("wwl") else [])
+                if wwls:
+                    cache[call] = wwls
             print(f"  {len(cache)} stations from seen_stations.json")
             return cache
         except Exception:
             pass
-    cache = _parse_edi_files()
+    edi = _parse_edi_files()
+    cache = {call: [loc] for call, loc in edi.items()}
     if cache:
         print(f"  {len(cache)} stations from my-logs/ "
               f"(run puskas_harvester.py for full cache)")
@@ -191,7 +195,7 @@ class QSO:
     dist_km: int
 
 class LogBook:
-    def __init__(self, my_call: str, my_loc: str, loc_cache: dict[str, str]):
+    def __init__(self, my_call: str, my_loc: str, loc_cache: dict[str, list[str]]):
         self.my_call   = my_call
         self.my_loc    = my_loc
         self.loc_cache = loc_cache
@@ -322,7 +326,7 @@ _BAND_FROM_FREQ = {"145 MHz": "2M", "435 MHz": "70CM", "1296 MHz": "23CM"}
 _MODE_FROM_CODE = {"1": "SSB", "2": "CW", "6": "FM"}
 
 def load_from_edi(paths: list[Path],
-                  loc_cache: dict[str, str]) -> tuple[LogBook, str] | None:
+                  loc_cache: dict[str, list[str]]) -> tuple[LogBook, str] | None:
     """Parse EDI files and return (logbook, tname), or None on failure."""
     # Deduplicate by stem (case-insensitive) — guards against foo.EDI + foo.edi coexisting
     seen_stems: set[str] = set()
@@ -401,12 +405,12 @@ def load_from_edi(paths: list[Path],
 RE_CALL = re.compile(r'^(?=[A-Z0-9]*[A-Z])[A-Z0-9]{2,}(/[A-Z0-9P/]+)?$')
 
 def parse_input(line: str) -> dict | str:
-    """Parse 'CALL RST NR [LOC]'. Returns dict or error string."""
+    """Parse 'CALL RST NR LOC'. Returns dict or error string."""
     tokens = line.upper().split()
     if not tokens:
         return ""
     if len(tokens) < 3:
-        return "Usage: CALL RST NR [LOC]   e.g.  HA7NS 59 015"
+        return "Usage: CALL RST NR LOC   e.g.  HA7NS 59 015 JN97WM"
     call = tokens[0]
     if not RE_CALL.match(call):
         return f"Invalid callsign: {call!r}"
@@ -422,25 +426,39 @@ def parse_input(line: str) -> dict | str:
         if RE_LOC.match(tok):
             loc = tok[:6]
             break
+    if not loc:
+        return "Usage: CALL RST NR LOC   e.g.  HA7NS 59 015 JN97WM"
     return dict(call=call, rst_r=rst_r, nr_r=nr_r, loc=loc)
 
 # ──────────────────────────────────────────────────────────────
 # Callsign autocomplete
 # ──────────────────────────────────────────────────────────────
 class CallCompleter(Completer):
-    def __init__(self, loc_cache: dict[str, str]):
+    def __init__(self, loc_cache: dict[str, list[str]]):
         self._calls = sorted(loc_cache.keys())
+        self._locs  = loc_cache  # call → [most_recent, ...]
 
     def get_completions(self, document, complete_event):
-        text = document.text_before_cursor
+        text   = document.text_before_cursor
         tokens = text.split()
-        # only complete on the first token (callsign)
-        if len(tokens) > 1 or (tokens and text[-1] == " "):
+        if not tokens:
             return
-        prefix = tokens[0] if tokens else ""
-        for call in self._calls:
-            if call.startswith(prefix.upper()):
-                yield Completion(call, start_position=-len(prefix))
+        trailing = text[-1] == ' '
+
+        # Callsign: first token being typed
+        if len(tokens) == 1 and not trailing:
+            prefix = tokens[0]
+            for call in self._calls:
+                if call.startswith(prefix.upper()):
+                    yield Completion(call, start_position=-len(prefix))
+
+        # Locator: after "CALL RST NR " (3 complete tokens + cursor past space)
+        elif (len(tokens) == 3 and trailing) or len(tokens) == 4:
+            call   = tokens[0].upper()
+            prefix = tokens[3] if len(tokens) == 4 else ""
+            for loc in self._locs.get(call, []):
+                if loc.startswith(prefix.upper()):
+                    yield Completion(loc, start_position=-len(prefix))
 
 # ──────────────────────────────────────────────────────────────
 # Display helpers
@@ -564,7 +582,7 @@ def _handle_command(line: str, lb: LogBook, tname: str):
             print(f"  Mode override: {_rig_manual['mode']}")
 
     elif cmd == "!help":
-        print("  CALL RST NR [LOC]        — log a QSO")
+        print("  CALL RST NR LOC          — log a QSO (locator required)")
         print("  !save                    — write EDI files now")
         print("  !undo                    — remove last QSO")
         print("  !band 2M|70CM|23CM       — set band manually (rig offline)")
@@ -657,9 +675,9 @@ def run(lb: LogBook, tname: str):
             _, mode, *_ = current_rig()
             buf.insert_text(("599" if mode == "CW" else "59") + ' ')
         elif len(tokens) == 3:
-            loc = lb.loc_cache.get(tokens[0].upper(), '')
-            if loc:
-                buf.insert_text(loc)
+            locs = lb.loc_cache.get(tokens[0].upper(), [])
+            if locs:
+                buf.insert_text(locs[0])
 
     @kb.add('backspace')
     def _on_backspace(event):
@@ -808,7 +826,7 @@ def run(lb: LogBook, tname: str):
             real_idx = len(lb.qsos) - 1 - edit_idx
             if 0 <= real_idx < len(lb.qsos):
                 old = lb.qsos[real_idx]
-                loc = parsed["loc"] or lb.loc_cache.get(parsed["call"], "") or old.loc
+                loc = parsed["loc"]
                 lb.qsos[real_idx] = QSO(
                     dt=old.dt, band=old.band, mode=old.mode,
                     call=parsed["call"], rst_s=old.rst_s, nr_s=old.nr_s,
@@ -829,7 +847,7 @@ def run(lb: LogBook, tname: str):
 
         call    = parsed["call"]
         nr_r    = parsed["nr_r"]
-        loc     = parsed["loc"] or lb.loc_cache.get(call, "")
+        loc     = parsed["loc"]
         rst_def = "599" if mode == "CW" else "59"
         rst_s   = rst_def
         rst_r   = parsed["rst_r"]
