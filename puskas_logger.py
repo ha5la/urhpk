@@ -677,7 +677,7 @@ def run(lb: LogBook, tname: str):
         elif len(tokens) == 3:
             locs = lb.loc_cache.get(tokens[0].upper(), [])
             if locs:
-                buf.insert_text(locs[0])
+                buf.start_completion(select_first=True)
 
     @kb.add('backspace')
     def _on_backspace(event):
