@@ -203,7 +203,9 @@ class LogBook:
         self.worked: set[tuple[str, str, str]] = set()   # (call, band, mode)
 
     def next_nr(self, band: str) -> int:
-        return sum(1 for q in self.qsos if q.band == band) + 1
+        if band:
+            return sum(1 for q in self.qsos if q.band == band) + 1
+        return len(self.qsos) + 1
 
     def is_dup(self, call: str, band: str, mode: str) -> bool:
         return (call, band, mode) in self.worked
@@ -479,7 +481,7 @@ CW_MACROS = [
 ]
 
 def _expand_cw(template: str, lb: LogBook, hiscall: str, band: str) -> str:
-    nr = lb.next_nr(band) if band else 0
+    nr = lb.next_nr(band)
     nr_cw = f"{nr:03d}".replace("0", "T").replace("9", "N")
     return (template
             .replace("<MYCALL>",  lb.my_call)
@@ -602,7 +604,7 @@ def run(lb: LogBook, tname: str):
     def _toolbar() -> HTML:
         band, mode, qrg, online = current_rig()
         t  = datetime.now(timezone.utc).strftime("%H:%M:%S")
-        nr = lb.next_nr(band) if band else 0
+        nr = lb.next_nr(band)
         b  = f"<b>{band}</b>" if band else "<ansiyellow>?</ansiyellow>"
         rig = (f"{qrg} MHz {mode}" if online
                else "<ansired>offline</ansired>")
@@ -780,7 +782,7 @@ def run(lb: LogBook, tname: str):
             print("\033[33m  No band — use !band 2M or !band 70CM or !band 23CM\033[0m")
 
         band, mode, _, _ = current_rig()
-        nr  = lb.next_nr(band) if band else 0
+        nr  = lb.next_nr(band)
         rst = "599" if mode == "CW" else "59"
         print(f"\033[1;92m  TX ► {lb.my_call}  {rst}  {nr:03d}  {lb.my_loc}\033[0m")
 
