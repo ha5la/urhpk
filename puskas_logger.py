@@ -598,6 +598,39 @@ def _handle_command(line: str, lb: LogBook, tname: str):
     input("  [Enter to continue]")
 
 # ──────────────────────────────────────────────────────────────
+# Offline setup wizard
+# ──────────────────────────────────────────────────────────────
+def _offline_setup():
+    """Ask for band and mode interactively when rig is offline at startup.
+    Raises EOFError / KeyboardInterrupt if the user wants to quit.
+    """
+    band, mode, _, online = current_rig()
+    if online or (band and mode):
+        return
+    bar = "━" * W
+    print(f"\n\033[1m{bar}\033[0m")
+    print("  RIG OFFLINE — set band and mode to start logging")
+    print(f"\033[2m  (start rigctld for automatic control, or enter values below)\033[0m")
+    print(f"\033[1m{bar}\033[0m")
+    while True:
+        band, mode, _, online = current_rig()
+        if online or (band and mode):
+            return
+        if not band:
+            raw = input("  Band [2M / 70CM / 23CM]: ").strip().upper()
+            if raw in ("2M", "70CM", "23CM"):
+                _rig_manual["band"] = raw
+            else:
+                print(f"  \033[31m{raw!r} — choose 2M, 70CM, or 23CM\033[0m")
+        elif not mode:
+            raw = input("  Mode [SSB / CW / FM]: ").strip().upper()
+            if raw in ("SSB", "CW", "FM"):
+                _rig_manual["mode"] = raw
+            else:
+                print(f"  \033[31m{raw!r} — choose SSB, CW, or FM\033[0m")
+
+
+# ──────────────────────────────────────────────────────────────
 # Main loop
 # ──────────────────────────────────────────────────────────────
 def run(lb: LogBook, tname: str):
@@ -767,6 +800,11 @@ def run(lb: LogBook, tname: str):
         complete_while_typing=False,
     )
 
+    try:
+        _offline_setup()
+    except (EOFError, KeyboardInterrupt):
+        return
+
     while True:
         band, mode, qrg, online = current_rig()
         os.write(1, b"\033[2J\033[H")
@@ -778,8 +816,6 @@ def run(lb: LogBook, tname: str):
         except OSError:
             rows = 24
         _print_recent(lb, n=max(3, rows - 9), focus=focus)
-        if not band:
-            print("\033[33m  No band — use !band 2M or !band 70CM or !band 23CM\033[0m")
 
         band, mode, _, _ = current_rig()
         nr  = lb.next_nr(band)
