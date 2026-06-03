@@ -647,6 +647,15 @@ def _handle_command(line: str, lb: LogBook, tname: str):
 
     input("  [Enter to continue]")
 
+def _update_loc_cache(loc_cache: dict[str, list[str]], call: str, loc: str) -> None:
+    """Insert loc at the front of loc_cache[call], maintaining most-recent-first order."""
+    if not loc:
+        return
+    locs = loc_cache.setdefault(call, [])
+    if loc in locs:
+        locs.remove(loc)
+    locs.insert(0, loc)
+
 # ──────────────────────────────────────────────────────────────
 # Offline setup wizard
 # ──────────────────────────────────────────────────────────────
@@ -703,13 +712,7 @@ def run(lb: LogBook, tname: str):
         return ' '.join(parts)
 
     def _cache_loc(call: str, loc: str) -> None:
-        """Record a locator seen in a logged QSO into the live loc_cache."""
-        if not loc:
-            return
-        locs = lb.loc_cache.setdefault(call, [])
-        if loc in locs:
-            locs.remove(loc)
-        locs.insert(0, loc)
+        _update_loc_cache(lb.loc_cache, call, loc)
 
     def _enter_edit(idx: int) -> None:
         """Set edit_idx and queue a REDRAW with the QSO's data in the buffer."""
@@ -1034,6 +1037,8 @@ def main():
             result = load_from_edi(edi_files, loc_cache)
             if result:
                 lb, tname = result
+                for q in lb.qsos:
+                    _update_loc_cache(lb.loc_cache, q.call, q.loc)
                 print(f"Callsign: {lb.my_call}")
                 print(f"Locator:  {lb.my_loc}")
                 print(f"Contest:  {tname}")
