@@ -200,16 +200,21 @@ uv run puskas_visualizer.py [CALLSIGN LOCATOR]
 
 These requirements must be preserved across all future changes:
 
-- **Live rig status**: band, mode, QRG, and next serial must update every second in the
-  bottom toolbar while the prompt is active. A band change on the radio must be visible
-  immediately — never require Enter to see the updated state.
+- **Dynamic prompt**: the prompt prefix is `{band} {mode}  RX ► ` (e.g. `2M SSB  RX ► `),
+  computed by a callable so it updates every `refresh_interval` second. This directly answers
+  "what band/mode will be logged if I press Enter now" — it always reflects the current rig
+  state (or the manual override). It mirrors the `TX ►` line printed above it.
+- **Live rig status**: QRG and contest-clock update every second in the bottom toolbar.
+  A band/mode change on the radio must be visible immediately in the prompt — never require
+  Enter to see the updated state.
 - **Dup warning before Enter**: as soon as the callsign token is recognisable, the entire
   input line background turns red (`DynamicStyle({'': 'bg:ansired fg:white'})`) and the
-  right prompt shows a red `DUP` label. The operator must not need to press Enter to
-  discover a duplicate. The dup check must re-evaluate when the band changes on the radio —
-  `RIGCTLD_POLL_S = 1` keeps cached rig state fresh so the style (redrawn every second via
-  `refresh_interval`) always reflects the current band. The dup style is suppressed during
-  edit mode (`_state['edit_idx'] is not None`) to avoid false positives.
+  right prompt shows a red `DUP` label followed by the geo info (distance + bearing + arrow)
+  if known. The operator must not need to press Enter to discover a duplicate. The dup check
+  must re-evaluate when the band changes on the radio — `RIGCTLD_POLL_S = 1` keeps cached
+  rig state fresh so the style (redrawn every second via `refresh_interval`) always reflects
+  the current band. The dup style is suppressed during edit mode
+  (`_state['edit_idx'] is not None`) to avoid false positives.
 - **Band always visible in log**: every QSO row must show its band. RST columns must be
   3 chars wide so CW (599) and SSB/FM (59) rows stay aligned.
 - **Rig read at Enter time**: band and mode for a new QSO are captured by a fresh
@@ -233,8 +238,9 @@ These requirements must be preserved across all future changes:
   come from the original QSO, not the current rig state — this is intentional. Escape in
   edit mode triggers `_REDRAW` so the highlight clears immediately.
 - **Header band summary is compact**: format is `{band}:{count}q/{pts}pt` (e.g.
-  `2M:12q/4321pt  70CM:3q/891pt`) so the full three-band line fits within the 64-character
-  header width. Points = sum of `dist_km` for non-dup QSOs (matches EDI `CQSOP`).
+  `2M:12q/4321pt  70CM:3q/891pt`) so the full three-band line fits within the 80-character
+  header width (`W = 80`, matching the CW legend line). Points = sum of `dist_km` for
+  non-dup QSOs (matches EDI `CQSOP`).
 - **My-exchange line**: printed in bold bright green between `_print_header` and
   `_print_recent` in `run()`. Format: `TX ► MYCALL  RST  NR  LOCATOR` (e.g.
   `TX ► HA5LA  59  010  JN97TF`). RST is `599` in CW mode, `59` otherwise.
@@ -248,6 +254,24 @@ These requirements must be preserved across all future changes:
   `buf.complete_state`, so it fires even when a completion menu is open.
 - **CW number abbreviation**: the `<NUMBER>` placeholder in CW macro templates must
   substitute `0→T` and `9→N` (e.g. serial 014 → `T14`). This is standard contest CW.
+- **Toolbar layout**: bottom toolbar shows QRG (e.g. `144.174 MHz`) when rig is online, or
+  `offline`, plus a colour-coded UTC clock. Clock background is **green** during the contest
+  window (first Monday of each month, 18:00–20:00 CET/CEST) and **red** at all other times.
+  Band and mode are intentionally absent from the toolbar — they live in the prompt prefix.
+- **Alt+B / Alt+M**: cycle band / mode through `_BANDS`/`_MODES` tuples when rig is offline.
+  When the rig is online these keys are **denied**: `_state['warn_until']` is set to
+  `time.monotonic() + 2.0` and the toolbar flashes a yellow `rig online — Alt+B/M ignored`
+  message until it expires. The rig is always the primary source; `_rig_manual` is only
+  consulted by `current_rig()` when `_rig["online"]` is False.
+- **Bearing arrows**: every bearing value (in the QSO list and in the rprompt) is followed
+  by a Unicode direction arrow from `_BEARING_ARROWS = "↑↗→↘↓↙←↖"`, selected by octant.
+  `_bearing_arrow(degrees)` must exist in `puskas_logger` — it was once missing and the
+  silent `except Exception: pass` in `_rprompt` caused the entire geo display to vanish
+  without any error.
+- **Locator is mandatory**: every QSO must have a valid Maidenhead locator (contest rule).
+  `parse_input` enforces this on live input. `load_from_edi` enforces it too — records
+  without a valid locator in field[9] are silently dropped. Do not add optional handling for
+  missing locators; the invariant is that `q.loc` is always a valid, non-empty string.
 
 ## puskas_logger.py – Contest QSO Logger
 
@@ -293,8 +317,9 @@ HA7NS 599 014 JN97WM   → CW with locator
   QSO (same call, same band, different mode, within **5 minutes**) the predicted received
   NR (`last_nr_r + 1`) is also filled (`_predict_nr` with injectable `now` parameter)
 - Space after NR → if one locator known: inserts it directly; if multiple: opens dropdown
-- Right-prompt shows bearing and distance in green (e.g. `JN97WM  1234 km  225°`) as soon
-  as a known callsign is typed; DUP (red) takes priority over the bearing display
+- Right-prompt shows bearing and distance in green (e.g. `JN97WM  1234 km  225° ↙`) as soon
+  as a known callsign is typed; when the callsign is a DUP both the red `DUP` label and the
+  green geo info are shown together — geo is never suppressed
 - Backspace stops at column 0 (does nothing on empty input); edit mode via Up arrow only
 - Up/Down → navigate log in edit mode; window scrolls to keep focused row centred
 - Escape → exits edit mode (screen redraws immediately) and/or aborts CW transmission
@@ -320,17 +345,17 @@ Macros silently no-op when rigctld is offline.
 override is set, the logger shows an interactive prompt asking for band (`2M/70CM/23CM`)
 then mode (`SSB/CW/FM`) before entering the main loop. Ctrl-D exits cleanly.
 Mid-session rig disconnect uses `_rig_manual` values as fallback (set by the wizard or
-`!band`/`!mode` commands), so the wizard only appears once per session.
+**Alt+B / Alt+M** during the session), so the wizard only appears once per session.
 
 **Contest rules**:
-- Reads band/QRG/mode from rigctld; falls back to `!band`/`!mode` commands if rig offline
+- Reads band/QRG/mode from rigctld; falls back to Alt+B/Alt+M (or `!band`/`!mode`) if rig offline
 - RST defaults: `59` for SSB/FM, `599` for CW
 - Serial auto-increments per band; all QSOs (including dups) get a serial
 - Dup check key: `(callsign, band, mode)` — 9 valid combos per station (3 bands × 3 modes)
 - Dup QSOs shown in red and EDI-flagged `D`
 - Auto-saves EDI after every QSO; files named `YYMMDD-CALL-BAND.EDI` in current directory
 
-**Commands**: `!save`, `!undo`, `!band 2M|70CM|23CM`, `!mode SSB|CW|FM`, `!help`  
+**Commands**: `!undo`, `!help` (`!band`/`!mode` still accepted but Alt+B/Alt+M preferred)  
 Ctrl-D → final save and exit
 
 EDI export: one file per band, `[REG1TEST;1]` format compatible with bb.mrasz.hu submission.

@@ -11,7 +11,7 @@ Usage:  uv run puskas_logger.py
 Input:  CALL RST NR LOC
           HA7NS 59 015 JN97WM    → locator required
           HA7NS 599 014 JN97WM   → CW with locator
-Commands: !save  !undo  !band 2M|70CM|23CM  !mode SSB|CW|FM  !help
+Commands: !undo  !help
 Ctrl-D at empty prompt → save EDI files and exit
 """
 
@@ -47,6 +47,8 @@ MY_LOGS_DIR    = Path("my-logs")
 PUSKAS_DIR     = Path.home() / ".puskas"
 SEEN_STATIONS  = PUSKAS_DIR / "puskas-seen-stations.json"
 ON4KST_SEEN    = PUSKAS_DIR / "on4kst-seen-stations.json"
+_BANDS         = ("2M", "70CM", "23CM")
+_MODES         = ("SSB", "CW", "FM")
 
 # ──────────────────────────────────────────────────────────────
 # Geo helpers
@@ -78,6 +80,11 @@ def initial_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float
     x = math.sin(λ2 - λ1) * math.cos(φ2)
     y = math.cos(φ1) * math.sin(φ2) - math.sin(φ1) * math.cos(φ2) * math.cos(λ2 - λ1)
     return math.degrees(math.atan2(x, y)) % 360
+
+_BEARING_ARROWS = "↑↗→↘↓↙←↖"
+
+def _bearing_arrow(degrees: int) -> str:
+    return _BEARING_ARROWS[int((degrees + 22.5) / 45) % 8]
 
 # ──────────────────────────────────────────────────────────────
 # Locator cache
@@ -275,6 +282,15 @@ class LogBook:
         except Exception:
             return 0
 
+    def bearing(self, loc: str) -> int:
+        if not (self.my_loc and loc):
+            return 0
+        try:
+            return int(initial_bearing(*maidenhead_to_latlon(self.my_loc),
+                                       *maidenhead_to_latlon(loc)))
+        except Exception:
+            return 0
+
     def bands(self) -> list[str]:
         seen: list[str] = []
         for q in self.qsos:
@@ -430,7 +446,7 @@ def load_from_edi(paths: list[Path],
                         dist_km = int(f[10].strip()) if len(f) > 10 and f[10].strip().isdigit() else 0
                         if not dist_km and loc and RE_LOC.match(loc):
                             dist_km = lb.dist(loc)
-                        if call and band:
+                        if call and band and RE_LOC.match(loc):
                             lb.add(QSO(dt=dt, band=band, mode=mode, call=call,
                                        rst_s=rst_s, nr_s=nr_s, rst_r=rst_r, nr_r=nr_r,
                                        loc=loc, dist_km=dist_km))
@@ -601,7 +617,8 @@ def _print_recent(lb: LogBook, n: int = 8, focus: int | None = None):
         window = qsos[-n:]
     for abs_idx, q in enumerate(window, start=start):
         dup    = _is_dup_in_log(qsos, q)
-        dist   = f"  {q.dist_km:3d} km" if q.dist_km else "        "
+        bear   = lb.bearing(q.loc)
+        dist   = f"  {lb.dist(q.loc):4d} km  {bear:3d}° {_bearing_arrow(bear)}"
         marker = "  \033[31mDUP\033[0m" if dup else ""
         row    = (f"{q.dt.strftime('%H:%M')}  {q.call:<10}  {q.band:<5} {q.mode:<4}"
                   f"  {q.rst_s:>3} {q.nr_s:03d}  {q.rst_r:>3} {q.nr_r:03d}  {q.loc:<6}{dist}{marker}")
@@ -619,12 +636,7 @@ def _handle_command(line: str, lb: LogBook, tname: str):
     parts = line.split()
     cmd   = parts[0].lower()
 
-    if cmd == "!save":
-        paths = save_all(lb, tname)
-        for p in paths:
-            print(f"  Saved: {p}")
-
-    elif cmd == "!undo":
+    if cmd == "!undo":
         q = lb.undo()
         if q:
             print(f"  Undone: {q.dt.strftime('%H:%M')} {q.call} {q.band} {q.mode}")
@@ -648,10 +660,9 @@ def _handle_command(line: str, lb: LogBook, tname: str):
 
     elif cmd == "!help":
         print("  CALL RST NR LOC          — log a QSO (locator required)")
-        print("  !save                    — write EDI files now")
         print("  !undo                    — remove last QSO")
-        print("  !band 2M|70CM|23CM       — set band manually (rig offline)")
-        print("  !mode SSB|CW|FM          — set mode manually (rig offline)")
+        print("  Alt+B                    — cycle band (rig offline)")
+        print("  Alt+M                    — cycle mode (rig offline)")
         print("  !help                    — this help")
         print("  Ctrl-D                   — save and exit")
 
@@ -689,17 +700,17 @@ def _offline_setup():
         if online or (band and mode):
             return
         if not band:
-            raw = input("  Band [2M / 70CM / 23CM]: ").strip().upper()
-            if raw in ("2M", "70CM", "23CM"):
+            raw = input(f"  Band [{' / '.join(_BANDS)}]: ").strip().upper()
+            if raw in _BANDS:
                 _rig_manual["band"] = raw
             else:
-                print(f"  \033[31m{raw!r} — choose 2M, 70CM, or 23CM\033[0m")
+                print(f"  \033[31m{raw!r} — choose {', '.join(_BANDS)}\033[0m")
         elif not mode:
-            raw = input("  Mode [SSB / CW / FM]: ").strip().upper()
-            if raw in ("SSB", "CW", "FM"):
+            raw = input(f"  Mode [{' / '.join(_MODES)}]: ").strip().upper()
+            if raw in _MODES:
                 _rig_manual["mode"] = raw
             else:
-                print(f"  \033[31m{raw!r} — choose SSB, CW, or FM\033[0m")
+                print(f"  \033[31m{raw!r} — choose {', '.join(_MODES)}\033[0m")
 
 
 _CET = ZoneInfo("Europe/Budapest")
@@ -717,22 +728,24 @@ def _is_contest_time(now: datetime | None = None) -> bool:
 # Main loop
 # ──────────────────────────────────────────────────────────────
 def run(lb: LogBook, tname: str):
+    # 0 = last QSO selected for edit, 1 = second-to-last, None = no edit in progress
+    _state: dict = {'edit_idx': None, 'restore_text': '', 'warn_until': 0.0}
+
     def _toolbar() -> FormattedText:
-        band, mode, qrg, online = current_rig()
+        _, _, qrg, online = current_rig()
         now = datetime.now(timezone.utc)
         t   = now.strftime("%H:%M:%S")
-        b   = band if band else "?"
-        m   = mode if mode else "?"
-        rig = f"{qrg} MHz" if online else "offline"
+        if time.monotonic() < _state['warn_until']:
+            rig_part = ("bg:ansiyellow fg:black", "  rig online — Alt+B/M ignored  │  ")
+        elif online:
+            rig_part = ("", f"  {qrg} MHz  │  ")
+        else:
+            rig_part = ("", "  offline  │  ")
         time_style = "bg:ansigreen fg:black" if _is_contest_time(now) else "bg:ansired fg:white"
         return FormattedText([
-            ("bold", f"  {b}"),
-            ("",     f"  {m}  {rig}  │  "),
+            rig_part,
             (time_style, f" {t} UTC "),
         ])
-
-    # 0 = last QSO selected for edit, 1 = second-to-last, None = no edit in progress
-    _state: dict = {'edit_idx': None, 'restore_text': ''}
 
     def _qso_to_input(q: QSO) -> str:
         parts = [q.call, q.rst_r, f"{q.nr_r:03d}"]
@@ -770,18 +783,17 @@ def run(lb: LogBook, tname: str):
         if not RE_CALL.match(call):
             return ""
         band, mode, *_ = current_rig()
-        if band and mode and lb.is_dup(call, band, mode):
-            return HTML("<ansired><b>  DUP  </b></ansired>")
         locs = lb.loc_cache.get(call, [])
-        if locs and lb.my_loc:
-            try:
-                lat1, lon1 = maidenhead_to_latlon(lb.my_loc)
-                lat2, lon2 = maidenhead_to_latlon(locs[0])
-                dist = int(haversine_km(lat1, lon1, lat2, lon2))
-                bear = int(initial_bearing(lat1, lon1, lat2, lon2))
-                return HTML(f"<ansigreen>  {locs[0]}  {dist} km  {bear}°  </ansigreen>")
-            except Exception:
-                pass
+        geo = ""
+        if locs:
+            dist = lb.dist(locs[0])
+            bear = lb.bearing(locs[0])
+            if dist:
+                geo = f"  {locs[0]}  {dist} km  {bear}° {_bearing_arrow(bear)}"
+        if band and mode and lb.is_dup(call, band, mode):
+            return HTML(f"<ansired><b>  DUP  </b></ansired><ansigreen>{geo}  </ansigreen>")
+        if geo:
+            return HTML(f"<ansigreen>{geo}  </ansigreen>")
         return ""
 
     def _get_input_style() -> Style:
@@ -809,6 +821,8 @@ def run(lb: LogBook, tname: str):
         tokens = buf.text.strip().split()
         if len(tokens) == 1:
             call = tokens[0].upper()
+            if not RE_CALL.match(call):
+                return
             band, mode, *_ = current_rig()
             rst = "599" if mode == "CW" else "59"
             predicted = _predict_nr(lb, call, band, mode)
@@ -894,6 +908,24 @@ def run(lb: LogBook, tname: str):
         band, *_ = current_rig()
         _cw_send(_expand_cw("5NN <NUMBER> <NUMBER>", lb, hiscall, band))
 
+    @kb.add('escape', 'b')
+    def _on_alt_b(event):
+        if _rig["online"]:
+            _state['warn_until'] = time.monotonic() + 2.0
+        else:
+            cur = _rig_manual.get("band", "")
+            _rig_manual["band"] = _BANDS[(_BANDS.index(cur) + 1) % len(_BANDS)] if cur in _BANDS else _BANDS[0]
+        event.app.invalidate()
+
+    @kb.add('escape', 'm')
+    def _on_alt_m(event):
+        if _rig["online"]:
+            _state['warn_until'] = time.monotonic() + 2.0
+        else:
+            cur = _rig_manual.get("mode", "")
+            _rig_manual["mode"] = _MODES[(_MODES.index(cur) + 1) % len(_MODES)] if cur in _MODES else _MODES[0]
+        event.app.invalidate()
+
     @kb.add('enter', filter=has_completions)
     def _on_enter_completion(event):
         buf = event.app.current_buffer
@@ -933,7 +965,11 @@ def run(lb: LogBook, tname: str):
 
         default = _state.pop('restore_text', '') or ''
         try:
-            result = session.prompt("> ", bottom_toolbar=_toolbar,
+            def _prompt_msg() -> str:
+                b, m, *_ = current_rig()
+                return f"{b or '?'} {m or '?'}  RX ► "
+
+            result = session.prompt(_prompt_msg, bottom_toolbar=_toolbar,
                                     rprompt=_rprompt,
                                     style=DynamicStyle(_get_input_style),
                                     refresh_interval=1.0,

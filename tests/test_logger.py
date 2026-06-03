@@ -8,7 +8,7 @@ import pytest
 
 from puskas_logger import (
     QSO, LogBook,
-    _band_summary, _edi_qso_count, _is_contest_time, _is_dup_in_log,
+    _band_summary, _bearing_arrow, _edi_qso_count, _is_contest_time, _is_dup_in_log,
     _merge_loc_sources, _predict_nr, _print_recent, _update_loc_cache,
     haversine_km, initial_bearing, maidenhead_to_latlon,
     load_from_edi,
@@ -180,6 +180,17 @@ class TestLogBook:
         assert lb.dist("JN97WM") == 0
         lb2 = LogBook("HA5LA", "JN97TF", {})
         assert lb2.dist("") == 0
+
+    def test_bearing_northwest_to_io83(self):
+        # JN97TF → IO83RO is northwest (~302°)
+        b = self.lb.bearing("IO83RO")
+        assert 290 < b < 320
+
+    def test_bearing_zero_without_locators(self):
+        lb = LogBook("HA5LA", "", {})
+        assert lb.bearing("JN97WM") == 0
+        lb2 = LogBook("HA5LA", "JN97TF", {})
+        assert lb2.bearing("") == 0
 
 
 # ──────────────────────────────────────────────────────────────
@@ -368,6 +379,20 @@ class TestLoadFromEdi:
 
     def test_returns_none_for_empty_list(self):
         assert load_from_edi([], {}) is None
+
+    def test_qso_without_locator_is_rejected(self, tmp_path):
+        # Manually craft an EDI file with one valid and one locator-free record.
+        edi = (
+            "PCall=HA5LA\nPWWLo=JN97TF\nTName=TEST\nPBand=145 MHz\n"
+            "[QSORecords;2]\n"
+            "260601;1800;HA7NS;1;59;001;59;001;;JN97WM;38;;;\n"
+            "260601;1801;HA3KHB;1;59;002;59;002;;   ;0;;;\n"  # empty locator
+        )
+        p = tmp_path / "test.edi"
+        p.write_text(edi)
+        lb2, _ = load_from_edi([p], {})
+        assert len(lb2.qsos) == 1
+        assert lb2.qsos[0].call == "HA7NS"
 
     def test_uppercase_and_lowercase_edi_not_doubled(self, tmp_path):
         """Coexisting foo.EDI and foo.edi (case-change migration) must not double QSOs."""
@@ -576,6 +601,15 @@ class TestPrintRecent:
         lines = self._lines(lb, n=8, focus=1)
         calls = [l for l in lines if "HA" in l]
         assert len(calls) >= 2
+
+    def test_bearing_column_always_shown(self):
+        lb = LogBook("HA5LA", "JN97TF", {})
+        lb.add(_qso(call="HA7NS", nr_s=1, h=14, loc="JN97WM", dist_km=lb.dist("JN97WM")))
+        lines = self._lines(lb, n=4)
+        qso_line = next(l for l in lines if "HA7NS" in l)
+        assert "°" in qso_line
+        assert "km" in qso_line
+        assert any(c in qso_line for c in "↑↗→↘↓↙←↖")
 
     def test_multiband_load_sorted_by_timestamp(self, tmp_path):
         lb = LogBook("HA5LA", "JN97TF", {})
@@ -792,3 +826,36 @@ class TestRpromptBearing:
         bear = int(initial_bearing(lat1, lon1, lat2, lon2))
         assert 1650 < dist < 1800   # roughly Budapest → Edinburgh
         assert 290 < bear < 320     # northwest
+
+
+class TestBearingArrow:
+    def test_north(self):
+        assert _bearing_arrow(0) == "↑"
+
+    def test_northeast(self):
+        assert _bearing_arrow(45) == "↗"
+
+    def test_east(self):
+        assert _bearing_arrow(90) == "→"
+
+    def test_southeast(self):
+        assert _bearing_arrow(135) == "↘"
+
+    def test_south(self):
+        assert _bearing_arrow(180) == "↓"
+
+    def test_southwest(self):
+        assert _bearing_arrow(225) == "↙"
+
+    def test_west(self):
+        assert _bearing_arrow(270) == "←"
+
+    def test_northwest(self):
+        assert _bearing_arrow(315) == "↖"
+
+    def test_boundary_wraps_to_north(self):
+        assert _bearing_arrow(359) == "↑"
+
+    def test_jn97_to_io83_is_northwest(self):
+        # bearing ≈302°, which rounds to ↖ (NW octant 292.5–337.5)
+        assert _bearing_arrow(302) == "↖"
