@@ -4,8 +4,8 @@
 Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
 - `on4kst_irc_bridge.py` – general ON4KST↔IRC bridge; use with irssi or any IRC client
 - `puskas_logger.py` – contest QSO logger with rigctld integration; exports EDI files
-- `puskas_harvester.py` – pre-contest data collector; fetches all stations → `puskas-seen-stations.json`
-- `puskas_visualizer.py` – map and polar diagram from `puskas-seen-stations.json`
+- `puskas_harvester.py` – pre-contest data collector; fetches all stations → `~/puskas-seen-stations.json`
+- `puskas_visualizer.py` – map and polar diagram from `~/puskas-seen-stations.json`
 
 ## Housekeeping reminders
 - When adding or removing components, update the components table in **README.md**
@@ -147,8 +147,13 @@ These require `uv` on the Pi — install once with:
 ```
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
-All contest-tool files (`puskas-seen-stations.json`, `.puskas_cache/`, EDI logs) are read from
-and written to the **current working directory** — run the tools from a contest directory:
+File locations follow a simple rule: **global databases live in `~`, per-session files live in CWD**.
+- `~/puskas-seen-stations.json` — harvested Puskás station database (all rounds, accumulates)
+- `~/on4kst-seen-stations.json` — ON4KST session database (written by the bridge service)
+- `.puskas_cache/` — API response cache (CWD, delete to force a fresh fetch)
+- `*.edi` — contest QSO logs (CWD, one file per band per session)
+
+Run the contest tools from a contest directory:
 ```
 mkdir ~/contest-2026 && cd ~/contest-2026
 puskas-harvester     # fetch puskas-seen-stations.json
@@ -158,14 +163,14 @@ puskas-visualizer    # generate map/polar from puskas-seen-stations.json + my-lo
 
 ## puskas_harvester.py – Pre-contest station harvester
 
-Run once before the contest to build `puskas-seen-stations.json`:
+Run once before the contest to build `~/puskas-seen-stations.json`:
 ```
 uv run puskas_harvester.py
 ```
 - No external dependencies — pure stdlib
 - Fetches event list from `bb.mrasz.hu`, filters for Puskás URH Kupa rounds with `isClaimed==true`
 - For each event: fetches submitters, their QSO logs, and QSO partners
-- Output: `puskas-seen-stations.json` in the project root — `{call: {wwls: [most_recent, ...], bands}}`
+- Output: `~/puskas-seen-stations.json` — `{call: {wwls: [most_recent, ...], bands}}`
   where `wwls` is a list of all known locators in reverse-chronological order (most recently
   observed in any Puskás round appears first)
 - All API responses cached in `.puskas_cache/`; delete it to force a fresh fetch
@@ -175,7 +180,7 @@ uv run puskas_harvester.py
 ```
 uv run puskas_visualizer.py [CALLSIGN LOCATOR]
 ```
-- Loads `puskas-seen-stations.json` (built by harvester)
+- Loads `~/puskas-seen-stations.json` (built by harvester)
 - Loads own log EDI files from `my-logs/` for callsign, locator, and worked-station marking
 - Generates `puskas_map.html` (interactive Folium map) and `puskas_polar.png` (polar scatter)
 - Missed stations (in seen_stations but not worked) shown in red on map
@@ -242,7 +247,7 @@ Purpose-built for Puskás URH Kupa rules. Requires `prompt_toolkit` (declared in
 uv run puskas_logger.py
 ```
 
-**Locator cache**: loaded from `puskas-seen-stations.json` if present (built by `puskas_harvester.py`),
+**Locator cache**: loaded from `~/puskas-seen-stations.json` if present (built by `puskas_harvester.py`),
 falls back to own `my-logs/*.edi` files. No API calls during contest.
 
 **Crash recovery**: at startup, scans `*.edi` / `*.EDI` (case-insensitive) in the current

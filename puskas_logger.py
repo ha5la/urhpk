@@ -43,7 +43,7 @@ RIGCTLD_HOST   = "localhost"
 RIGCTLD_PORT   = 4532
 RIGCTLD_POLL_S = 1
 MY_LOGS_DIR    = Path("my-logs")
-SEEN_STATIONS  = Path("puskas-seen-stations.json")
+SEEN_STATIONS  = Path.home() / "puskas-seen-stations.json"
 ON4KST_SEEN    = Path.home() / "on4kst-seen-stations.json"
 
 # ──────────────────────────────────────────────────────────────
