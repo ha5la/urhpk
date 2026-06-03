@@ -617,7 +617,20 @@ class TestPrintRecent:
         qso_line = next(line for line in lines if "HA7NS" in line)
         assert "°" in qso_line
         assert "km" in qso_line
-        assert any(c in qso_line for c in "↑↗→↘↓↙←↖")
+        # bearing arrow follows "°" — check the char right after the degree sign + space
+        deg_pos = qso_line.index("°")
+        assert qso_line[deg_pos + 2] in "↑↗→↘↓↙←↖"
+
+    def test_tx_rx_arrows_in_log_line(self):
+        lb = LogBook("HA5LA", "JN97TF", {})
+        lb.add(_qso(call="HA7NS", nr_s=1, h=14, loc="JN97WM", dist_km=lb.dist("JN97WM")))
+        lines = self._lines(lb, n=4)
+        qso_line = next(line for line in lines if "HA7NS" in line)
+        # ↑ labels the sent RST/NR, ↓ labels the received RST/NR
+        assert "↑" in qso_line
+        assert "↓" in qso_line
+        # ↑ must come before ↓
+        assert qso_line.index("↑") < qso_line.index("↓")
 
     def test_multiband_load_sorted_by_timestamp(self, tmp_path):
         lb = LogBook("HA5LA", "JN97TF", {})
