@@ -32,7 +32,8 @@ from prompt_toolkit.application import get_app
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.document import Document
 from prompt_toolkit.filters import has_completions
-from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.formatted_text import HTML, FormattedText
+from zoneinfo import ZoneInfo
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import DynamicStyle, Style
 
@@ -71,6 +72,12 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     φ1, λ1, φ2, λ2 = map(math.radians, (lat1, lon1, lat2, lon2))
     a = math.sin((φ2-φ1)/2)**2 + math.cos(φ1)*math.cos(φ2)*math.sin((λ2-λ1)/2)**2
     return R * 2 * math.asin(math.sqrt(a))
+
+def initial_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    φ1, λ1, φ2, λ2 = map(math.radians, (lat1, lon1, lat2, lon2))
+    x = math.sin(λ2 - λ1) * math.cos(φ2)
+    y = math.cos(φ1) * math.sin(φ2) - math.sin(φ1) * math.cos(φ2) * math.cos(λ2 - λ1)
+    return math.degrees(math.atan2(x, y)) % 360
 
 # ──────────────────────────────────────────────────────────────
 # Locator cache
@@ -521,7 +528,7 @@ class CallCompleter(Completer):
 # ──────────────────────────────────────────────────────────────
 # Display helpers
 # ──────────────────────────────────────────────────────────────
-W = 64
+W = 80
 _REDRAW = object()  # sentinel: exit prompt to force a full screen refresh
 
 # CW macros bound to F1–F7.  Placeholders: <MYCALL> <HISCALL> <NUMBER> <LOCATOR>
@@ -695,18 +702,34 @@ def _offline_setup():
                 print(f"  \033[31m{raw!r} — choose SSB, CW, or FM\033[0m")
 
 
+_CET = ZoneInfo("Europe/Budapest")
+
+
+def _is_contest_time(now: datetime | None = None) -> bool:
+    """True during Puskás URH Kupa: first Monday of month, 18:00–20:00 CET/CEST."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+    local = now.astimezone(_CET)
+    return local.weekday() == 0 and local.day <= 7 and 18 <= local.hour < 20
+
+
 # ──────────────────────────────────────────────────────────────
 # Main loop
 # ──────────────────────────────────────────────────────────────
 def run(lb: LogBook, tname: str):
-    def _toolbar() -> HTML:
+    def _toolbar() -> FormattedText:
         band, mode, qrg, online = current_rig()
-        t  = datetime.now(timezone.utc).strftime("%H:%M:%S")
-        nr = lb.next_nr(band)
-        b  = f"<b>{band}</b>" if band else "<ansiyellow>?</ansiyellow>"
-        rig = (f"{qrg} MHz {mode}" if online
-               else "<ansired>offline</ansired>")
-        return HTML(f"  {b}  {rig}  │  Next: <b>{nr:03d}</b>  │  {t} UTC")
+        now = datetime.now(timezone.utc)
+        t   = now.strftime("%H:%M:%S")
+        b   = band if band else "?"
+        m   = mode if mode else "?"
+        rig = f"{qrg} MHz" if online else "offline"
+        time_style = "bg:ansigreen fg:black" if _is_contest_time(now) else "bg:ansired fg:white"
+        return FormattedText([
+            ("bold", f"  {b}"),
+            ("",     f"  {m}  {rig}  │  "),
+            (time_style, f" {t} UTC "),
+        ])
 
     # 0 = last QSO selected for edit, 1 = second-to-last, None = no edit in progress
     _state: dict = {'edit_idx': None, 'restore_text': ''}

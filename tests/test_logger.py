@@ -8,8 +8,9 @@ import pytest
 
 from puskas_logger import (
     QSO, LogBook,
-    _band_summary, _edi_qso_count, _is_dup_in_log, _merge_loc_sources,
-    _predict_nr, _print_recent, _update_loc_cache,
+    _band_summary, _edi_qso_count, _is_contest_time, _is_dup_in_log,
+    _merge_loc_sources, _predict_nr, _print_recent, _update_loc_cache,
+    haversine_km, initial_bearing, maidenhead_to_latlon,
     load_from_edi,
     parse_input,
     tname_for,
@@ -723,3 +724,71 @@ class TestUpdateLocCache:
         cache = {"HA7NS": ["JN97WM"]}
         _update_loc_cache(cache, "HA7NS", "")
         assert cache["HA7NS"] == ["JN97WM"]
+
+
+class TestIsContestTime:
+    # First Monday of June 2026 = June 1, 18:00–19:59 CET (= UTC+2 in summer)
+    def _t(self, y, mo, d, h, mi=0):
+        return datetime(y, mo, d, h, mi, tzinfo=timezone.utc)
+
+    def test_during_contest(self):
+        # 2026-06-01 is Monday; 18:00 CET = 16:00 UTC (CEST = UTC+2)
+        assert _is_contest_time(self._t(2026, 6, 1, 16, 0)) is True
+
+    def test_one_second_before_start(self):
+        assert _is_contest_time(self._t(2026, 6, 1, 15, 59)) is False
+
+    def test_at_end_boundary(self):
+        # 20:00 CET = 18:00 UTC — contest is over
+        assert _is_contest_time(self._t(2026, 6, 1, 18, 0)) is False
+
+    def test_one_minute_before_end(self):
+        assert _is_contest_time(self._t(2026, 6, 1, 17, 59)) is True
+
+    def test_wrong_weekday(self):
+        # 2026-06-02 is Tuesday
+        assert _is_contest_time(self._t(2026, 6, 2, 16, 0)) is False
+
+    def test_second_monday(self):
+        # 2026-06-08 is the second Monday of June
+        assert _is_contest_time(self._t(2026, 6, 8, 16, 0)) is False
+
+    def test_winter_time(self):
+        # First Monday of January 2026 = Jan 5; CET = UTC+1, so 18:00 CET = 17:00 UTC
+        assert _is_contest_time(self._t(2026, 1, 5, 17, 0)) is True
+
+    def test_winter_before_start(self):
+        assert _is_contest_time(self._t(2026, 1, 5, 16, 59)) is False
+
+
+class TestRpromptBearing:
+    """Pin the bearing/distance math used by the rprompt.
+
+    The rprompt was silently broken because initial_bearing was missing from
+    puskas_logger — a NameError swallowed by 'except Exception: pass'.  These
+    tests ensure the function exists here and returns correct values.
+    """
+
+    def test_initial_bearing_due_north(self):
+        assert initial_bearing(0, 0, 10, 0) == pytest.approx(0.0, abs=1.0)
+
+    def test_initial_bearing_due_east(self):
+        assert initial_bearing(0, 0, 0, 10) == pytest.approx(90.0, abs=1.0)
+
+    def test_initial_bearing_due_south(self):
+        assert initial_bearing(10, 0, 0, 0) == pytest.approx(180.0, abs=1.0)
+
+    def test_initial_bearing_due_west(self):
+        assert initial_bearing(0, 10, 0, 0) == pytest.approx(270.0, abs=1.0)
+
+    def test_rprompt_path_jn97_to_io83(self):
+        # Full path from loc_cache lookup through maidenhead → dist+bearing,
+        # the exact computation _rprompt does before returning the HTML string.
+        my_loc   = "JN97TF"
+        his_loc  = "IO83RO"
+        lat1, lon1 = maidenhead_to_latlon(my_loc)
+        lat2, lon2 = maidenhead_to_latlon(his_loc)
+        dist = int(haversine_km(lat1, lon1, lat2, lon2))
+        bear = int(initial_bearing(lat1, lon1, lat2, lon2))
+        assert 1650 < dist < 1800   # roughly Budapest → Edinburgh
+        assert 290 < bear < 320     # northwest
