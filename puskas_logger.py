@@ -740,15 +740,17 @@ def run(lb: LogBook, tname: str):
         t   = now.strftime("%H:%M:%S")
 
         # Trigger a full REDRAW when band or mode changes so the TX line stays accurate.
+        # Suppressed during edit mode: a rig change must not clear the operator's input.
         # _toolbar() runs on the event-loop thread, making get_app().exit() safe here.
         if _state['prev_band'] is not None:
             if band != _state['prev_band'] or mode != _state['prev_mode']:
                 _state['prev_band'] = band
                 _state['prev_mode'] = mode
-                try:
-                    get_app().exit(result=_REDRAW)
-                except Exception:
-                    pass
+                if _state['edit_idx'] is None:
+                    try:
+                        get_app().exit(result=_REDRAW)
+                    except Exception:
+                        pass
         else:
             _state['prev_band'] = band
             _state['prev_mode'] = mode
@@ -984,6 +986,11 @@ def run(lb: LogBook, tname: str):
         default = _state.pop('restore_text', '') or ''
         try:
             def _prompt_msg() -> str:
+                if _state['edit_idx'] is not None:
+                    real_idx = len(lb.qsos) - 1 - _state['edit_idx']
+                    if 0 <= real_idx < len(lb.qsos):
+                        q = lb.qsos[real_idx]
+                        return f"{q.band} {q.mode}  RX ► "
                 b, m, *_ = current_rig()
                 return f"{b or '?'} {m or '?'}  RX ► "
 

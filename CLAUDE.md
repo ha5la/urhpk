@@ -200,10 +200,12 @@ uv run puskas_visualizer.py [CALLSIGN LOCATOR]
 
 These requirements must be preserved across all future changes:
 
-- **Dynamic prompt**: the prompt prefix is `{band} {mode}  RX ► ` (e.g. `2M SSB  RX ► `),
-  computed by a callable so it updates every `refresh_interval` second. This directly answers
-  "what band/mode will be logged if I press Enter now" — it always reflects the current rig
-  state (or the manual override). It mirrors the `TX ►` line printed above it.
+- **Dynamic prompt**: the prompt prefix is `{band} {mode}  {rst} {nr:03d}  RX ► `
+  (e.g. `2M SSB  59 010  RX ► `), computed by a callable so it updates every
+  `refresh_interval` second. RST and NR are here — not in the static TX line — so a
+  band or mode change on the rig (or via Alt+B/Alt+M) is immediately reflected without
+  requiring Enter. This directly answers "what RST and serial will be sent if I press
+  Enter now". It mirrors the `TX ►` line printed above it.
 - **Live rig status**: QRG and contest-clock update every second in the bottom toolbar.
   A band/mode change on the radio must be visible immediately in the prompt — never require
   Enter to see the updated state.
@@ -237,13 +239,19 @@ These requirements must be preserved across all future changes:
   original QSO; only the received side (call, rst_r, nr_r, loc) can change. Band and mode
   come from the original QSO, not the current rig state — this is intentional. Escape in
   edit mode triggers `_REDRAW` so the highlight clears immediately.
+- **Edit mode isolates from rig changes**: while `_state['edit_idx'] is not None`,
+  band/mode changes on the rig are silently recorded in `_rig` but do **not** trigger a
+  REDRAW (which would clear the operator's half-entered input). The prompt prefix shows
+  the edited QSO's own band/mode (`q.band`/`q.mode`), not `current_rig()`, so the
+  operator always sees which QSO they are correcting.
 - **Header band summary is compact**: format is `{band}:{count}q/{pts}pt` (e.g.
   `2M:12q/4321pt  70CM:3q/891pt`) so the full three-band line fits within the 80-character
   header width (`W = 80`, matching the CW legend line). Points = sum of `dist_km` for
   non-dup QSOs (matches EDI `CQSOP`).
 - **My-exchange line**: printed in bold bright green between `_print_header` and
-  `_print_recent` in `run()`. Format: `TX ► MYCALL  RST  NR  LOCATOR` (e.g.
-  `TX ► HA5LA  59  010  JN97TF`). RST is `599` in CW mode, `59` otherwise.
+  `_print_recent` in `run()`. Format: `TX ► MYCALL  LOCATOR` (e.g.
+  `TX ► HA5LA  JN97TF`). Only the truly static fields are here; RST and NR are
+  in the dynamic prompt prefix so they update live when band or mode changes.
 - **QSO list fills the terminal**: `_print_recent` receives `n = max(3, rows - 9)` where
   `rows = os.get_terminal_size().lines` (falls back to 24). The constant 9 accounts for the
   fixed header lines (blank, two bars, summary, legend, my-exchange, separator, prompt, toolbar).
