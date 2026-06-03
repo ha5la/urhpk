@@ -621,7 +621,7 @@ def _print_recent(lb: LogBook, n: int = 8, focus: int | None = None):
         dist   = f"  {lb.dist(q.loc):4d} km  {bear:3d}° {_bearing_arrow(bear)}"
         marker = "  \033[31mDUP\033[0m" if dup else ""
         row    = (f"{q.dt.strftime('%H:%M')}  {q.call:<10}  {q.band:<5} {q.mode:<4}"
-                  f"  ↑{q.rst_s:>3} {q.nr_s:03d} ↓{q.rst_r:>3} {q.nr_r:03d}  {q.loc:<6}{dist}{marker}")
+                  f"  ↑{q.rst_s:<3} {q.nr_s:03d} ↓{q.rst_r:<3} {q.nr_r:03d}  {q.loc:<6}{dist}{marker}")
         if abs_idx == focus:
             print(f"\033[1m> {row}\033[0m")
         else:
