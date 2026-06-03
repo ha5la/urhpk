@@ -169,7 +169,9 @@ uv run puskas_harvester.py
 ```
 - No external dependencies — pure stdlib
 - Fetches event list from `bb.mrasz.hu`, filters for Puskás URH Kupa rounds with `isClaimed==true`
-- For each event: fetches submitters, their QSO logs, and QSO partners
+- Records **only log submitters** — partner callsigns/locators from uploaded logs are skipped
+  because they are typed by someone else and prone to typos
+- QSO records are still fetched per submitter to capture which bands they operated on
 - Output: `~/.puskas/puskas-seen-stations.json` — `{call: {wwls: [most_recent, ...], bands}}`
   where `wwls` is a list of all known locators in reverse-chronological order (most recently
   observed in any Puskás round appears first)

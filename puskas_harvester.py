@@ -6,8 +6,10 @@
 """
 Puskás URH Kupa – Pre-contest station harvester
 ================================================
-Fetches all stations that have appeared in any Puskás URH Kupa round (as
-submitters or QSO partners), with their locators and active bands.
+Fetches all log-submitting stations from every Puskás URH Kupa round.
+Only submitters are recorded — partner callsigns and locators from uploaded
+logs are skipped because they are typed by someone else and prone to typos.
+QSO records are still fetched to learn which bands each submitter operated on.
 
 Output: ~/puskas-seen-stations.json  (home directory, shared across contest rounds)
 
@@ -183,10 +185,9 @@ def main():
 
             for code in fetch_round_codes(event_id, call):
                 for q in fetch_qsos(event_id, call, code):
-                    _record(q["callsign"], q["wwl"])
                     band = q["band"]
-                    if band and band not in stations[q["callsign"]]["bands"]:
-                        stations[q["callsign"]]["bands"].append(band)
+                    if band and band not in stations[call]["bands"]:
+                        stations[call]["bands"].append(band)
 
             if j % 10 == 0 or j == len(claimed):
                 print(f"  {j}/{len(claimed)} processed — {len(stations)} total", flush=True)
