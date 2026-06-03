@@ -729,12 +729,30 @@ def _is_contest_time(now: datetime | None = None) -> bool:
 # ──────────────────────────────────────────────────────────────
 def run(lb: LogBook, tname: str):
     # 0 = last QSO selected for edit, 1 = second-to-last, None = no edit in progress
-    _state: dict = {'edit_idx': None, 'restore_text': '', 'warn_until': 0.0}
+    _state: dict = {
+        'edit_idx': None, 'restore_text': '', 'warn_until': 0.0,
+        'prev_band': None, 'prev_mode': None,
+    }
 
     def _toolbar() -> FormattedText:
-        _, _, qrg, online = current_rig()
+        band, mode, qrg, online = current_rig()
         now = datetime.now(timezone.utc)
         t   = now.strftime("%H:%M:%S")
+
+        # Trigger a full REDRAW when band or mode changes so the TX line stays accurate.
+        # _toolbar() runs on the event-loop thread, making get_app().exit() safe here.
+        if _state['prev_band'] is not None:
+            if band != _state['prev_band'] or mode != _state['prev_mode']:
+                _state['prev_band'] = band
+                _state['prev_mode'] = mode
+                try:
+                    get_app().exit(result=_REDRAW)
+                except Exception:
+                    pass
+        else:
+            _state['prev_band'] = band
+            _state['prev_mode'] = mode
+
         if time.monotonic() < _state['warn_until']:
             rig_part = ("bg:ansiyellow fg:black", "  rig online — Alt+B/M ignored  │  ")
         elif online:
