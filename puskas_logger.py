@@ -567,7 +567,7 @@ def _band_summary(lb: LogBook) -> str:
         parts.append(f"{b}:{len(qsos)}q/{pts}pt")
     return "  ".join(parts) or "no QSOs yet"
 
-_CW_LEGEND = "  F1:CQ  F2:MYCALL  F3:EXCH  A+F3:SHORT  F4:TU73  F5:HIS  F6:DE  F7:?  F8:QSY  ESC:STOP"
+_CW_LEGEND = "  F1:CQ  F2:MY  F3:EXCH  A+F3:SH  F4:TU73  F5:HIS  F6:DE  F7:?  F8:QSY  ESC:STOP"
 
 def _print_header(lb: LogBook):
     bar = "━" * W
@@ -730,6 +730,16 @@ def run(lb: LogBook, tname: str):
         band, mode, *_ = current_rig()
         if band and mode and lb.is_dup(call, band, mode):
             return HTML("<ansired><b>  DUP  </b></ansired>")
+        locs = lb.loc_cache.get(call, [])
+        if locs and lb.my_loc:
+            try:
+                lat1, lon1 = maidenhead_to_latlon(lb.my_loc)
+                lat2, lon2 = maidenhead_to_latlon(locs[0])
+                dist = int(haversine_km(lat1, lon1, lat2, lon2))
+                bear = int(initial_bearing(lat1, lon1, lat2, lon2))
+                return HTML(f"<ansigreen>  {locs[0]}  {dist} km  {bear}°  </ansigreen>")
+            except Exception:
+                pass
         return ""
 
     def _get_input_style() -> Style:
@@ -766,8 +776,10 @@ def run(lb: LogBook, tname: str):
                 buf.insert_text(rst + ' ')
         elif len(tokens) == 3:
             locs = lb.loc_cache.get(tokens[0].upper(), [])
-            if locs:
-                buf.start_completion(select_first=True)
+            if len(locs) == 1:
+                buf.insert_text(locs[0])      # only one known — insert directly
+            elif locs:
+                buf.start_completion(select_first=True)  # multiple — show choice
 
     @kb.add('backspace')
     def _on_backspace(event):
