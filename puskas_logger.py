@@ -827,7 +827,7 @@ def run(lb: LogBook, tname: str):
             rst = "599" if mode == "CW" else "59"
             predicted = _predict_nr(lb, call, band, mode)
             if predicted is not None:
-                buf.insert_text(f"{rst} {predicted:03d} ")
+                buf.insert_text(f"{rst} {predicted:03d}")
             else:
                 buf.insert_text(rst + ' ')
         elif len(tokens) == 3:

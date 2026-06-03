@@ -315,7 +315,11 @@ HA7NS 599 014 JN97WM   → CW with locator
   reverse-chronological order (most recently used first)
 - Space after callsign → auto-fills RST (59 or 599); if there is a recent cross-mode
   QSO (same call, same band, different mode, within **5 minutes**) the predicted received
-  NR (`last_nr_r + 1`) is also filled (`_predict_nr` with injectable `now` parameter)
+  NR (`last_nr_r + 1`) is also filled (`_predict_nr` with injectable `now` parameter).
+  When NR is predicted no trailing space is appended — the operator's next Space press
+  both separates NR from locator and triggers locator autocomplete (single clean separator).
+  When NR is not predicted, a trailing space after RST is added so the operator can type
+  NR directly without pressing Space again.
 - Space after NR → if one locator known: inserts it directly; if multiple: opens dropdown
 - Right-prompt shows bearing and distance in green (e.g. `JN97WM  1234 km  225° ↙`) as soon
   as a known callsign is typed; when the callsign is a DUP both the red `DUP` label and the
@@ -370,9 +374,15 @@ uv run puskas_visualizer.py   # generate map and polar after the contest
 
 ## Testing
 ```
-uv run pytest tests/ -v     # 178 tests: parsing, IRC protocol, logger, harvester, integration
+uv run pytest tests/ -v     # 205 tests: parsing, IRC protocol, logger, harvester, integration
+uv run ruff check .         # linting: E/F/W/I rules; E501 and E701 intentionally ignored
 ```
-CI runs the same suite on every push via GitHub Actions.
+CI runs both on every push via GitHub Actions (`test.yml`).
+
+**Ruff policy**: `ruff check` only — no `ruff format`. The formatter strips intentional
+aligned-assignment style (e.g. `RIGCTLD_HOST   = "localhost"`) that aids readability in
+the configuration and dataclass sections. E501 (line length) and E701 (single-line
+`if …: return` in lookup functions like `_mode_str`) are suppressed globally.
 
 ## Repository
 - `.gitignore` excludes generated files (`puskas_map.html`, `puskas_polar.png`) and scratch
