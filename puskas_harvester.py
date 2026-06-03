@@ -85,10 +85,15 @@ def fetch_event_ids() -> list[str]:
             print(f"  [error] {LIST_URL} → {e}")
             return []
 
-    ids = [
-        e["_id"] for e in data
+    rounds = [
+        e for e in data
         if e.get("isClaimed") and e.get("contest", {}).get("_id") == CONTEST_ID
     ]
+    # Sort oldest-first by submitDeadline (ISO string, sorts lexicographically).
+    # _record() inserts locators at the front, so the last-processed round wins;
+    # oldest-first ensures the most recent round's locator ends up first in wwls.
+    rounds.sort(key=lambda e: e.get("submitDeadline", ""))
+    ids = [e["_id"] for e in rounds]
     print(f"  → {len(ids)} claimed Puskás rounds")
     return ids
 
