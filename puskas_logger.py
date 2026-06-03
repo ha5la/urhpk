@@ -702,6 +702,15 @@ def run(lb: LogBook, tname: str):
             parts.append(q.loc)
         return ' '.join(parts)
 
+    def _cache_loc(call: str, loc: str) -> None:
+        """Record a locator seen in a logged QSO into the live loc_cache."""
+        if not loc:
+            return
+        locs = lb.loc_cache.setdefault(call, [])
+        if loc in locs:
+            locs.remove(loc)
+        locs.insert(0, loc)
+
     def _enter_edit(idx: int) -> None:
         """Set edit_idx and queue a REDRAW with the QSO's data in the buffer."""
         real_idx = len(lb.qsos) - 1 - idx
@@ -940,6 +949,7 @@ def run(lb: LogBook, tname: str):
                     loc=loc, dist_km=lb.dist(loc),
                 )
                 lb.worked = {(q.call, q.band, q.mode) for q in lb.qsos}
+                _cache_loc(parsed["call"], loc)
                 save_all(lb, tname)
             continue
 
@@ -972,6 +982,7 @@ def run(lb: LogBook, tname: str):
             print(f"\033[31m  *** DUP *** {call} already in log for {band} {mode}\033[0m")
             input("  [Enter to continue]")
 
+        _cache_loc(call, loc)
         save_all(lb, tname)
 
     print("\nSaving EDI files...")
