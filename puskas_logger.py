@@ -462,15 +462,18 @@ def parse_input(line: str) -> dict | str:
 # ──────────────────────────────────────────────────────────────
 # Received-NR prediction
 # ──────────────────────────────────────────────────────────────
-_NR_PREDICT_MAX_AGE = 30 * 60  # seconds
+_NR_PREDICT_MAX_AGE = 5 * 60  # seconds
 
-def _predict_nr(lb: LogBook, call: str, band: str, mode: str) -> int | None:
+def _predict_nr(lb: LogBook, call: str, band: str, mode: str,
+                now: datetime | None = None) -> int | None:
     """Return last_nr_r + 1 if there is a recent cross-mode QSO for call on band.
 
     The other station's serial counter is per-band; a recent QSO on the same band
     in a different mode gives us a close estimate of their current serial.
+    `now` is injectable for testing; defaults to the real wall clock.
     """
-    now = datetime.now(timezone.utc)
+    if now is None:
+        now = datetime.now(timezone.utc)
     for q in reversed(lb.qsos):
         if q.call == call and q.band == band and q.mode != mode:
             if (now - q.dt).total_seconds() <= _NR_PREDICT_MAX_AGE:
@@ -759,9 +762,6 @@ def run(lb: LogBook, tname: str):
             predicted = _predict_nr(lb, call, band, mode)
             if predicted is not None:
                 buf.insert_text(f"{rst} {predicted:03d} ")
-                locs = lb.loc_cache.get(call, [])
-                if locs:
-                    buf.start_completion(select_first=True)
             else:
                 buf.insert_text(rst + ' ')
         elif len(tokens) == 3:

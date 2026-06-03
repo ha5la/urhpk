@@ -16,6 +16,10 @@ Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
   it "just in case". Dead code is technical debt.
 - **Tests must always pass**: never commit with a failing test. The test suite is the
   safety net for refactoring and simplification.
+- **Tests use pinned timestamps**: `datetime.now()` in tests undermines reproducibility.
+  Time is an input — pin it like any other. Production code that needs the current time
+  accepts an optional `now: datetime | None = None` parameter (defaulting to
+  `datetime.now(timezone.utc)`) so tests can inject a fixed value via `_dt(h, m)`.
 - **No visual glitches**: the logger UI must look professional at all times. Transient
   incorrect states (e.g. a dup highlight flashing for one frame during a state transition)
   are bugs. The root cause is usually a final prompt_toolkit render that fires between a

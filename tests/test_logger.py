@@ -613,38 +613,28 @@ class TestPredictNr:
 
     def test_cross_mode_recent_returns_nr_r_plus_one(self):
         lb = self._lb()
-        now = datetime.now(timezone.utc)
-        lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_r=15, dt=now))
-        assert _predict_nr(lb, "HA7NS", "2M", "CW") == 16
+        lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_r=15, dt=_dt(16, 0)))
+        assert _predict_nr(lb, "HA7NS", "2M", "CW", now=_dt(16, 4)) == 16
 
     def test_same_mode_not_used(self):
         lb = self._lb()
-        now = datetime.now(timezone.utc)
-        lb.add(_qso(call="HA7NS", band="2M", mode="CW", nr_r=15, dt=now))
-        assert _predict_nr(lb, "HA7NS", "2M", "CW") is None
+        lb.add(_qso(call="HA7NS", band="2M", mode="CW", nr_r=15, dt=_dt(16, 0)))
+        assert _predict_nr(lb, "HA7NS", "2M", "CW", now=_dt(16, 4)) is None
 
     def test_different_band_not_used(self):
         lb = self._lb()
-        now = datetime.now(timezone.utc)
-        lb.add(_qso(call="HA7NS", band="70CM", mode="SSB", nr_r=15, dt=now))
-        assert _predict_nr(lb, "HA7NS", "2M", "CW") is None
+        lb.add(_qso(call="HA7NS", band="70CM", mode="SSB", nr_r=15, dt=_dt(16, 0)))
+        assert _predict_nr(lb, "HA7NS", "2M", "CW", now=_dt(16, 4)) is None
 
     def test_most_recent_cross_mode_wins(self):
         lb = self._lb()
-        now = datetime.now(timezone.utc)
-        lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_r=10, dt=now))
-        lb.add(_qso(call="HA7NS", band="2M", mode="CW",  nr_r=20, dt=now))
-        # current mode FM: most recent cross-mode is CW/20 → predict 21
-        assert _predict_nr(lb, "HA7NS", "2M", "FM") == 21
+        lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_r=10, dt=_dt(16, 0)))
+        lb.add(_qso(call="HA7NS", band="2M", mode="CW",  nr_r=20, dt=_dt(16, 1)))
+        # current mode FM, 4 min later: most recent cross-mode is CW/20 → predict 21
+        assert _predict_nr(lb, "HA7NS", "2M", "FM", now=_dt(16, 4)) == 21
 
     def test_old_qso_returns_none(self):
-        from datetime import timedelta
-        from puskas_logger import _NR_PREDICT_MAX_AGE
         lb = self._lb()
-        # QSO timestamped more than max-age ago
-        old_dt = datetime.now(timezone.utc) - timedelta(seconds=_NR_PREDICT_MAX_AGE + 60)
-        q = QSO(dt=old_dt, band="2M", mode="SSB", call="HA7NS",
-                rst_s="59", nr_s=1, rst_r="59", nr_r=15,
-                loc="JN97WM", dist_km=38)
-        lb.qsos.append(q)
-        assert _predict_nr(lb, "HA7NS", "2M", "CW") is None
+        lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_r=15, dt=_dt(16, 0)))
+        # 6 minutes later — outside the 5-minute window
+        assert _predict_nr(lb, "HA7NS", "2M", "CW", now=_dt(16, 6)) is None

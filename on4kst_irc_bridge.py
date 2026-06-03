@@ -312,6 +312,9 @@ def _load_seen() -> dict[str, dict]:
 
 def _persist_seen(data: str) -> None:
     try:
+        if (ON4KST_SEEN_PATH.exists() and
+                ON4KST_SEEN_PATH.read_text(encoding="utf-8") == data):
+            return
         ON4KST_SEEN_PATH.write_text(data, encoding="utf-8")
     except Exception:
         pass
@@ -489,17 +492,26 @@ class Bridge:
                 pass
 
     async def kst_userlist(self, old: dict[str, dict], new: dict[str, dict]):
-        # Update persistent seen-stations file
+        # Update persistent seen-stations file (only write if something changed)
+        changed = False
         for call, user in new.items():
             loc = user.get("loc", "")
-            if loc:
-                entry = self._seen.setdefault(call, {"wwls": [], "bands": []})
-                wwls = entry["wwls"]
-                if loc in wwls:
-                    wwls.remove(loc)
-                wwls.insert(0, loc)
-        seen_json = json.dumps(self._seen, ensure_ascii=False, indent=2)
-        asyncio.create_task(asyncio.to_thread(_persist_seen, seen_json))
+            if not loc:
+                continue
+            if call not in self._seen:
+                self._seen[call] = {"wwls": [loc], "bands": []}
+                changed = True
+                continue
+            wwls = self._seen[call]["wwls"]
+            if wwls and wwls[0] == loc:
+                continue  # already the most-recent locator — no change
+            if loc in wwls:
+                wwls.remove(loc)
+            wwls.insert(0, loc)
+            changed = True
+        if changed:
+            seen_json = json.dumps(self._seen, ensure_ascii=False, indent=2)
+            asyncio.create_task(asyncio.to_thread(_persist_seen, seen_json))
 
         joined = set(new) - set(old)
         parted = set(old) - set(new)
