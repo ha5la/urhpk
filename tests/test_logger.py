@@ -1,17 +1,25 @@
 """Tests for puskas_logger pure functions — no rig, no network, no prompts."""
 import io
-import re
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
 
 from puskas_logger import (
-    QSO, LogBook,
-    _band_summary, _bearing_arrow, _edi_qso_count, _is_contest_time, _is_dup_in_log,
-    _merge_loc_sources, _predict_nr, _print_recent, _update_loc_cache,
-    haversine_km, initial_bearing, maidenhead_to_latlon,
+    QSO,
+    LogBook,
+    _band_summary,
+    _bearing_arrow,
+    _edi_qso_count,
+    _is_contest_time,
+    _is_dup_in_log,
+    _merge_loc_sources,
+    _predict_nr,
+    _print_recent,
+    _update_loc_cache,
+    haversine_km,
+    initial_bearing,
     load_from_edi,
+    maidenhead_to_latlon,
     parse_input,
     tname_for,
     write_edi,
@@ -282,7 +290,7 @@ class TestWriteEdi:
         lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_s=1, h=16))
         lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_s=2, h=17))
         txt = write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path).read_text()
-        lines = [l for l in txt.splitlines() if "HA7NS" in l]
+        lines = [line for line in txt.splitlines() if "HA7NS" in line]
         assert len(lines) == 2
         assert lines[0].endswith(";")    # not a dup
         assert lines[1].endswith("D;")  # dup
@@ -568,7 +576,7 @@ class TestPrintRecent:
     def test_normal_shows_last_n(self):
         lb = self._lb()
         lines = self._lines(lb, n=4)
-        data = [l for l in lines if "HA" in l]
+        data = [line for line in lines if "HA" in line]
         assert len(data) == 4
         assert "HA9AA" in data[-1]   # last QSO at bottom
 
@@ -576,7 +584,7 @@ class TestPrintRecent:
         lb = self._lb()
         focus = 5   # 6th QSO (0-indexed)
         lines = self._lines(lb, n=8, focus=focus)
-        focused = [l for l in lines if "HA5AA" in l]
+        focused = [line for line in lines if "HA5AA" in line]
         assert len(focused) == 1
         assert focused[0].startswith("> ") or "\033[1m>" in focused[0]
 
@@ -592,21 +600,21 @@ class TestPrintRecent:
         lb = self._lb()
         focus = 3   # middle of log
         lines = self._lines(lb, n=8, focus=focus)
-        calls = [l for l in lines if "HA" in l]
+        calls = [line for line in lines if "HA" in line]
         # QSO at index > focus must appear
-        assert any("HA4AA" in l or "HA5AA" in l for l in calls)
+        assert any("HA4AA" in line or "HA5AA" in line for line in calls)
 
     def test_focus_near_start_shows_enough_rows(self):
         lb = self._lb()
         lines = self._lines(lb, n=8, focus=1)
-        calls = [l for l in lines if "HA" in l]
+        calls = [line for line in lines if "HA" in line]
         assert len(calls) >= 2
 
     def test_bearing_column_always_shown(self):
         lb = LogBook("HA5LA", "JN97TF", {})
         lb.add(_qso(call="HA7NS", nr_s=1, h=14, loc="JN97WM", dist_km=lb.dist("JN97WM")))
         lines = self._lines(lb, n=4)
-        qso_line = next(l for l in lines if "HA7NS" in l)
+        qso_line = next(line for line in lines if "HA7NS" in line)
         assert "°" in qso_line
         assert "km" in qso_line
         assert any(c in qso_line for c in "↑↗→↘↓↙←↖")

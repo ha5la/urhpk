@@ -26,6 +26,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.application import get_app
@@ -33,7 +34,6 @@ from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.document import Document
 from prompt_toolkit.filters import has_completions
 from prompt_toolkit.formatted_text import HTML, FormattedText
-from zoneinfo import ZoneInfo
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import DynamicStyle, Style
 
@@ -693,7 +693,7 @@ def _offline_setup():
     bar = "━" * W
     print(f"\n\033[1m{bar}\033[0m")
     print("  RIG OFFLINE — set band and mode to start logging")
-    print(f"\033[2m  (start rigctld for automatic control, or enter values below)\033[0m")
+    print("\033[2m  (start rigctld for automatic control, or enter values below)\033[0m")
     print(f"\033[1m{bar}\033[0m")
     while True:
         band, mode, _, online = current_rig()

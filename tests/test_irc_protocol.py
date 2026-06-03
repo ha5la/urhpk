@@ -7,9 +7,7 @@ import asyncio
 import pytest
 
 from on4kst_irc_bridge import CHANNEL
-
 from tests.helpers import CALLSIGN, MockBridge, make_irc_pair
-
 
 # ============================================================
 # Fixture: a factory that yields (task, client, bridge) tuples
@@ -102,7 +100,7 @@ class TestCAPNegotiation:
 class TestRegistration:
     async def test_welcome_numerics_present(self, make_registered):
         _, client, _ = await make_registered()
-        lines = await client.drain()
+        await client.drain()
         # drain() comes after register() which already consumed up to 376,
         # so just check the already-received lines via register()'s return
         # value.  Re-register to get a fresh view:
@@ -118,7 +116,7 @@ class TestRegistration:
         try:
             lines = await client2.register(nick="TESTNICK")
             lines += await client2.drain()
-            nick_change = [l for l in lines if f"NICK {CALLSIGN}" in l]
+            nick_change = [line for line in lines if f"NICK {CALLSIGN}" in line]
             assert nick_change, "Bridge must send NICK change to ON4KST callsign"
         finally:
             task.cancel()
@@ -132,8 +130,8 @@ class TestRegistration:
             lines += await client.drain()
             # No NICK command should appear (the join has the nick but as
             # part of a JOIN line, not a NICK line)
-            nick_cmds = [l for l in lines
-                         if l.lstrip(":").split()[0].upper() == "NICK"]
+            nick_cmds = [line for line in lines
+                         if line.lstrip(":").split()[0].upper() == "NICK"]
             assert not nick_cmds, "No NICK change when nick already matches callsign"
         finally:
             task.cancel()
@@ -145,7 +143,7 @@ class TestRegistration:
         try:
             lines = await client.register()
             lines += await client.drain()
-            joined = [l for l in lines if "JOIN" in l and CHANNEL in l]
+            joined = [line for line in lines if "JOIN" in line and CHANNEL in line]
             assert joined, "Bridge must auto-join #on4kst after welcome"
         finally:
             task.cancel()
@@ -160,9 +158,9 @@ class TestRegistration:
         try:
             lines = await client.register()
             lines += await client.drain()
-            assert any("353" in l for l in lines), "Must send NAMES (353)"
-            assert any("366" in l for l in lines), "Must send end-of-NAMES (366)"
-            assert any("G6DDN" in l for l in lines)
+            assert any("353" in line for line in lines), "Must send NAMES (353)"
+            assert any("366" in line for line in lines), "Must send end-of-NAMES (366)"
+            assert any("G6DDN" in line for line in lines)
         finally:
             task.cancel()
 
@@ -204,8 +202,8 @@ class TestChannelSync:
         _, client, _ = await make_registered(bridge)
         await client.send(f"WHO {CHANNEL} %uhsnfar,152")
         lines = await client.recv_until("315")
-        assert any("352" in l for l in lines), "WHO must produce 352 replies"
-        assert any("315" in l for l in lines), "WHO must end with 315"
+        assert any("352" in line for line in lines), "WHO must produce 352 replies"
+        assert any("315" in line for line in lines), "WHO must end with 315"
 
     async def test_plain_who_returns_352(self, make_registered):
         bridge = MockBridge()
@@ -215,7 +213,7 @@ class TestChannelSync:
         _, client, _ = await make_registered(bridge)
         await client.send(f"WHO {CHANNEL}")
         lines = await client.recv_until("315")
-        assert any("352" in l for l in lines), "Plain WHO must produce 352 replies"
+        assert any("352" in line for line in lines), "Plain WHO must produce 352 replies"
 
     async def test_whois_shows_name_and_locator(self, make_registered):
         bridge = MockBridge()
@@ -225,7 +223,7 @@ class TestChannelSync:
         _, client, _ = await make_registered(bridge)
         await client.send("WHOIS G6DDN")
         lines = await client.recv_until("318")
-        assert any("311" in l for l in lines)
+        assert any("311" in line for line in lines)
         full = " ".join(lines)
         assert "Ian" in full
         assert "IO83RJ" in full
@@ -263,7 +261,7 @@ class TestChannelSync:
         _, client, _ = await make_registered(bridge)
         await client.send("WHOIS G6DDN")
         lines = await client.recv_until("318")
-        assert any("301" in l for l in lines), "Away user must produce 301"
+        assert any("301" in line for line in lines), "Away user must produce 301"
 
 
 # ============================================================

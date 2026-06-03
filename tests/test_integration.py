@@ -6,14 +6,14 @@ import asyncio
 
 import pytest
 
-from on4kst_irc_bridge import Bridge, IRCSession, ON4KSTClient
-from on4kst_irc_bridge import CHANNEL
 import on4kst_irc_bridge as bridge_module
+from on4kst_irc_bridge import CHANNEL, Bridge, IRCSession, ON4KSTClient
 from tests.helpers import (
-    CALLSIGN, PASSWORD,
-    IRCClientHelper, MockKSTServer,
+    CALLSIGN,
+    PASSWORD,
+    IRCClientHelper,
+    MockKSTServer,
 )
-
 
 # ============================================================
 # Fixture: full bridge environment
@@ -252,7 +252,7 @@ class TestUserList:
             await kst_server.inject("DK5DV            JO30XS Gerd")
             await kst_server.inject("1234Z HA5LA HA5LA JN97MX chat >")
             lines = await client.drain()
-            assert any("PART" in l and "G6DDN" in l for l in lines)
+            assert any("PART" in line and "G6DDN" in line for line in lines)
         finally:
             w.close()
 
@@ -289,7 +289,7 @@ class TestSkedCommands:
         try:
             await client.send("PRIVMSG G6DDN :sked")
             lines = await client.drain()
-            notice = next((l for l in lines if "NOTICE" in l), None)
+            notice = next((line for line in lines if "NOTICE" in line), None)
             assert notice is not None, "Bridge must echo a NOTICE after PM sked"
             assert "/CQ G6DDN" in notice
             assert "sked?" in notice
@@ -332,9 +332,9 @@ class TestLocalCommands:
         try:
             await client.send(f"PRIVMSG {CHANNEL} :!help")
             lines = await client.drain()
-            notices = [l for l in lines if "NOTICE" in l]
+            notices = [line for line in lines if "NOTICE" in line]
             assert notices, "!help must produce NOTICE lines"
-            assert all(CHANNEL in l for l in notices), \
+            assert all(CHANNEL in line for line in notices), \
                 "NOTICEs must target the channel, not the status window"
         finally:
             w.close()
@@ -375,7 +375,7 @@ class TestLocalCommands:
         try:
             await client.send(f"PRIVMSG {CHANNEL} :!bogus")
             lines = await client.drain()
-            assert any("NOTICE" in l and "bogus" in l for l in lines)
+            assert any("NOTICE" in line and "bogus" in line for line in lines)
         finally:
             w.close()
 

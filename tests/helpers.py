@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import socket
 
-from on4kst_irc_bridge import Bridge, IRCSession, ON4KSTClient
+from on4kst_irc_bridge import IRCSession
 
 CALLSIGN   = "HA5LA"
 PASSWORD   = "testpass"

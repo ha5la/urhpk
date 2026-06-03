@@ -4,9 +4,16 @@ import html
 import pytest
 
 from on4kst_irc_bridge import (
-    RE_CHAT_MSG, RE_RECIPIENT, RE_USR, strip_iac,
-    maidenhead_to_latlon, haversine_km, initial_bearing, sked_text,
-    latlon_to_maidenhead, great_circle_midpoint,
+    RE_CHAT_MSG,
+    RE_RECIPIENT,
+    RE_USR,
+    great_circle_midpoint,
+    haversine_km,
+    initial_bearing,
+    latlon_to_maidenhead,
+    maidenhead_to_latlon,
+    sked_text,
+    strip_iac,
 )
 
 

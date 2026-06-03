@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import math
 import netrc
 import re
@@ -42,7 +43,6 @@ import socket
 import sys
 import time
 import urllib.request
-import json
 from pathlib import Path
 
 # ============================================================
@@ -592,7 +592,7 @@ class IRCSession:
         await self._num(3,   "This server was created today")
         await self._num(4,   SERVER_NAME, "on4kst-bridge-1.0", "o", "o")
         await self._num(375, f"- {SERVER_NAME} Message of the Day -")
-        await self._num(372, f"- ON4KST 144/432 MHz IRC bridge")
+        await self._num(372, "- ON4KST 144/432 MHz IRC bridge")
         await self._num(372, f"- Connected as: {callsign}")
         await self._num(372, f"- Join {CHANNEL} to enter the chat")
         await self._num(376, "End of MOTD command.")
