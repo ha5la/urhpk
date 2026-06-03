@@ -14,6 +14,10 @@ Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
 - **Kent Beck's simplicity rule**: always implement the simplest thing that works.
   Prefer decremental development — remove code that isn't needed rather than keeping
   it "just in case". Dead code is technical debt.
+- **Tests over markdown for requirements**: requirements are best expressed as tests —
+  they are executable, unambiguous, and cannot go stale silently. Markdown is the
+  second-best option. Prose-only requirements in CLAUDE.md are a last resort for things
+  that genuinely cannot be tested (visual UX, hardware interactions).
 - **Tests must always pass**: never commit with a failing test. The test suite is the
   safety net for refactoring and simplification.
 - **Tests use pinned timestamps**: `datetime.now()` in tests undermines reproducibility.
@@ -169,6 +173,10 @@ uv run puskas_harvester.py
 ```
 - No external dependencies — pure stdlib
 - Fetches event list from `bb.mrasz.hu`, filters for Puskás URH Kupa rounds with `isClaimed==true`
+- Rounds are **sorted by `submitDeadline` oldest-first** before processing — the `_record`
+  helper inserts locators at the front of `wwls`, so the last-processed (most recent) round's
+  locator ends up first. Without this sort the API's newest-first order would put old locators
+  at the front.
 - Records **only log submitters** — partner callsigns/locators from uploaded logs are skipped
   because they are typed by someone else and prone to typos
 - QSO records are still fetched per submitter to capture which bands they operated on
@@ -249,8 +257,20 @@ Purpose-built for Puskás URH Kupa rules. Requires `prompt_toolkit` (declared in
 uv run puskas_logger.py
 ```
 
-**Locator cache**: loaded from `~/.puskas/puskas-seen-stations.json` if present (built by `puskas_harvester.py`),
-falls back to own `my-logs/*.edi` files. No API calls during contest.
+**Locator cache** — built at startup by merging four sources in priority order (highest first):
+
+| Priority | Source | How |
+|---|---|---|
+| 1 (highest) | QSOs entered this session | `_update_loc_cache` called after each logged/edited QSO |
+| 2 | Recovered EDI files (crash recovery) | `_update_loc_cache` called for each recovered QSO in `main()` |
+| 3 | `my-logs/*.edi` historical logs | `_parse_edi_files()` always merged via `_merge_loc_sources` |
+| 4 | `~/.puskas/on4kst-seen-stations.json` | merged second |
+| 5 (lowest) | `~/.puskas/puskas-seen-stations.json` | merged last |
+
+`_merge_loc_sources(*sources)` takes sources highest-priority-first; each locator
+appears once at the position of its highest-priority source. `_update_loc_cache(cache,
+call, loc)` inserts `loc` at the front of `cache[call]` (most recently used first).
+No API calls during contest.
 
 **Crash recovery**: at startup, scans `*.edi` / `*.EDI` (case-insensitive) in the current
 directory. If found, shows a summary and offers to resume — all QSOs, serials, and dup state
@@ -269,11 +289,13 @@ HA7NS 599 014 JN97WM   → CW with locator
 - Tab-complete callsigns (prefix-match from locator cache)
 - Tab-complete locators after NR: shows all known locators for the callsign in
   reverse-chronological order (most recently used first)
-- Space after callsign → auto-fills RST (59 or 599) + space; if there is a recent
-  cross-mode QSO (same call, same band, different mode, within 30 min) the predicted
-  received NR (`last_nr_r + 1`) is also filled, and the locator dropdown opens immediately
-- Space after NR → opens locator completion dropdown (if any locators known for the callsign)
-- Backspace on empty input → enters edit mode for last QSO (no removal)
+- Space after callsign → auto-fills RST (59 or 599); if there is a recent cross-mode
+  QSO (same call, same band, different mode, within **5 minutes**) the predicted received
+  NR (`last_nr_r + 1`) is also filled (`_predict_nr` with injectable `now` parameter)
+- Space after NR → if one locator known: inserts it directly; if multiple: opens dropdown
+- Right-prompt shows bearing and distance in green (e.g. `JN97WM  1234 km  225°`) as soon
+  as a known callsign is typed; DUP (red) takes priority over the bearing display
+- Backspace stops at column 0 (does nothing on empty input); edit mode via Up arrow only
 - Up/Down → navigate log in edit mode; window scrolls to keep focused row centred
 - Escape → exits edit mode (screen redraws immediately) and/or aborts CW transmission
 
@@ -293,6 +315,12 @@ HA7NS 599 014 JN97WM   → CW with locator
 `<HISCALL>` is the first token in the input buffer at key-press time.
 `<NUMBER>` uses CW abbreviations: `0→T`, `9→N` (e.g. 014 → `T14`).
 Macros silently no-op when rigctld is offline.
+
+**Offline setup wizard**: if rigctld is not running at startup and no manual band/mode
+override is set, the logger shows an interactive prompt asking for band (`2M/70CM/23CM`)
+then mode (`SSB/CW/FM`) before entering the main loop. Ctrl-D exits cleanly.
+Mid-session rig disconnect uses `_rig_manual` values as fallback (set by the wizard or
+`!band`/`!mode` commands), so the wizard only appears once per session.
 
 **Contest rules**:
 - Reads band/QRG/mode from rigctld; falls back to `!band`/`!mode` commands if rig offline
@@ -317,7 +345,7 @@ uv run puskas_visualizer.py   # generate map and polar after the contest
 
 ## Testing
 ```
-uv run pytest tests/ -v     # 156 tests: parsing, IRC protocol, logger, integration
+uv run pytest tests/ -v     # 178 tests: parsing, IRC protocol, logger, harvester, integration
 ```
 CI runs the same suite on every push via GitHub Actions.
 

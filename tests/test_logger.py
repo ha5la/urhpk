@@ -9,7 +9,7 @@ import pytest
 from puskas_logger import (
     QSO, LogBook,
     _band_summary, _edi_qso_count, _is_dup_in_log, _merge_loc_sources,
-    _predict_nr, _print_recent,
+    _predict_nr, _print_recent, _update_loc_cache,
     load_from_edi,
     parse_input,
     tname_for,
@@ -123,6 +123,11 @@ class TestLogBook:
         self.lb.add(_qso(band="2M", nr_s=1))
         assert self.lb.next_nr("2M") == 2
         assert self.lb.next_nr("70CM") == 1
+
+    def test_next_nr_no_band_returns_total_plus_one(self):
+        self.lb.add(_qso(band="2M",   nr_s=1))
+        self.lb.add(_qso(band="70CM", nr_s=1))
+        assert self.lb.next_nr("") == 3
 
     def test_add_returns_false_for_new_qso(self):
         assert self.lb.add(_qso()) is False
@@ -680,3 +685,41 @@ class TestMergeLocSources:
 
     def test_empty_sources_return_empty(self):
         assert _merge_loc_sources({}, {}, {}) == {}
+
+    def test_multi_loc_stations_preserve_internal_order(self):
+        # on4kst has two locs for a station; both appear before puskas loc
+        on4kst = {"HA7NS": ["JN97WM", "JN97AB"]}
+        puskas = {"HA7NS": ["JN97MM"]}
+        result = _merge_loc_sources(on4kst, puskas)
+        assert result["HA7NS"] == ["JN97WM", "JN97AB", "JN97MM"]
+
+
+# ──────────────────────────────────────────────────────────────
+# _update_loc_cache
+# ──────────────────────────────────────────────────────────────
+
+class TestUpdateLocCache:
+    def test_new_call_is_added(self):
+        cache: dict = {}
+        _update_loc_cache(cache, "HA7NS", "JN97WM")
+        assert cache == {"HA7NS": ["JN97WM"]}
+
+    def test_new_loc_inserted_at_front(self):
+        cache = {"HA7NS": ["JN97WM"]}
+        _update_loc_cache(cache, "HA7NS", "JN97TF")
+        assert cache["HA7NS"] == ["JN97TF", "JN97WM"]
+
+    def test_existing_loc_moved_to_front(self):
+        cache = {"HA7NS": ["JN97WM", "JN97TF"]}
+        _update_loc_cache(cache, "HA7NS", "JN97TF")
+        assert cache["HA7NS"] == ["JN97TF", "JN97WM"]
+
+    def test_loc_already_at_front_unchanged(self):
+        cache = {"HA7NS": ["JN97WM", "JN97TF"]}
+        _update_loc_cache(cache, "HA7NS", "JN97WM")
+        assert cache["HA7NS"] == ["JN97WM", "JN97TF"]
+
+    def test_empty_loc_ignored(self):
+        cache = {"HA7NS": ["JN97WM"]}
+        _update_loc_cache(cache, "HA7NS", "")
+        assert cache["HA7NS"] == ["JN97WM"]
