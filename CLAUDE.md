@@ -225,8 +225,12 @@ These requirements must be preserved across all future changes:
   rig state fresh so the style (redrawn every second via `refresh_interval`) always reflects
   the current band. The dup style is suppressed during edit mode
   (`_state['edit_idx'] is not None`) to avoid false positives.
-- **Band always visible in log**: every QSO row must show its band. RST columns must be
-  3 chars wide so CW (599) and SSB/FM (59) rows stay aligned.
+- **Band always visible in log**: every QSO row must show its band. RST columns are
+  **left-aligned** in 3 chars (`:<3`) so `↑` and `↓` attach directly to the first digit
+  and padding appears to the right (e.g. `↑59  021 ↓59  028` / `↑599 023 ↓599 030`).
+  Right-alignment was tried and rejected — it created a visual gap between the marker and
+  the digits (`↑ 59`). The `↑` prefix labels the sent exchange and `↓` labels the
+  received exchange; both appear in every log row so TX and RX fields cannot be confused.
 - **Rig read at Enter time**: band and mode for a new QSO are captured by a fresh
   `current_rig()` call immediately after Enter, never from the stale snapshot taken when
   the prompt was first drawn.
@@ -392,7 +396,7 @@ uv run puskas_visualizer.py   # generate map and polar after the contest
 
 ## Testing
 ```
-uv run pytest tests/ -v     # 205 tests: parsing, IRC protocol, logger, harvester, integration
+uv run pytest tests/ -v     # 206 tests: parsing, IRC protocol, logger, harvester, integration
 uv run ruff check .         # linting: E/F/W/I rules; E501 and E701 intentionally ignored
 ```
 CI runs both on every push via GitHub Actions (`test.yml`).
