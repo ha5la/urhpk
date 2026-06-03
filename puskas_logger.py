@@ -755,17 +755,27 @@ def run(lb: LogBook, tname: str):
             _state['prev_band'] = band
             _state['prev_mode'] = mode
 
+        parts: list[tuple[str, str]] = []
+
+        # During edit, warn when the rig is on a different band/mode than the QSO.
+        if _state['edit_idx'] is not None and band:
+            real_idx = len(lb.qsos) - 1 - _state['edit_idx']
+            if 0 <= real_idx < len(lb.qsos):
+                q = lb.qsos[real_idx]
+                if band != q.band or mode != q.mode:
+                    parts.append(("bg:ansiyellow fg:black",
+                                  f"  RIG→{band} {mode}  │  "))
+
         if time.monotonic() < _state['warn_until']:
-            rig_part = ("bg:ansiyellow fg:black", "  rig online — Alt+B/M ignored  │  ")
+            parts.append(("bg:ansiyellow fg:black", "  rig online — Alt+B/M ignored  │  "))
         elif online:
-            rig_part = ("", f"  {qrg} MHz  │  ")
+            parts.append(("", f"  {qrg} MHz  │  "))
         else:
-            rig_part = ("", "  offline  │  ")
+            parts.append(("", "  offline  │  "))
+
         time_style = "bg:ansigreen fg:black" if _is_contest_time(now) else "bg:ansired fg:white"
-        return FormattedText([
-            rig_part,
-            (time_style, f" {t} UTC "),
-        ])
+        parts.append((time_style, f" {t} UTC "))
+        return FormattedText(parts)
 
     def _qso_to_input(q: QSO) -> str:
         parts = [q.call, q.rst_r, f"{q.nr_r:03d}"]
