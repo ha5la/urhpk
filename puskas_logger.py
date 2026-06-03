@@ -109,14 +109,29 @@ def _parse_seen_file(path: Path) -> dict[str, list[str]]:
             result[call] = list(wwls)
     return result
 
+def _merge_loc_sources(*sources: dict[str, list[str]]) -> dict[str, list[str]]:
+    """Merge locator sources in priority order (highest-priority source first).
+
+    Each locator appears at most once, at the position of the highest-priority
+    source that contains it.  Sources listed later only contribute locs not
+    already present from an earlier (higher-priority) source.
+    """
+    result: dict[str, list[str]] = {}
+    for source in sources:
+        for call, locs in source.items():
+            existing = result.setdefault(call, [])
+            for loc in locs:
+                if loc not in existing:
+                    existing.append(loc)
+    return result
+
 def load_loc_cache() -> dict[str, list[str]]:
-    puskas: dict[str, list[str]] = {}
-    if SEEN_STATIONS.exists():
-        try:
-            puskas = _parse_seen_file(SEEN_STATIONS)
-            print(f"  {len(puskas)} stations from {SEEN_STATIONS.name}")
-        except Exception:
-            pass
+    # Priority order, highest first: edi > on4kst > puskas.
+    # QSO-entered locs are inserted at the front later via _update_loc_cache.
+    edi_raw = _parse_edi_files()
+    edi: dict[str, list[str]] = {call: [loc] for call, loc in edi_raw.items()}
+    if edi:
+        print(f"  {len(edi)} stations from my-logs/")
 
     on4kst: dict[str, list[str]] = {}
     if ON4KST_SEEN.exists():
@@ -126,25 +141,16 @@ def load_loc_cache() -> dict[str, list[str]]:
         except Exception:
             pass
 
-    if puskas or on4kst:
-        # Merge: Puskás locators first (more precise), ON4KST fills new calls/locs
-        merged = {call: list(locs) for call, locs in puskas.items()}
-        for call, locs in on4kst.items():
-            if call in merged:
-                existing = merged[call]
-                for loc in locs:
-                    if loc not in existing:
-                        existing.append(loc)
-            else:
-                merged[call] = list(locs)
-        return merged
+    puskas: dict[str, list[str]] = {}
+    if SEEN_STATIONS.exists():
+        try:
+            puskas = _parse_seen_file(SEEN_STATIONS)
+            print(f"  {len(puskas)} stations from {SEEN_STATIONS.name}")
+        except Exception:
+            pass
 
-    edi = _parse_edi_files()
-    cache = {call: [loc] for call, loc in edi.items()}
-    if cache:
-        print(f"  {len(cache)} stations from my-logs/ "
-              f"(run puskas_harvester.py for full cache)")
-    else:
+    cache = _merge_loc_sources(edi, on4kst, puskas)
+    if not cache:
         print("  No locator cache (run puskas_harvester.py to build one)")
     return cache
 

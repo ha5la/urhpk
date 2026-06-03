@@ -8,7 +8,8 @@ import pytest
 
 from puskas_logger import (
     QSO, LogBook,
-    _band_summary, _edi_qso_count, _is_dup_in_log, _predict_nr, _print_recent,
+    _band_summary, _edi_qso_count, _is_dup_in_log, _merge_loc_sources,
+    _predict_nr, _print_recent,
     load_from_edi,
     parse_input,
     tname_for,
@@ -638,3 +639,44 @@ class TestPredictNr:
         lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_r=15, dt=_dt(16, 0)))
         # 6 minutes later — outside the 5-minute window
         assert _predict_nr(lb, "HA7NS", "2M", "CW", now=_dt(16, 6)) is None
+
+
+# ──────────────────────────────────────────────────────────────
+# _merge_loc_sources
+# ──────────────────────────────────────────────────────────────
+
+class TestMergeLocSources:
+    def test_single_source_returned_unchanged(self):
+        src = {"HA7NS": ["JN97WM", "JN97AB"]}
+        assert _merge_loc_sources(src) == {"HA7NS": ["JN97WM", "JN97AB"]}
+
+    def test_high_priority_loc_appears_first(self):
+        # edi (high) > puskas (low)
+        edi    = {"HA7NS": ["JN97TF"]}
+        puskas = {"HA7NS": ["JN97MM"]}
+        result = _merge_loc_sources(edi, puskas)
+        assert result["HA7NS"] == ["JN97TF", "JN97MM"]
+
+    def test_three_sources_correct_order(self):
+        edi    = {"HA7NS": ["JN97TF"]}
+        on4kst = {"HA7NS": ["JN97WM"]}
+        puskas = {"HA7NS": ["JN97MM"]}
+        result = _merge_loc_sources(edi, on4kst, puskas)
+        assert result["HA7NS"] == ["JN97TF", "JN97WM", "JN97MM"]
+
+    def test_duplicate_loc_kept_at_high_priority_position(self):
+        # JN97TF appears in both edi and puskas; edi wins the position
+        edi    = {"HA7NS": ["JN97TF"]}
+        puskas = {"HA7NS": ["JN97TF", "JN97MM"]}
+        result = _merge_loc_sources(edi, puskas)
+        assert result["HA7NS"] == ["JN97TF", "JN97MM"]
+
+    def test_call_only_in_low_priority_source_is_included(self):
+        edi    = {"HA7NS": ["JN97TF"]}
+        puskas = {"DL2ABC": ["JO50XY"]}
+        result = _merge_loc_sources(edi, puskas)
+        assert result["HA7NS"] == ["JN97TF"]
+        assert result["DL2ABC"] == ["JO50XY"]
+
+    def test_empty_sources_return_empty(self):
+        assert _merge_loc_sources({}, {}, {}) == {}
