@@ -8,7 +8,7 @@ import pytest
 
 from puskas_logger import (
     QSO, LogBook,
-    _band_summary, _edi_qso_count, _is_dup_in_log, _print_recent,
+    _band_summary, _edi_qso_count, _is_dup_in_log, _predict_nr, _print_recent,
     load_from_edi,
     parse_input,
     tname_for,
@@ -24,8 +24,8 @@ def _dt(h: int = 16, m: int = 0) -> datetime:
 
 def _qso(call="HA7NS", band="2M", mode="SSB", nr_s=1, nr_r=1,
          rst_s="59", rst_r="59", loc="JN97WM", dist_km=38,
-         h=16, m=0) -> QSO:
-    return QSO(dt=_dt(h, m), band=band, mode=mode, call=call,
+         h=16, m=0, dt=None) -> QSO:
+    return QSO(dt=dt or _dt(h, m), band=band, mode=mode, call=call,
                rst_s=rst_s, nr_s=nr_s, rst_r=rst_r, nr_r=nr_r,
                loc=loc, dist_km=dist_km)
 
@@ -597,3 +597,54 @@ class TestEdiQsoCount:
 
     def test_missing_file_returns_zero(self, tmp_path):
         assert _edi_qso_count(tmp_path / "nonexistent.edi") == 0
+
+
+# ──────────────────────────────────────────────────────────────
+# _predict_nr
+# ──────────────────────────────────────────────────────────────
+
+class TestPredictNr:
+    def _lb(self):
+        return LogBook("HA5LA", "JN97TF", {})
+
+    def test_no_prior_qso_returns_none(self):
+        lb = self._lb()
+        assert _predict_nr(lb, "HA7NS", "2M", "CW") is None
+
+    def test_cross_mode_recent_returns_nr_r_plus_one(self):
+        lb = self._lb()
+        now = datetime.now(timezone.utc)
+        lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_r=15, dt=now))
+        assert _predict_nr(lb, "HA7NS", "2M", "CW") == 16
+
+    def test_same_mode_not_used(self):
+        lb = self._lb()
+        now = datetime.now(timezone.utc)
+        lb.add(_qso(call="HA7NS", band="2M", mode="CW", nr_r=15, dt=now))
+        assert _predict_nr(lb, "HA7NS", "2M", "CW") is None
+
+    def test_different_band_not_used(self):
+        lb = self._lb()
+        now = datetime.now(timezone.utc)
+        lb.add(_qso(call="HA7NS", band="70CM", mode="SSB", nr_r=15, dt=now))
+        assert _predict_nr(lb, "HA7NS", "2M", "CW") is None
+
+    def test_most_recent_cross_mode_wins(self):
+        lb = self._lb()
+        now = datetime.now(timezone.utc)
+        lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_r=10, dt=now))
+        lb.add(_qso(call="HA7NS", band="2M", mode="CW",  nr_r=20, dt=now))
+        # current mode FM: most recent cross-mode is CW/20 → predict 21
+        assert _predict_nr(lb, "HA7NS", "2M", "FM") == 21
+
+    def test_old_qso_returns_none(self):
+        from datetime import timedelta
+        from puskas_logger import _NR_PREDICT_MAX_AGE
+        lb = self._lb()
+        # QSO timestamped more than max-age ago
+        old_dt = datetime.now(timezone.utc) - timedelta(seconds=_NR_PREDICT_MAX_AGE + 60)
+        q = QSO(dt=old_dt, band="2M", mode="SSB", call="HA7NS",
+                rst_s="59", nr_s=1, rst_r="59", nr_r=15,
+                loc="JN97WM", dist_km=38)
+        lb.qsos.append(q)
+        assert _predict_nr(lb, "HA7NS", "2M", "CW") is None

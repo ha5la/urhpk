@@ -9,7 +9,7 @@ Puskás URH Kupa – Pre-contest station harvester
 Fetches all stations that have appeared in any Puskás URH Kupa round (as
 submitters or QSO partners), with their locators and active bands.
 
-Output: seen_stations.json  (in the current working directory)
+Output: puskas-seen-stations.json  (in the current working directory)
 
 Usage:  uv run puskas_harvester.py
         Delete .puskas_cache/ to force a fresh fetch from the API.
@@ -24,7 +24,7 @@ CONTEST_ID      = "67952021b55b621ae6619a4e"
 BASE_URL        = "https://bb.mrasz.hu/nest"
 LIST_URL        = "https://bb.mrasz.hu/nest/events/list?site=bb.mrasz.hu"
 CACHE_DIR       = Path(".puskas_cache")
-OUTPUT          = Path("seen_stations.json")
+OUTPUT          = Path("puskas-seen-stations.json")
 REQUEST_DELAY   = 0.3
 REQUEST_TIMEOUT = 15
 HEADERS = {

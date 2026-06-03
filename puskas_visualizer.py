@@ -7,7 +7,7 @@
 """
 Puskás URH Kupa – Station map and polar diagram
 ================================================
-Loads seen_stations.json (built by puskas_harvester.py) and optionally
+Loads puskas-seen-stations.json (built by puskas_harvester.py) and optionally
 own log EDI files (from my-logs/) to mark missed stations.
 
 Output: puskas_map.html, puskas_polar.png
@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 MY_LOGS_DIR = Path("my-logs")
-SEEN_STATIONS = Path("seen_stations.json")
+SEEN_STATIONS = Path("puskas-seen-stations.json")
 
 RE_LOC = re.compile(r'^[A-R]{2}[0-9]{2}([A-X]{2})?$', re.IGNORECASE)
 

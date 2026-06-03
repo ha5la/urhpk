@@ -48,8 +48,9 @@ from pathlib import Path
 # ============================================================
 # Configuration
 # ============================================================
-KST_HOST     = "www.on4kst.info"
-KST_PORT     = 23000
+KST_HOST          = "www.on4kst.info"
+KST_PORT          = 23000
+ON4KST_SEEN_PATH  = Path.home() / "on4kst-seen-stations.json"
 CHAT_CHOICE  = "2"           # 144/432 MHz
 IRC_HOST     = "127.0.0.1"
 IRC_PORT     = 6667
@@ -300,6 +301,22 @@ RE_PROMPT    = re.compile(r"(Login|Password|choice|chat)\s*[>:]\s*$", re.I)
 RE_LOCATOR   = re.compile(r"\b([A-R]{2}\d{2}[A-X]{2})\b", re.I)
 
 # ============================================================
+# ON4KST seen-stations persistence
+# ============================================================
+
+def _load_seen() -> dict[str, dict]:
+    try:
+        return json.loads(ON4KST_SEEN_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+def _persist_seen(data: str) -> None:
+    try:
+        ON4KST_SEEN_PATH.write_text(data, encoding="utf-8")
+    except Exception:
+        pass
+
+# ============================================================
 # Bridge  (coordinates ON4KST client ↔ IRC sessions)
 # ============================================================
 
@@ -311,6 +328,7 @@ class Bridge:
         self.rig_mode    = ""
         self.kst: ON4KSTClient | None = None
         self._sessions: set[IRCSession] = set()
+        self._seen: dict[str, dict]    = _load_seen()
 
     # ----------------------------------------------------------
     # IRC session lifecycle
@@ -471,6 +489,18 @@ class Bridge:
                 pass
 
     async def kst_userlist(self, old: dict[str, dict], new: dict[str, dict]):
+        # Update persistent seen-stations file
+        for call, user in new.items():
+            loc = user.get("loc", "")
+            if loc:
+                entry = self._seen.setdefault(call, {"wwls": [], "bands": []})
+                wwls = entry["wwls"]
+                if loc in wwls:
+                    wwls.remove(loc)
+                wwls.insert(0, loc)
+        seen_json = json.dumps(self._seen, ensure_ascii=False, indent=2)
+        asyncio.create_task(asyncio.to_thread(_persist_seen, seen_json))
+
         joined = set(new) - set(old)
         parted = set(old) - set(new)
         for s in list(self._sessions):

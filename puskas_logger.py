@@ -43,7 +43,8 @@ RIGCTLD_HOST   = "localhost"
 RIGCTLD_PORT   = 4532
 RIGCTLD_POLL_S = 1
 MY_LOGS_DIR    = Path("my-logs")
-SEEN_STATIONS  = Path("seen_stations.json")
+SEEN_STATIONS  = Path("puskas-seen-stations.json")
+ON4KST_SEEN    = Path.home() / "on4kst-seen-stations.json"
 
 # ──────────────────────────────────────────────────────────────
 # Geo helpers
@@ -98,19 +99,45 @@ def _parse_edi_files() -> dict[str, str]:
             pass
     return cache
 
+def _parse_seen_file(path: Path) -> dict[str, list[str]]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    result: dict[str, list[str]] = {}
+    for call, v in data.items():
+        wwls = v.get("wwls") or ([v["wwl"]] if v.get("wwl") else [])
+        if wwls:
+            result[call] = list(wwls)
+    return result
+
 def load_loc_cache() -> dict[str, list[str]]:
+    puskas: dict[str, list[str]] = {}
     if SEEN_STATIONS.exists():
         try:
-            data = json.loads(SEEN_STATIONS.read_text(encoding="utf-8"))
-            cache: dict[str, list[str]] = {}
-            for call, v in data.items():
-                wwls = v.get("wwls") or ([v["wwl"]] if v.get("wwl") else [])
-                if wwls:
-                    cache[call] = wwls
-            print(f"  {len(cache)} stations from seen_stations.json")
-            return cache
+            puskas = _parse_seen_file(SEEN_STATIONS)
+            print(f"  {len(puskas)} stations from {SEEN_STATIONS.name}")
         except Exception:
             pass
+
+    on4kst: dict[str, list[str]] = {}
+    if ON4KST_SEEN.exists():
+        try:
+            on4kst = _parse_seen_file(ON4KST_SEEN)
+            print(f"  {len(on4kst)} stations from {ON4KST_SEEN.name}")
+        except Exception:
+            pass
+
+    if puskas or on4kst:
+        # Merge: Puskás locators first (more precise), ON4KST fills new calls/locs
+        merged = {call: list(locs) for call, locs in puskas.items()}
+        for call, locs in on4kst.items():
+            if call in merged:
+                existing = merged[call]
+                for loc in locs:
+                    if loc not in existing:
+                        existing.append(loc)
+            else:
+                merged[call] = list(locs)
+        return merged
+
     edi = _parse_edi_files()
     cache = {call: [loc] for call, loc in edi.items()}
     if cache:
@@ -433,6 +460,25 @@ def parse_input(line: str) -> dict | str:
     return dict(call=call, rst_r=rst_r, nr_r=nr_r, loc=loc)
 
 # ──────────────────────────────────────────────────────────────
+# Received-NR prediction
+# ──────────────────────────────────────────────────────────────
+_NR_PREDICT_MAX_AGE = 30 * 60  # seconds
+
+def _predict_nr(lb: LogBook, call: str, band: str, mode: str) -> int | None:
+    """Return last_nr_r + 1 if there is a recent cross-mode QSO for call on band.
+
+    The other station's serial counter is per-band; a recent QSO on the same band
+    in a different mode gives us a close estimate of their current serial.
+    """
+    now = datetime.now(timezone.utc)
+    for q in reversed(lb.qsos):
+        if q.call == call and q.band == band and q.mode != mode:
+            if (now - q.dt).total_seconds() <= _NR_PREDICT_MAX_AGE:
+                return q.nr_r + 1
+            return None  # found but too old
+    return None
+
+# ──────────────────────────────────────────────────────────────
 # Callsign autocomplete
 # ──────────────────────────────────────────────────────────────
 class CallCompleter(Completer):
@@ -707,8 +753,17 @@ def run(lb: LogBook, tname: str):
         buf.insert_text(' ')
         tokens = buf.text.strip().split()
         if len(tokens) == 1:
-            _, mode, *_ = current_rig()
-            buf.insert_text(("599" if mode == "CW" else "59") + ' ')
+            call = tokens[0].upper()
+            band, mode, *_ = current_rig()
+            rst = "599" if mode == "CW" else "59"
+            predicted = _predict_nr(lb, call, band, mode)
+            if predicted is not None:
+                buf.insert_text(f"{rst} {predicted:03d} ")
+                locs = lb.loc_cache.get(call, [])
+                if locs:
+                    buf.start_completion(select_first=True)
+            else:
+                buf.insert_text(rst + ' ')
         elif len(tokens) == 3:
             locs = lb.loc_cache.get(tokens[0].upper(), [])
             if locs:
