@@ -200,12 +200,20 @@ uv run puskas_visualizer.py [CALLSIGN LOCATOR]
 
 These requirements must be preserved across all future changes:
 
-- **Dynamic prompt**: the prompt prefix is `{band} {mode}  {rst} {nr:03d}  RX ► `
-  (e.g. `2M SSB  59 010  RX ► `), computed by a callable so it updates every
-  `refresh_interval` second. RST and NR are here — not in the static TX line — so a
-  band or mode change on the rig (or via Alt+B/Alt+M) is immediately reflected without
-  requiring Enter. This directly answers "what RST and serial will be sent if I press
-  Enter now". It mirrors the `TX ►` line printed above it.
+- **Dynamic prompt**: the prompt prefix is `{band} {mode}  RX ► ` (e.g.
+  `2M SSB  RX ► `), computed by a callable so it updates every `refresh_interval`
+  second. It always reflects the current rig state (or manual override), giving the
+  operator live context for what band/mode will be used if Enter is pressed now.
+  It mirrors the `TX ►` line printed above it.
+- **TX line is reprinted on band/mode change**: the TX line (`TX ► MYCALL  RST  NR
+  LOCATOR`) is a static `print()` rendered once per loop iteration, not part of the
+  prompt_toolkit UI. RST depends on mode and NR depends on band, so both go stale if
+  the rig changes while the prompt is waiting. Fix: `_toolbar()` detects band/mode
+  changes and calls `get_app().exit(result=_REDRAW)` — safe because `_toolbar()` runs
+  on the event-loop thread every `refresh_interval`. This exits `session.prompt()`,
+  re-prints the TX line with fresh values, and re-enters the prompt within one second.
+  **Do not move RST or NR into the prompt prefix** — they are TX fields; mixing them
+  into `RX ►` was tried and rejected as confusing.
 - **Live rig status**: QRG and contest-clock update every second in the bottom toolbar.
   A band/mode change on the radio must be visible immediately in the prompt — never require
   Enter to see the updated state.
@@ -240,18 +248,20 @@ These requirements must be preserved across all future changes:
   come from the original QSO, not the current rig state — this is intentional. Escape in
   edit mode triggers `_REDRAW` so the highlight clears immediately.
 - **Edit mode isolates from rig changes**: while `_state['edit_idx'] is not None`,
-  band/mode changes on the rig are silently recorded in `_rig` but do **not** trigger a
-  REDRAW (which would clear the operator's half-entered input). The prompt prefix shows
-  the edited QSO's own band/mode (`q.band`/`q.mode`), not `current_rig()`, so the
-  operator always sees which QSO they are correcting.
+  band/mode changes on the rig are recorded in `_rig` but do **not** trigger a REDRAW
+  (which would clear the operator's half-entered input). The prompt prefix shows the
+  edited QSO's own `q.band`/`q.mode`, not `current_rig()`. When the rig's current
+  band or mode differs from the QSO under edit, the toolbar prepends a yellow
+  `RIG→BAND MODE │` indicator so the operator is visually notified without their
+  input being interrupted.
 - **Header band summary is compact**: format is `{band}:{count}q/{pts}pt` (e.g.
   `2M:12q/4321pt  70CM:3q/891pt`) so the full three-band line fits within the 80-character
   header width (`W = 80`, matching the CW legend line). Points = sum of `dist_km` for
   non-dup QSOs (matches EDI `CQSOP`).
 - **My-exchange line**: printed in bold bright green between `_print_header` and
-  `_print_recent` in `run()`. Format: `TX ► MYCALL  LOCATOR` (e.g.
-  `TX ► HA5LA  JN97TF`). Only the truly static fields are here; RST and NR are
-  in the dynamic prompt prefix so they update live when band or mode changes.
+  `_print_recent` in `run()`. Format: `TX ► MYCALL  RST  NR  LOCATOR` (e.g.
+  `TX ► HA5LA  59  010  JN97TF`). RST is `599` in CW mode, `59` otherwise.
+  Stays accurate because a band/mode change triggers a full REDRAW (see above).
 - **QSO list fills the terminal**: `_print_recent` receives `n = max(3, rows - 9)` where
   `rows = os.get_terminal_size().lines` (falls back to 24). The constant 9 accounts for the
   fixed header lines (blank, two bars, summary, legend, my-exchange, separator, prompt, toolbar).
