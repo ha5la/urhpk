@@ -50,7 +50,8 @@ from pathlib import Path
 # ============================================================
 KST_HOST          = "www.on4kst.info"
 KST_PORT          = 23000
-ON4KST_SEEN_PATH  = Path.home() / "on4kst-seen-stations.json"
+PUSKAS_DIR        = Path.home() / ".puskas"
+ON4KST_SEEN_PATH  = PUSKAS_DIR / "on4kst-seen-stations.json"
 CHAT_CHOICE  = "2"           # 144/432 MHz
 IRC_HOST     = "127.0.0.1"
 IRC_PORT     = 6667
@@ -315,6 +316,7 @@ def _persist_seen(data: str) -> None:
         if (ON4KST_SEEN_PATH.exists() and
                 ON4KST_SEEN_PATH.read_text(encoding="utf-8") == data):
             return
+        PUSKAS_DIR.mkdir(exist_ok=True)
         ON4KST_SEEN_PATH.write_text(data, encoding="utf-8")
     except Exception:
         pass

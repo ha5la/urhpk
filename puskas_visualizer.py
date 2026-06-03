@@ -26,7 +26,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 MY_LOGS_DIR = Path("my-logs")
-SEEN_STATIONS = Path.home() / "puskas-seen-stations.json"
+PUSKAS_DIR    = Path.home() / ".puskas"
+SEEN_STATIONS = PUSKAS_DIR / "puskas-seen-stations.json"
 
 RE_LOC = re.compile(r'^[A-R]{2}[0-9]{2}([A-X]{2})?$', re.IGNORECASE)
 
