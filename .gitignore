@@ -16,3 +16,8 @@ my-logs/
 __pycache__/
 *.pyc
 .venv/
+
+# coverage reports
+coverage.xml
+htmlcov/
+.coverage

@@ -3,7 +3,11 @@ name: Tests
 on:
   push:
     branches: [master, main]
-  pull_request:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
 
 jobs:
   test:
@@ -20,3 +24,19 @@ jobs:
 
       - name: Run tests
         run: uv run pytest tests/ -v
+
+      - name: Upload coverage report
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: htmlcov/
+
+  deploy-coverage:
+    needs: test
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dev-dependencies = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
     "prompt_toolkit>=3.0",
     "ruff>=0.9",
 ]
@@ -24,3 +25,13 @@ ignore = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["."]
+addopts = "--cov=. --cov-report=term-missing --cov-report=html"
+
+[tool.coverage.run]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]

@@ -2,6 +2,7 @@
 
 [![Tests](https://github.com/ha5la/urhpk/actions/workflows/test.yml/badge.svg)](https://github.com/ha5la/urhpk/actions/workflows/test.yml)
 [![Release](https://github.com/ha5la/urhpk/actions/workflows/release.yml/badge.svg)](https://github.com/ha5la/urhpk/actions/workflows/release.yml)
+[![Coverage](https://img.shields.io/badge/coverage-report-blue)](https://ha5la.github.io/urhpk/)
 
 Amateur radio contest toolset for the Puskás URH Kupa, plus a general-purpose
 [ON4KST](https://www.on4kst.info/) chat ↔ IRC bridge.
