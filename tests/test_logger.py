@@ -7,6 +7,7 @@ import pytest
 from puskas_logger import (
     QSO,
     LogBook,
+    RE_LOC,
     _band_summary,
     _bearing_arrow,
     _edi_qso_count,
@@ -15,7 +16,10 @@ from puskas_logger import (
     _merge_loc_sources,
     _predict_nr,
     _print_recent,
+    _rot,
+    _rot_lock,
     _update_loc_cache,
+    current_rot,
     haversine_km,
     initial_bearing,
     load_from_edi,
@@ -880,3 +884,76 @@ class TestBearingArrow:
     def test_jn97_to_io83_is_northwest(self):
         # bearing ≈302°, which rounds to ↖ (NW octant 292.5–337.5)
         assert _bearing_arrow(302) == "↖"
+
+
+# ──────────────────────────────────────────────────────────────
+# current_rot
+# ──────────────────────────────────────────────────────────────
+
+class TestCurrentRot:
+    """current_rot() reflects _rot state; drives the ROT: toolbar segment."""
+
+    def setup_method(self):
+        with _rot_lock:
+            self._saved = dict(_rot)
+
+    def teardown_method(self):
+        with _rot_lock:
+            _rot.update(self._saved)
+
+    def test_offline_when_not_connected(self):
+        with _rot_lock:
+            _rot.update(az=0.0, online=False)
+        _, online = current_rot()
+        assert online is False
+
+    def test_returns_azimuth_when_online(self):
+        with _rot_lock:
+            _rot.update(az=123.0, online=True)
+        az, online = current_rot()
+        assert online is True
+        assert az == pytest.approx(123.0)
+
+    def test_azimuth_not_exposed_when_offline(self):
+        # Toolbar shows ROT: --- when offline; az value must not be trusted.
+        # current_rot() signals this via online=False regardless of az content.
+        with _rot_lock:
+            _rot.update(az=270.0, online=False)
+        _, online = current_rot()
+        assert online is False
+
+
+# ──────────────────────────────────────────────────────────────
+# Locator-only bearing path
+# ──────────────────────────────────────────────────────────────
+
+class TestLocatorOnlyBearing:
+    """Pin the locator-only bearing lookup used for rotator pointing.
+
+    When the operator types a bare locator (e.g. heard on air) as the only
+    token in the input buffer, _rprompt shows bearing/distance and Alt+R turns
+    the rotator there.  The path branches on RE_LOC.match(first) with
+    len(tokens)==1 — the len guard prevents firing mid-QSO (e.g. "HA7NS JN97WM").
+    lb.bearing()/lb.dist() accept a raw locator string directly; no cache lookup.
+    """
+
+    def test_re_loc_matches_4char_locator(self):
+        assert RE_LOC.match("JN97")
+
+    def test_re_loc_matches_6char_locator(self):
+        assert RE_LOC.match("JN97WM")
+
+    def test_re_loc_does_not_match_typical_callsigns(self):
+        # Callsigns like HA7NS have a letter where position 3 must be a digit,
+        # so they never match [A-R]{2}[0-9]{2}([A-X]{2})? — no false locator trigger.
+        assert not RE_LOC.match("HA7NS")
+        assert not RE_LOC.match("DL2ABC")
+        assert not RE_LOC.match("OE5XYZ")
+
+    def test_bearing_from_raw_typed_locator(self):
+        # lb.bearing() takes the locator string directly — no cache lookup needed.
+        lb = LogBook("HA5LA", "JN97TF", {})
+        bear = lb.bearing("IO83RO")
+        dist = lb.dist("IO83RO")
+        assert 290 < bear < 320    # northwest
+        assert 1650 < dist < 1800

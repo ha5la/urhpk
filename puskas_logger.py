@@ -42,6 +42,8 @@ from prompt_toolkit.styles import DynamicStyle, Style
 # ──────────────────────────────────────────────────────────────
 RIGCTLD_HOST   = "localhost"
 RIGCTLD_PORT   = 4532
+ROTCTLD_HOST   = "localhost"
+ROTCTLD_PORT   = 4533
 RIGCTLD_POLL_S = 1
 MY_LOGS_DIR    = Path("my-logs")
 PUSKAS_DIR     = Path.home() / ".puskas"
@@ -225,6 +227,52 @@ def current_rig() -> tuple[str, str, str, bool]:
         if _rig["online"]:
             return _rig["band"], _rig["mode"], _rig["qrg"], True
     return _rig_manual["band"], _rig_manual["mode"], "", False
+
+# ──────────────────────────────────────────────────────────────
+# rotctld — background daemon thread
+# ──────────────────────────────────────────────────────────────
+_rot: dict  = {"az": 0.0, "online": False}
+_rot_lock   = threading.Lock()
+
+def _read_rot() -> float | None:
+    with socket.create_connection((ROTCTLD_HOST, ROTCTLD_PORT), timeout=2.0) as s:
+        s.sendall(b"p\n")
+        buf = b""
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < 2.0:
+            s.settimeout(2.0 - (time.monotonic() - t0))
+            chunk = s.recv(64)
+            if not chunk:
+                break
+            buf += chunk
+            if len(buf.splitlines()) >= 1:
+                break
+        return float(buf.decode(errors="replace").splitlines()[0])
+
+def _rot_thread():
+    while True:
+        try:
+            az = _read_rot()
+            with _rot_lock:
+                _rot.update(az=az, online=True)
+        except Exception:
+            with _rot_lock:
+                _rot.update(az=0.0, online=False)
+        time.sleep(RIGCTLD_POLL_S)
+
+def current_rot() -> tuple[float, bool]:
+    """(azimuth_degrees, online)."""
+    with _rot_lock:
+        return _rot["az"], _rot["online"]
+
+def _rot_set(az: int) -> None:
+    def _do():
+        try:
+            with socket.create_connection((ROTCTLD_HOST, ROTCTLD_PORT), timeout=2.0) as s:
+                s.sendall(f"P {az:.1f} 0\n".encode())
+        except Exception:
+            pass
+    threading.Thread(target=_do, daemon=True).start()
 
 # ──────────────────────────────────────────────────────────────
 # Data model
@@ -663,6 +711,7 @@ def _handle_command(line: str, lb: LogBook, tname: str):
         print("  !undo                    — remove last QSO")
         print("  Alt+B                    — cycle band (rig offline)")
         print("  Alt+M                    — cycle mode (rig offline)")
+        print("  Alt+R                    — point rotator at selected bearing")
         print("  !help                    — this help")
         print("  Ctrl-D                   — save and exit")
 
@@ -773,6 +822,10 @@ def run(lb: LogBook, tname: str):
         else:
             parts.append(("", "  offline  │  "))
 
+        rot_az, rot_online = current_rot()
+        rot_str = f"{rot_az:.0f}°" if rot_online else "---"
+        parts.append(("", f"  ROT: {rot_str}  │  "))
+
         time_style = "bg:ansigreen fg:black" if _is_contest_time(now) else "bg:ansired fg:white"
         parts.append((time_style, f" {t} UTC "))
         return FormattedText(parts)
@@ -809,9 +862,16 @@ def run(lb: LogBook, tname: str):
         tokens = text.upper().split()
         if not tokens:
             return ""
-        call = tokens[0]
-        if not RE_CALL.match(call):
+        first = tokens[0]
+        if RE_LOC.match(first) and len(tokens) == 1:
+            dist = lb.dist(first)
+            bear = lb.bearing(first)
+            if dist:
+                return HTML(f"<ansigreen>  {dist} km  {bear}° {_bearing_arrow(bear)}  </ansigreen>")
             return ""
+        if not RE_CALL.match(first):
+            return ""
+        call = first
         band, mode, *_ = current_rig()
         locs = lb.loc_cache.get(call, [])
         geo = ""
@@ -955,6 +1015,32 @@ def run(lb: LogBook, tname: str):
             cur = _rig_manual.get("mode", "")
             _rig_manual["mode"] = _MODES[(_MODES.index(cur) + 1) % len(_MODES)] if cur in _MODES else _MODES[0]
         event.app.invalidate()
+
+    @kb.add('escape', 'r')
+    def _on_alt_r(event):
+        _, rot_online = current_rot()
+        if not rot_online:
+            return
+        loc = None
+        if _state['edit_idx'] is not None:
+            real_idx = len(lb.qsos) - 1 - _state['edit_idx']
+            if 0 <= real_idx < len(lb.qsos):
+                loc = lb.qsos[real_idx].loc
+        else:
+            try:
+                tokens = event.app.current_buffer.text.upper().split()
+                if tokens:
+                    first = tokens[0]
+                    if RE_LOC.match(first):
+                        loc = first
+                    elif RE_CALL.match(first):
+                        locs = lb.loc_cache.get(first, [])
+                        if locs:
+                            loc = locs[0]
+            except Exception:
+                pass
+        if loc:
+            _rot_set(lb.bearing(loc))
 
     @kb.add('enter', filter=has_completions)
     def _on_enter_completion(event):
@@ -1159,6 +1245,7 @@ def main():
 
     t = threading.Thread(target=_rig_thread, daemon=True)
     t.start()
+    threading.Thread(target=_rot_thread, daemon=True).start()
 
     print()
     print("Input: CALL RST NR [LOC]   e.g.  HA7NS 59 015   or  HA7NS 59 015 JN97WM")

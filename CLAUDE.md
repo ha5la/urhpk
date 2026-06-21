@@ -3,7 +3,7 @@
 ## What is this?
 Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
 - `on4kst_irc_bridge.py` – general ON4KST↔IRC bridge; use with irssi or any IRC client
-- `puskas_logger.py` – contest QSO logger with rigctld integration; exports EDI files
+- `puskas_logger.py` – contest QSO logger with rigctld + rotctld integration; exports EDI files
 - `puskas_harvester.py` – pre-contest data collector; fetches all stations → `~/.puskas/puskas-seen-stations.json`
 - `puskas_visualizer.py` – map and polar diagram from `~/.puskas/puskas-seen-stations.json`
 
@@ -277,10 +277,15 @@ These requirements must be preserved across all future changes:
 - **CW number abbreviation**: the `<NUMBER>` placeholder in CW macro templates must
   substitute `0→T` and `9→N` (e.g. serial 014 → `T14`). This is standard contest CW.
 - **Toolbar layout**: bottom toolbar shows QRG (e.g. `144.174 MHz`) when rig is online, or
-  `offline`, plus a colour-coded UTC clock. Clock background is **green** during the contest
+  `offline`, plus `ROT: 045°` (current rotator azimuth) or `ROT: ---` when rotctld is
+  offline, plus a colour-coded UTC clock. Clock background is **green** during the contest
   window (first Monday of each month, 18:00–20:00 CET/CEST) and **red** at all other times.
   Band and mode are intentionally absent from the toolbar — they live in the prompt prefix.
 - **Alt+B / Alt+M**: cycle band / mode through `_BANDS`/`_MODES` tuples when rig is offline.
+- **Alt+R**: point the rotator at the bearing of the currently selected station. In edit mode
+  (Up/Down to navigate) the bearing comes from the focused QSO's locator; in normal mode it
+  comes from the first known locator of the callsign being typed. Silently no-ops when rotctld
+  is offline or no bearing is available.
   When the rig is online these keys are **denied**: `_state['warn_until']` is set to
   `time.monotonic() + 2.0` and the toolbar flashes a yellow `rig online — Alt+B/M ignored`
   message until it expires. The rig is always the primary source; `_rig_manual` is only
@@ -349,6 +354,7 @@ HA7NS 599 014 JN97WM   → CW with locator
 - Backspace stops at column 0 (does nothing on empty input); edit mode via Up arrow only
 - Up/Down → navigate log in edit mode; window scrolls to keep focused row centred
 - Escape → exits edit mode (screen redraws immediately) and/or aborts CW transmission
+- Alt+R → point rotator at bearing of selected/typed station (no-op when rotctld offline)
 
 **CW macros** (F1–F7, requires rigctld):
 | Key | Template |
@@ -373,6 +379,13 @@ then mode (`SSB/CW/FM`) before entering the main loop. Ctrl-D exits cleanly.
 Mid-session rig disconnect uses `_rig_manual` values as fallback (set by the wizard or
 **Alt+B / Alt+M** during the session), so the wizard only appears once per session.
 
+**rotctld integration** (optional, no-op when rotctld not running):
+- Background poller (`_rot_thread`) queries `ROTCTLD_HOST:ROTCTLD_PORT` (4533) every
+  `RIGCTLD_POLL_S` (1 s) using the `p` command (returns azimuth and elevation)
+- Current azimuth shown in toolbar as `ROT: 045°` when online, `ROT: ---` when offline
+- **Alt+R** sends `P az 0` to rotctld to slew the rotator; fires in a background thread
+- To start rotctld: `rotctld -m MODEL -r /dev/ttyUSB0` (see Hamlib docs for MODEL number)
+
 **Contest rules**:
 - Reads band/QRG/mode from rigctld; falls back to Alt+B/Alt+M (or `!band`/`!mode`) if rig offline
 - RST defaults: `59` for SSB/FM, `599` for CW
@@ -396,7 +409,7 @@ uv run puskas_visualizer.py   # generate map and polar after the contest
 
 ## Testing
 ```
-uv run pytest tests/ -v     # 206 tests: parsing, IRC protocol, logger, harvester, integration
+uv run pytest tests/ -v     # 231 tests: parsing, IRC protocol, logger, harvester, integration
 uv run ruff check .         # linting: E/F/W/I rules; E501 and E701 intentionally ignored
 ```
 CI runs both on every push via GitHub Actions (`test.yml`).
