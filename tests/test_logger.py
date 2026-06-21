@@ -6,8 +6,8 @@ import pytest
 
 from puskas_logger import (
     QSO,
-    LogBook,
     RE_LOC,
+    LogBook,
     _band_summary,
     _bearing_arrow,
     _edi_qso_count,
