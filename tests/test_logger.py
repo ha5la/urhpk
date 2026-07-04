@@ -16,8 +16,11 @@ from puskas_logger import (
     _merge_loc_sources,
     _predict_nr,
     _print_recent,
+    _rig,
+    _rig_lock,
     _rot,
     _rot_lock,
+    _telemetry_record,
     _update_loc_cache,
     current_rot,
     haversine_km,
@@ -957,3 +960,32 @@ class TestLocatorOnlyBearing:
         dist = lb.dist("IO83RO")
         assert 290 < bear < 320    # northwest
         assert 1650 < dist < 1800
+
+
+class TestTelemetryRecord:
+    def _set_rig(self, qrg="144.174", mode="CW", online=True):
+        with _rig_lock:
+            _rig.update(band="2M", mode=mode, qrg=qrg, online=online)
+
+    def _set_rot(self, az=135.0, online=True):
+        with _rot_lock:
+            _rot.update(az=az, online=online)
+
+    def test_rig_and_rot_online(self):
+        import json
+        self._set_rig("144.174", "CW", online=True)
+        self._set_rot(135.0, online=True)
+        rec = json.loads(_telemetry_record(datetime(2026, 7, 4, 9, 8, 15, tzinfo=timezone.utc)))
+        assert rec["t"] == "2026-07-04T09:08:15Z"
+        assert rec["freq_hz"] == 144174000
+        assert rec["mode"] == "CW"
+        assert rec["az"] == 135.0
+
+    def test_rig_offline_fields_are_null(self):
+        import json
+        self._set_rig(online=False)
+        self._set_rot(online=False)
+        rec = json.loads(_telemetry_record(datetime(2026, 7, 4, 9, 8, 15, tzinfo=timezone.utc)))
+        assert rec["freq_hz"] is None
+        assert rec["mode"] is None
+        assert rec["az"] is None

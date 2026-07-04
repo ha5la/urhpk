@@ -274,6 +274,61 @@ def _rot_set(az: int) -> None:
             pass
     threading.Thread(target=_do, daemon=True).start()
 
+_clock_sync_notice: dict = {"msg": "", "until": 0.0}
+_clock_sync_lock = threading.Lock()
+
+def _clock_sync() -> None:
+    """Sleep to the next minute boundary, then push UTC time to rigctld.
+
+    The IC-9700 ignores the seconds field, so we sync on :00 for reliability.
+    Shows "waiting…" immediately so the operator knows the key was registered,
+    then the result for 5 s once the sync fires."""
+    def _do():
+        with _clock_sync_lock:
+            _clock_sync_notice["msg"]   = "clock sync: waiting for :00…"
+            _clock_sync_notice["until"] = time.monotonic() + 120.0
+        now = datetime.now(timezone.utc)
+        secs_to_next_minute = 60 - now.second - now.microsecond / 1e6
+        time.sleep(secs_to_next_minute)
+        now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+        ts = now.strftime("%Y-%m-%dT%H:%M:%S.000+00:00")
+        try:
+            with socket.create_connection((RIGCTLD_HOST, RIGCTLD_PORT), timeout=3.0) as s:
+                s.sendall(f"\\set_clock {ts}\n".encode())
+                resp = s.recv(64).decode(errors="replace").strip()
+                msg = f"clock synced {ts[11:16]}Z" if resp == "RPRT 0" else f"clock sync failed: {resp}"
+        except Exception as exc:
+            msg = f"clock sync failed: {exc}"
+        with _clock_sync_lock:
+            _clock_sync_notice["msg"]   = msg
+            _clock_sync_notice["until"] = time.monotonic() + 5.0
+    threading.Thread(target=_do, daemon=True).start()
+
+# ──────────────────────────────────────────────────────────────
+# Telemetry recorder — one JSON line per second to CWD
+# ──────────────────────────────────────────────────────────────
+
+def _telemetry_record(now: datetime) -> str:
+    """Build one telemetry JSON line from the current rig/rotator state."""
+    _, mode, qrg, rig_online = current_rig()
+    az, rot_online = current_rot()
+    return json.dumps({
+        "t":       now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "freq_hz": round(float(qrg) * 1e6) if rig_online and qrg else None,
+        "mode":    mode                     if rig_online          else None,
+        "az":      round(az, 1)             if rot_online          else None,
+    })
+
+def _telemetry_thread(path: Path) -> None:
+    with open(path, "a") as fh:
+        while True:
+            try:
+                fh.write(_telemetry_record(datetime.now(timezone.utc)) + "\n")
+                fh.flush()
+            except Exception:
+                pass
+            time.sleep(1.0)
+
 # ──────────────────────────────────────────────────────────────
 # Data model
 # ──────────────────────────────────────────────────────────────
@@ -712,6 +767,7 @@ def _handle_command(line: str, lb: LogBook, tname: str):
         print("  Alt+B                    — cycle band (rig offline)")
         print("  Alt+M                    — cycle mode (rig offline)")
         print("  Alt+R                    — point rotator at selected bearing")
+        print("  Alt+T                    — sync radio clock to system UTC")
         print("  !help                    — this help")
         print("  Ctrl-D                   — save and exit")
 
@@ -826,8 +882,14 @@ def run(lb: LogBook, tname: str):
         rot_str = f"{rot_az:.0f}°" if rot_online else "---"
         parts.append(("", f"  ROT: {rot_str}  │  "))
 
+        with _clock_sync_lock:
+            sync_msg   = _clock_sync_notice["msg"]
+            sync_until = _clock_sync_notice["until"]
+        if time.monotonic() < sync_until:
+            parts.append(("bg:ansigreen fg:black", f"  {sync_msg}  │  "))
+
         time_style = "bg:ansigreen fg:black" if _is_contest_time(now) else "bg:ansired fg:white"
-        parts.append((time_style, f" {t} UTC "))
+        parts.append((time_style, f" {t}Z "))
         return FormattedText(parts)
 
     def _qso_to_input(q: QSO) -> str:
@@ -1042,6 +1104,10 @@ def run(lb: LogBook, tname: str):
         if loc:
             _rot_set(lb.bearing(loc))
 
+    @kb.add('escape', 't')
+    def _on_alt_t(_event):
+        _clock_sync()
+
     @kb.add('enter', filter=has_completions)
     def _on_enter_completion(event):
         buf = event.app.current_buffer
@@ -1055,6 +1121,7 @@ def run(lb: LogBook, tname: str):
         completer=CallCompleter(lb.loc_cache),
         key_bindings=kb,
         complete_while_typing=False,
+        enable_history_search=False,
     )
 
     try:
@@ -1093,7 +1160,7 @@ def run(lb: LogBook, tname: str):
             result = session.prompt(_prompt_msg, bottom_toolbar=_toolbar,
                                     rprompt=_rprompt,
                                     style=DynamicStyle(_get_input_style),
-                                    refresh_interval=1.0,
+                                    refresh_interval=0.1,
                                     default=default,
                                     pre_run=lambda: setattr(get_app(), 'ttimeoutlen', 0.05))
         except KeyboardInterrupt:
@@ -1246,6 +1313,9 @@ def main():
     t = threading.Thread(target=_rig_thread, daemon=True)
     t.start()
     threading.Thread(target=_rot_thread, daemon=True).start()
+    _telem_path = Path(f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{my_call}-telemetry.jsonl")
+    threading.Thread(target=_telemetry_thread, args=(_telem_path,), daemon=True).start()
+    print(f"Telemetry: {_telem_path}")
 
     print()
     print("Input: CALL RST NR [LOC]   e.g.  HA7NS 59 015   or  HA7NS 59 015 JN97WM")
