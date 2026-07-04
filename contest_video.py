@@ -1,0 +1,531 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["numpy"]
+# ///
+"""Produce an annotated CW contest video from a recording + EDI log.
+
+Given a directory of timestamped WAV segments (split on RX/TX switches, as
+recorded during the contest) and the EDI log for the same round, this builds a
+YouTube-ready MP4 with:
+
+  * a scrolling audio spectrogram (SDR-style waterfall) as background
+  * a live CW decode ticker, synced to the audio
+  * a panel showing the current QSO from the log
+
+Everything is emitted as one ASS subtitle file and burned in a single ffmpeg
+pass -- no frame-by-frame rendering.
+
+Usage:
+    uv run contest_video.py RECORDING_DIR EDI_FILE [-o OUT.mp4]
+
+The WAV filenames must start with a `YYYYMMDD_HHMMSS` local-time stamp (the
+format the recorder writes). Segments are concatenated in filename order; the
+audio timeline is the sum of segment durations, and wall-clock time (from the
+filenames) is used only to line QSOs up against the audio. The EDI QSO times
+are UTC; the UTC->local offset is derived automatically from the data, so DST
+is handled without configuration.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+import wave
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+
+import numpy as np
+
+# ---------------------------------------------------------------------------
+# CW decoding
+# ---------------------------------------------------------------------------
+
+MORSE = {
+    '.-': 'A', '-...': 'B', '-.-.': 'C', '-..': 'D', '.': 'E', '..-.': 'F',
+    '--.': 'G', '....': 'H', '..': 'I', '.---': 'J', '-.-': 'K', '.-..': 'L',
+    '--': 'M', '-.': 'N', '---': 'O', '.--.': 'P', '--.-': 'Q', '.-.': 'R',
+    '...': 'S', '-': 'T', '..-': 'U', '...-': 'V', '.--': 'W', '-..-': 'X',
+    '-.--': 'Y', '--..': 'Z', '-----': '0', '.----': '1', '..---': '2',
+    '...--': '3', '....-': '4', '.....': '5', '-....': '6', '--...': '7',
+    '---..': '8', '----.': '9', '.-.-.-': '.', '--..--': ',', '..--..': '?',
+    '-..-.': '/', '-...-': '=', '.-.-.': '+', '-....-': '-', '-.-.--': '!',
+}
+
+ENV_FS = 200        # envelope sample rate (Hz) after demodulation
+
+# A segment's decode is trusted (shown in the ticker) only if it looks like a
+# real over rather than band noise. The long "listening / calling CQ" stretches
+# between QSOs carry many overlapping signals and noise at the CW pitch, which a
+# single-tone decoder turns into gibberish; these three gates reject them while
+# keeping every genuine exchange.
+MAX_OVER_S = 30.0    # a real over is short; long segments are listening periods
+MIN_SNR_DB = 20.0    # reject weak noise-only segments
+MIN_QUALITY = 0.5    # reject text dominated by isolated single letters (noise)
+MAX_DOMINANCE = 0.4  # reject text where one letter dominates (chopped carrier)
+
+
+def _quality(text: str) -> float:
+    """Fraction of whitespace tokens longer than one char. Noise decodes to a
+    stream of single letters (E/T/I/S); real overs to callsigns and reports."""
+    toks = [t for t in text.split(' ') if t]
+    if not toks:
+        return 0.0
+    return 1.0 - sum(1 for t in toks if len(t) == 1) / len(toks)
+
+
+def _dominance(text: str) -> float:
+    """Share of the most common non-space character. A chopped steady carrier
+    decodes to a run of one letter (TTTTT / EEEEE); real text is diverse."""
+    chars = [c for c in text if c != ' ']
+    if not chars:
+        return 1.0
+    return max(chars.count(c) for c in set(chars)) / len(chars)
+
+
+def gate_events(dur: float, events: list["CharEvent"], snr: float) -> list["CharEvent"]:
+    """Return events if the segment is a trustworthy over, else []."""
+    text = ''.join(e.ch for e in events)
+    if (dur < MAX_OVER_S and snr >= MIN_SNR_DB
+            and _quality(text) >= MIN_QUALITY
+            and _dominance(text) <= MAX_DOMINANCE):
+        return events
+    return []
+
+
+@dataclass
+class CharEvent:
+    t: float   # seconds, relative to segment start
+    ch: str
+
+
+def _envelope(x: np.ndarray, sr: int, pitch: float) -> tuple[np.ndarray, float]:
+    """Complex-demodulate at `pitch` and return the low-rate magnitude envelope."""
+    t = np.arange(len(x)) / sr
+    iq = x * np.exp(-2j * np.pi * pitch * t)
+    win = max(1, int(sr / ENV_FS))
+    env = np.abs(np.convolve(iq, np.ones(win) / win, 'same'))
+    return env[::win], sr / win
+
+
+def decode_segment(path: str, pitch: float = 600.0) -> tuple[list[CharEvent], float]:
+    """Decode one WAV segment into timed characters and its SNR in dB.
+
+    Returns (events, snr_db). Events is empty when the segment carries no
+    keyed CW (flat envelope / silence)."""
+    w = wave.open(path)
+    sr = w.getframerate()
+    x = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(float)
+    w.close()
+    if len(x) < sr * 0.5:
+        return [], 0.0
+
+    env, efs = _envelope(x, sr, pitch)
+    floor = np.percentile(env, 25)
+    peak = np.percentile(env, 95)
+    snr = 20.0 * float(np.log10((peak + 1) / (floor + 1)))
+    if peak < floor * 1.6:
+        # flat envelope -> steady tone / noise, not keyed CW: skip
+        return [], snr
+    thr = floor + 0.4 * (peak - floor)
+    on = env > thr
+
+    # run-length encode on/off
+    runs: list[tuple[bool, float, int]] = []  # (is_on, duration_s, start_idx)
+    i = 0
+    while i < len(on):
+        j = i
+        while j < len(on) and on[j] == on[i]:
+            j += 1
+        runs.append((bool(on[i]), (j - i) / efs, i))
+        i = j
+
+    ons = [d for s, d, _ in runs if s]
+    if len(ons) < 3:
+        return [], snr
+    # dit = median of the shorter (dit) cluster of ON durations. Split dits from
+    # dahs at the midpoint between the robust min/max so the estimate holds even
+    # when an over is dah-heavy (a plain median lands between dit and dah and
+    # collapses the two).
+    lo = float(np.percentile(ons, 10))
+    hi = float(np.percentile(ons, 90))
+    dits = [d for d in ons if d <= (lo + hi) / 2] or ons
+    dit = float(np.median(dits))
+    if dit <= 0:
+        return [], snr
+
+    events: list[CharEvent] = []
+    sym = ''
+    sym_start = 0.0
+    for s, d, idx in runs:
+        t0 = idx / efs
+        u = d / dit
+        if s:
+            if not sym:
+                sym_start = t0
+            sym += '.' if u < 2.0 else '-'
+        else:
+            if u >= 2.0 and sym:          # end of character
+                ch = MORSE.get(sym, '')
+                if ch:
+                    events.append(CharEvent(sym_start, ch))
+                sym = ''
+            if u >= 5.0:                  # word gap
+                if events and events[-1].ch != ' ':
+                    events.append(CharEvent(t0, ' '))
+    if sym:
+        ch = MORSE.get(sym, '')
+        if ch:
+            events.append(CharEvent(sym_start, ch))
+    return events, snr
+
+
+# ---------------------------------------------------------------------------
+# Timeline + EDI
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Segment:
+    path: str
+    wall: datetime      # local wall-clock start (from filename)
+    dur: float          # seconds (full recorded duration)
+    audio_t: float      # start offset in the output video (seconds)
+    events: list[CharEvent] = field(default_factory=list)
+    eff_dur: float | None = None  # trimmed duration in output; None = use full dur
+
+
+def _eff(s: Segment) -> float:
+    return s.dur if s.eff_dur is None else s.eff_dur
+
+
+@dataclass
+class Qso:
+    dt: datetime        # UTC (from EDI)
+    call: str
+    rst_s: str
+    nr_s: str
+    rst_r: str
+    nr_r: str
+    loc: str
+    pts: int
+    dup: bool
+
+
+def scan_segments(recdir: str) -> list[Segment]:
+    segs: list[Segment] = []
+    audio_t = 0.0
+    files = sorted(f for f in os.listdir(recdir) if f.lower().endswith('.wav'))
+    for f in files:
+        try:
+            wall = datetime.strptime(f[:15], '%Y%m%d_%H%M%S')
+        except ValueError:
+            continue
+        p = os.path.join(recdir, f)
+        w = wave.open(p)
+        dur = w.getnframes() / w.getframerate()
+        w.close()
+        segs.append(Segment(p, wall, dur, audio_t))
+        audio_t += dur
+    return segs
+
+
+GAP_KEEP_S = 3.0  # seconds kept from each silent gap when --skip-gaps is used
+
+
+def remap_audio_t(segs: list[Segment]) -> None:
+    """Shorten gap segments to GAP_KEEP_S and recompute audio_t for all segments.
+
+    A gap segment is one with no trusted decoded events and a duration longer
+    than MAX_OVER_S — i.e. a listening / calling-CQ stretch between QSOs.
+    Call this *after* gate_events has been applied to s.events.
+    """
+    t = 0.0
+    for s in segs:
+        s.audio_t = t
+        if not s.events and s.dur > MAX_OVER_S:
+            s.eff_dur = GAP_KEEP_S
+        t += _eff(s)
+
+
+def parse_edi(path: str) -> tuple[str, str, list[Qso]]:
+    mycall, mywwl = '', ''
+    qsos: list[Qso] = []
+    in_records = False
+    for line in open(path, encoding='utf-8', errors='replace'):
+        line = line.rstrip('\n')
+        if line.startswith('PCall='):
+            mycall = line.split('=', 1)[1].strip()
+        elif line.startswith('PWWLo='):
+            mywwl = line.split('=', 1)[1].strip()
+        elif line.startswith('[QSORecords'):
+            in_records = True
+            continue
+        elif line.startswith('['):
+            in_records = False
+        elif in_records and line:
+            f = line.split(';')
+            if len(f) < 11:
+                continue
+            dt = datetime.strptime(f[0] + f[1], '%y%m%d%H%M')
+            try:
+                pts = int(f[10]) if f[10] else 0
+            except ValueError:
+                pts = 0
+            dup = len(f) > 13 and f[13].strip().upper() == 'D'
+            qsos.append(Qso(dt, f[2], f[4], f[5], f[6], f[7], f[9], pts, dup))
+    return mycall, mywwl, qsos
+
+
+def audio_time_for(wall: datetime, segs: list[Segment]) -> float:
+    """Map a local wall-clock time to a position in the output video."""
+    for s in segs:
+        if wall < s.wall:
+            return s.audio_t
+        if wall < s.wall + timedelta(seconds=s.dur):
+            offset = min((wall - s.wall).total_seconds(), _eff(s))
+            return s.audio_t + offset
+    return segs[-1].audio_t + _eff(segs[-1])
+
+
+def _utc_at(t: float, segs: list[Segment], offset_h: int) -> datetime | None:
+    """Return the UTC time corresponding to video position `t`."""
+    for s in segs:
+        if s.audio_t <= t < s.audio_t + _eff(s):
+            local = s.wall + timedelta(seconds=(t - s.audio_t))
+            return local - timedelta(hours=offset_h)
+    return None
+
+
+def derive_utc_offset(segs: list[Segment], qsos: list[Qso]) -> int:
+    """Integer-hour offset such that qso_utc + offset ~= wav local time."""
+    if not qsos:
+        return 0
+    wav_mid = segs[0].wall + timedelta(
+        seconds=(segs[-1].audio_t + segs[-1].dur) / 2)
+    qso_mid = qsos[0].dt + (qsos[-1].dt - qsos[0].dt) / 2
+    return round((wav_mid - qso_mid).total_seconds() / 3600)
+
+
+# ---------------------------------------------------------------------------
+# ASS generation
+# ---------------------------------------------------------------------------
+
+RESOLUTIONS = {'1080p': (1920, 1080), '720p': (1280, 720)}
+VIS_CHARS = 84          # characters kept in the decode ticker window
+CPL = 42                # characters per ticker line
+LEAD = 60.0             # show a QSO panel this many seconds before its log time
+
+
+def _ass_time(t: float) -> str:
+    t = max(0.0, t)
+    h = int(t // 3600)
+    m = int((t % 3600) // 60)
+    s = t % 60
+    return f"{h:d}:{m:02d}:{s:05.2f}"
+
+
+def _wrap(text: str, cpl: int, keep: int) -> str:
+    lines: list[str] = []
+    cur = ''
+    for tok in text.split(' '):
+        piece = tok if not cur else cur + ' ' + tok
+        if len(piece) > cpl and cur:
+            lines.append(cur)
+            cur = tok
+        else:
+            cur = piece
+    if cur:
+        lines.append(cur)
+    return '\\N'.join(lines[-keep:])
+
+
+def _esc(s: str) -> str:
+    return s.replace('\\', '\\\\').replace('{', '(').replace('}', ')')
+
+
+def build_ass(segs: list[Segment], qsos: list[Qso], mycall: str, mywwl: str,
+              contest: str, offset_h: int, W: int, H: int) -> str:
+    sx = W / 1920  # scale factor from the 1080p reference layout
+    fs_big = int(58 * sx)
+    fs_panel = int(46 * sx)
+    fs_hdr = int(40 * sx)
+    fs_clk = int(34 * sx)
+
+    head = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: {W}
+PlayResY: {H}
+WrapStyle: 2
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Ticker,DejaVu Sans Mono,{fs_big},&H00FFFF66,&H000000FF,&H00000000,&H8C100C08,-1,0,0,0,100,100,0,0,3,10,0,5,60,60,0,1
+Style: Panel,DejaVu Sans Mono,{fs_panel},&H00FFFFFF,&H000000FF,&H00000000,&HC8202018,-1,0,0,0,100,100,0,0,3,6,0,1,60,60,80,1
+Style: PanelDup,DejaVu Sans Mono,{fs_panel},&H007070FF,&H000000FF,&H00000000,&HC8101040,-1,0,0,0,100,100,0,0,3,6,0,1,60,60,80,1
+Style: Header,DejaVu Sans Mono,{fs_hdr},&H0000FFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,2,8,60,60,40,1
+Style: Clock,DejaVu Sans Mono,{fs_clk},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,3,4,0,9,60,60,40,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+    lines: list[str] = [head]
+
+    def ev(start, end, style, text, layer=0):
+        lines.append(
+            f"Dialogue: {layer},{_ass_time(start)},{_ass_time(end)},"
+            f"{style},,0,0,0,,{text}")
+
+    total = segs[-1].audio_t + _eff(segs[-1]) if segs else 0.0
+
+    # --- static header (callsign / contest) ---
+    ev(0, total, 'Header', f"{_esc(mycall)}  {_esc(mywwl)}   {_esc(contest)}")
+
+    # --- decode ticker: rolling window, flushed at each QSO panel transition ---
+    qso_starts = sorted(
+        max(0.0, audio_time_for(q.dt + timedelta(hours=offset_h), segs) - LEAD)
+        for q in qsos
+    )
+    stream: list[tuple[float, str]] = []
+    for s in segs:
+        if stream and s.events:
+            stream.append((s.audio_t, ' '))   # gap between overs
+        for e in s.events:
+            stream.append((s.audio_t + e.t, e.ch))
+    transcript = ''
+    flush_idx = 0
+    for i, (t, ch) in enumerate(stream):
+        while flush_idx < len(qso_starts) and t >= qso_starts[flush_idx]:
+            transcript = ''
+            flush_idx += 1
+        transcript += ch
+        vis = transcript[-VIS_CHARS:]
+        end = stream[i + 1][0] if i + 1 < len(stream) else total
+        if end <= t:
+            continue
+        ev(t, end, 'Ticker', _wrap(vis, CPL, 2))
+
+    # --- UTC clock: one event per second, top-right corner ---
+    for sec in range(int(total) + 1):
+        utc = _utc_at(float(sec), segs, offset_h)
+        if utc:
+            ev(float(sec), float(sec) + 1.0, 'Clock',
+               utc.strftime('%Y-%m-%d %H:%M:%SZ'))
+
+    # --- QSO panels ---
+    for i, q in enumerate(qsos):
+        local = q.dt + timedelta(hours=offset_h)
+        start = max(0.0, audio_time_for(local, segs) - LEAD)
+        if i + 1 < len(qsos):
+            nxt = qsos[i + 1].dt + timedelta(hours=offset_h)
+            end = max(start + 1.0, audio_time_for(nxt, segs) - LEAD)
+        else:
+            end = total
+        tag = '  \\N{\\c&H7070FF&}*** DUPE (0 pts) ***' if q.dup else ''
+        style = 'PanelDup' if q.dup else 'Panel'
+        txt = (f"QSO {i + 1}/{len(qsos)}   {q.dt.strftime('%H:%MZ')}"
+               f"\\N{_esc(q.call)}   {_esc(q.loc)}   {q.pts} km"
+               f"\\NTX {_esc(q.rst_s)} {_esc(q.nr_s)}"
+               f"    RX {_esc(q.rst_r)} {_esc(q.nr_r)}{tag}")
+        ev(start, end, style, txt, layer=1)
+
+    return ''.join(x if x.endswith('\n') else x + '\n' for x in lines)
+
+
+# ---------------------------------------------------------------------------
+# ffmpeg
+# ---------------------------------------------------------------------------
+
+def concat_audio(segs: list[Segment], out_wav: str) -> None:
+    listfile = out_wav + '.txt'
+    with open(listfile, 'w') as fh:
+        for s in segs:
+            fh.write(f"file '{os.path.abspath(s.path)}'\n")
+            if s.eff_dur is not None:
+                fh.write(f"outpoint {s.eff_dur:.6f}\n")
+    subprocess.run(
+        ['ffmpeg', '-y', '-hide_banner', '-loglevel', 'error',
+         '-f', 'concat', '-safe', '0', '-i', listfile, '-c', 'copy', out_wav],
+        check=True)
+    os.remove(listfile)
+
+
+def render(wav: str, ass: str, out: str, W: int, H: int) -> None:
+    ass_esc = ass.replace('\\', '\\\\').replace(':', '\\:').replace("'", "\\'")
+    # Full-screen scrolling waterfall, dimmed to ~half luma so it reads as an
+    # ambient background and the text stays crisp on top. overlap=0.8 makes it
+    # scroll fast enough to fill the frame within the first few seconds.
+    fchain = (
+        f"[0:a]showspectrum=s={W}x{H}:mode=combined:slide=scroll:overlap=0.8:"
+        f"color=intensity:scale=cbrt:fscale=log:saturation=1.6,"
+        f"lutyuv=y=val*0.42,format=yuv420p,fps=30[bg];"
+        f"[bg]subtitles='{ass_esc}':fontsdir=/usr/share/fonts[v]"
+    )
+    cmd = ['ffmpeg', '-y', '-hide_banner', '-stats', '-loglevel', 'warning',
+           '-i', wav, '-filter_complex', fchain,
+           '-map', '[v]', '-map', '0:a',
+           '-c:v', 'libx264', '-preset', 'fast', '-crf', '21',
+           '-c:a', 'aac', '-b:a', '96k', '-shortest', out]
+    subprocess.run(cmd, check=True)
+
+
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('recdir', help='directory of timestamped WAV segments')
+    ap.add_argument('edi', help='EDI log for the same round')
+    ap.add_argument('-o', '--out', default='contest_video.mp4')
+    ap.add_argument('--pitch', type=float, default=600.0, help='CW tone Hz')
+    ap.add_argument('--res', choices=RESOLUTIONS, default='1080p')
+    ap.add_argument('--contest', default='URH OB 2026 - CW')
+    ap.add_argument('--skip-gaps', action='store_true',
+                    help=f'trim silent gaps between QSOs to {GAP_KEEP_S:.0f}s each')
+    ap.add_argument('--keep-ass', action='store_true',
+                    help='keep intermediate .ass/.wav for inspection')
+    args = ap.parse_args()
+
+    W, H = RESOLUTIONS[args.res]
+    segs = scan_segments(args.recdir)
+    if not segs:
+        sys.exit(f"no timestamped WAVs found in {args.recdir}")
+    print(f"{len(segs)} segments, {segs[-1].audio_t + segs[-1].dur:.0f}s audio")
+
+    print("decoding CW ...")
+    for s in segs:
+        events, snr = decode_segment(s.path, args.pitch)
+        s.events = gate_events(s.dur, events, snr)
+    decoded = sum(len(s.events) for s in segs)
+    print(f"  {decoded} characters from "
+          f"{sum(1 for s in segs if s.events)} trusted overs")
+
+    if args.skip_gaps:
+        remap_audio_t(segs)
+        total = segs[-1].audio_t + _eff(segs[-1])
+        print(f"  skip-gaps: {total:.0f}s video (was {segs[-1].audio_t + segs[-1].dur:.0f}s)")
+
+    mycall, mywwl, qsos = parse_edi(args.edi)
+    offset_h = derive_utc_offset(segs, qsos)
+    print(f"{mycall} {mywwl}: {len(qsos)} QSOs, UTC+{offset_h} local")
+
+    ass_text = build_ass(segs, qsos, mycall, mywwl, args.contest,
+                         offset_h, W, H)
+    ass_path = os.path.splitext(args.out)[0] + '.ass'
+    with open(ass_path, 'w') as fh:
+        fh.write(ass_text)
+
+    wav = os.path.splitext(args.out)[0] + '.concat.wav'
+    print("concatenating audio ...")
+    concat_audio(segs, wav)
+    print("rendering (this takes a while) ...")
+    render(wav, ass_path, args.out, W, H)
+
+    if not args.keep_ass:
+        os.remove(wav)
+        os.remove(ass_path)
+    print(f"wrote {args.out}")
+
+
+if __name__ == '__main__':
+    main()

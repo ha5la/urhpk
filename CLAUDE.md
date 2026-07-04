@@ -196,6 +196,43 @@ uv run puskas_visualizer.py [CALLSIGN LOCATOR]
 - Missed stations (in seen_stations but not worked) shown in red on map
 - Dependencies: `folium`, `matplotlib`, `numpy`
 
+## contest_video.py – Annotated CW contest video
+
+Turns a CW contest recording plus its EDI log into a YouTube-ready MP4 with a
+scrolling audio waterfall, a live CW-decode ticker, and a panel showing the
+current QSO. Built for reuse across future contests recorded the same way.
+
+```
+uv run contest_video.py RECORDING_DIR EDI_FILE [-o OUT.mp4]
+```
+- Dependencies: `numpy` (uv script header) + `ffmpeg` on PATH
+- **Input**: a directory of WAV segments named `YYYYMMDD_HHMMSS...wav` (local
+  time), split on RX/TX switches, plus the EDI log for the same round. The
+  recorder splits continuously, so segments are contiguous — the audio timeline
+  is the sum of segment durations; filename wall-clock is used only to line QSOs
+  against the audio. Segments must share one sample rate/format (concatenated
+  with `ffmpeg -f concat -c copy`).
+- **CW decode is per-segment**: each WAV is one over at one speed, so a
+  complex-demodulate-at-`--pitch` (default 600 Hz) envelope decoder with
+  per-segment adaptive dit estimation is robust and yields absolute per-character
+  timestamps for sync. My own keying and the direct exchanges decode cleanly.
+- **Trust gate** (`gate_events`): the long "listening / calling CQ" stretches
+  between QSOs carry overlapping signals and noise at the CW pitch that decode to
+  gibberish. A segment's decode is shown only if it is short (`< MAX_OVER_S`),
+  loud enough (`>= MIN_SNR_DB`), word-shaped (`_quality >= MIN_QUALITY`), and not
+  a chopped steady carrier (`_dominance <= MAX_DOMINANCE`). This keeps every real
+  over and rejects the noise. Tune these four constants, not the decoder, if a
+  future recording gates too aggressively/loosely.
+- **UTC offset is derived**, not hardcoded: EDI times are UTC, WAV filenames are
+  local; `derive_utc_offset` rounds the span-midpoint difference to whole hours,
+  so DST is handled automatically.
+- **Rendering is one ffmpeg pass**: everything (ticker, QSO panels, header) is an
+  ASS subtitle file burned over an `showspectrum` waterfall (dimmed to ~0.42 luma
+  so text stays readable). No frame-by-frame rendering. The waterfall fills the
+  frame within the first ~80 s, then stays full.
+- The video keeps the recording's full length; long listening gaps play with the
+  last decoded over lingering in the ticker.
+
 ## puskas_logger.py – UX requirements (non-negotiable)
 
 These requirements must be preserved across all future changes:

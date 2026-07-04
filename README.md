@@ -15,6 +15,7 @@ Amateur radio contest toolset for the Puskás URH Kupa, plus a general-purpose
 | `puskas_logger.py` | Contest QSO logger with rigctld integration; exports EDI files |
 | `puskas_harvester.py` | Pre-contest data collector; fetches all stations → `puskas-seen-stations.json` |
 | `puskas_visualizer.py` | Map and polar diagram from `puskas-seen-stations.json` |
+| `contest_video.py` | Annotated CW contest video from a timestamped recording + EDI log |
 
 ## Quick start — IRC bridge
 
