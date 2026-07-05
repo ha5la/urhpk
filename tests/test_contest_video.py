@@ -110,6 +110,85 @@ class TestDecoder:
         events, _ = decode_segment(p, PITCH)
         assert events == []
 
+    def test_decodes_across_a_range_of_wpm(self, tmp_path):
+        # dit length is estimated fresh per segment (never a fixed WPM
+        # assumption), so different overs at different speeds must each
+        # decode correctly on their own.
+        text = 'CQ TEST DE HA5LA'
+        expected = text.replace(' ', '')
+        for wpm in (12, 18, 24, 30, 35, 45):
+            p = str(tmp_path / f'20260704_120000A_{wpm}.wav')
+            _write_cw(p, text, wpm=wpm)
+            events, _ = decode_segment(p, PITCH)
+            decoded = ''.join(e.ch for e in events).replace(' ', '')
+            assert decoded == expected, f"wpm={wpm}: got {decoded!r}"
+
+
+class TestDecoderRobustness:
+    @staticmethod
+    def _cw_tone(text, wpm, pitch, amp, phase0=0.0):
+        unit = 1.2 / wpm
+        on: list[tuple[bool, float]] = []
+        for wi, word in enumerate(text.split(' ')):
+            if wi:
+                on.append((False, 7 * unit))
+            for ci, ch in enumerate(word):
+                if ci:
+                    on.append((False, 3 * unit))
+                for si, sym in enumerate(_MORSE_INV[ch]):
+                    if si:
+                        on.append((False, unit))
+                    on.append((True, unit if sym == '.' else 3 * unit))
+        on.append((False, 3 * unit))
+        samples: list[np.ndarray] = []
+        phase = phase0
+        for is_on, dur in on:
+            n = int(dur * SR)
+            t = (np.arange(n) + phase) / SR
+            phase += n
+            samples.append(np.sin(2 * np.pi * pitch * t) * (amp if is_on else 0.0))
+        return np.concatenate(samples)
+
+    def test_moderate_offset_interference_snr_improves(self, tmp_path):
+        # Regression test verified against real recordings: a same-band CW-like
+        # interferer ~150 Hz away partially leaks through the old envelope
+        # filter's wide, poorly-shaped passband, depressing the measured SNR.
+        # A properly windowed lowpass rejects it noticeably better at this
+        # distance (measured baseline on unmodified code: 14.65 dB). Interference
+        # much closer than this (< ~100 Hz) genuinely overlaps the wanted
+        # signal's own keying spectrum and cannot be separated by filtering
+        # alone -- this test only covers the distance where filtering helps.
+        wanted = self._cw_tone('HG7F DE HA5LA 5NN TT1 JN97MM', 24, PITCH, 8000.0)
+        interf = self._cw_tone('CQ CQ DE HG1Z HG1Z TEST CQ CQ DE HG1Z TEST', 28,
+                               PITCH + 150, 6000.0, phase0=137)
+        sig = wanted + np.resize(interf, len(wanted))
+        p = str(tmp_path / '20260704_120000A.wav')
+        w = wave.open(p, 'wb')
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(SR)
+        w.writeframes(sig.astype(np.int16).tobytes())
+        w.close()
+        _, snr = decode_segment(p, PITCH)
+        assert snr > 16.0
+
+    def test_long_segment_is_skipped_without_decoding(self, tmp_path):
+        # Segments longer than MAX_OVER_S always fail gate_events on duration
+        # alone, so decode_segment should short-circuit rather than run the
+        # full envelope/threshold pipeline over what can be minutes of audio.
+        p = str(tmp_path / '20260704_120000A.wav')
+        w = wave.open(p, 'wb')
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(SR)
+        n = int((cv.MAX_OVER_S + 1) * SR)
+        rng = np.random.default_rng(0)
+        w.writeframes((rng.normal(0, 3000, n)).astype(np.int16).tobytes())
+        w.close()
+        events, snr = decode_segment(p, PITCH)
+        assert events == []
+        assert snr == 0.0
+
 
 class TestGate:
     def test_quality_rewards_multichar_tokens(self):

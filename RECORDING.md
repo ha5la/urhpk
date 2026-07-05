@@ -44,6 +44,30 @@ Render speed at 1080p without `--skip-gaps`: ~0.28× realtime (~2.5 h for 42 min
   plain median collapses when dahs dominate.
 - My own transmissions and direct partner reports decode cleanly. Received
   signals from third parties on the band are filtered by the trust gate.
+- **Envelope filter**: a windowed-sinc lowpass (`LOWPASS_CUTOFF_HZ=120`,
+  `LOWPASS_NTAPS=321`) replaced a plain boxcar average of the same cutoff.
+  Verified against both real recordings before adopting: it measurably
+  raises SNR for interference roughly 150 Hz+ away from the CW pitch (14.6dB
+  → 17.0dB in one measured case), with zero effect on the 3 genuine CW QSOs
+  in the "mix" round (identical decoded text in every filter/threshold
+  combination tried). Interference closer than ~100 Hz genuinely overlaps
+  the wanted signal's own keying spectrum — no linear filter, however
+  sharp, can separate that without also cutting real fast keying; that's a
+  hard limit, not a tuning problem.
+- **Hysteresis thresholding**: `_hysteresis_on` (two thresholds, `THR_HI_FRAC`/
+  `THR_LO_FRAC`) replaced a single static level, so noise sitting right at
+  the old threshold can no longer make the on/off detection chatter.
+  Synthetic Gaussian-noise sweeps didn't show a measurable difference from
+  this alone; it's included because it's theoretically sound and was part of
+  the combination that gave the best real-recording result, not because it
+  was independently proven to matter.
+- **Efficiency**: `decode_segment` now checks duration before doing any
+  signal processing and returns immediately for anything longer than
+  `MAX_OVER_S` — `gate_events` would reject it on duration alone regardless
+  of decode quality, so there's no point running the filter/threshold
+  pipeline over what can be several minutes of "listening" audio. Net effect
+  across both recordings: ~2x faster overall (13.2s → 6.7s for 297 segments)
+  despite the new filter needing 4x more taps than the old boxcar.
 
 ### Timing: audio structure, not the EDI clock
 

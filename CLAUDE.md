@@ -229,6 +229,15 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [-o OUT.mp4]
   complex-demodulate-at-`--pitch` (default 600 Hz) envelope decoder with
   per-segment adaptive dit estimation is robust and yields absolute per-character
   timestamps for sync. My own keying and the direct exchanges decode cleanly.
+  `decode_segment` skips segments longer than `MAX_OVER_S` before doing any
+  signal processing, since `gate_events` would reject them on duration alone
+  regardless — this alone roughly halved total decode time on real recordings.
+- **Envelope filter/threshold constants** (`LOWPASS_CUTOFF_HZ`, `LOWPASS_NTAPS`,
+  `THR_HI_FRAC`/`THR_LO_FRAC`): a windowed-sinc lowpass (`_lowpass_kernel`) plus
+  hysteresis thresholding (`_hysteresis_on`), verified against real recordings to
+  raise SNR for moderate-offset interference (~150 Hz+) with no effect on
+  genuine nearby QSOs. See RECORDING.md's "CW decoder behaviour" section for
+  the full before/after numbers and the hard limit on closer-in interference.
 - **Trust gate** (`gate_events`): the long "listening / calling CQ" stretches
   between QSOs carry overlapping signals and noise at the CW pitch that decode to
   gibberish. A segment's decode is shown only if it is short (`< MAX_OVER_S`),

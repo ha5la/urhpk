@@ -54,6 +54,12 @@ MORSE = {
 }
 
 ENV_FS = 200        # envelope sample rate (Hz) after demodulation
+LOWPASS_CUTOFF_HZ = 120.0  # envelope filter cutoff -- covers real CW keying bandwidth
+LOWPASS_NTAPS = 321        # windowed-sinc length; longer than the old boxcar for a
+                           # much sharper stopband (rejects moderate-offset QRM
+                           # noticeably better -- verified against real recordings)
+THR_HI_FRAC = 0.5   # hysteresis: fraction of (peak-floor) to trigger "on"
+THR_LO_FRAC = 0.3   # hysteresis: fraction of (peak-floor) to release back to "off"
 
 # A segment's decode is trusted (shown in the ticker) only if it looks like a
 # real over rather than band noise. The long "listening / calling CQ" stretches
@@ -100,13 +106,40 @@ class CharEvent:
     ch: str
 
 
+def _lowpass_kernel(cutoff_hz: float, sr: int, ntaps: int) -> np.ndarray:
+    """Windowed-sinc lowpass FIR, unit DC gain. Much sharper stopband than a
+    boxcar of the same length, so moderate-offset interference (roughly
+    150 Hz+ away) is rejected noticeably better; interference much closer
+    than that overlaps the wanted signal's own keying spectrum and can't be
+    separated by filtering alone, at any filter shape."""
+    n = np.arange(ntaps) - (ntaps - 1) / 2
+    h = np.sinc(2 * cutoff_hz / sr * n) * np.hanning(ntaps)
+    return h / h.sum()
+
+
 def _envelope(x: np.ndarray, sr: int, pitch: float) -> tuple[np.ndarray, float]:
     """Complex-demodulate at `pitch` and return the low-rate magnitude envelope."""
     t = np.arange(len(x)) / sr
     iq = x * np.exp(-2j * np.pi * pitch * t)
+    h = _lowpass_kernel(LOWPASS_CUTOFF_HZ, sr, LOWPASS_NTAPS)
+    env = np.abs(np.convolve(iq, h, 'same'))
     win = max(1, int(sr / ENV_FS))
-    env = np.abs(np.convolve(iq, np.ones(win) / win, 'same'))
     return env[::win], sr / win
+
+
+def _hysteresis_on(env: np.ndarray, thr_hi: float, thr_lo: float) -> np.ndarray:
+    """Schmitt-trigger on/off detection: a single static threshold lets noise
+    sitting near it chatter on/off and corrupt run timing. Two thresholds with
+    a margin between them need a real swing to change state."""
+    on = np.empty(len(env), dtype=bool)
+    state = False
+    for i, v in enumerate(env):
+        if state:
+            state = v >= thr_lo
+        else:
+            state = v > thr_hi
+        on[i] = state
+    return on
 
 
 def decode_segment(path: str, pitch: float = 600.0) -> tuple[list[CharEvent], float]:
@@ -116,7 +149,14 @@ def decode_segment(path: str, pitch: float = 600.0) -> tuple[list[CharEvent], fl
     keyed CW (flat envelope / silence)."""
     w = wave.open(path)
     sr = w.getframerate()
-    x = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(float)
+    n_frames = w.getnframes()
+    if n_frames / sr > MAX_OVER_S:
+        # gate_events rejects any segment this long regardless of decode
+        # quality -- skip the expensive filtering/thresholding pipeline over
+        # what can be several minutes of "listening" audio.
+        w.close()
+        return [], 0.0
+    x = np.frombuffer(w.readframes(n_frames), dtype=np.int16).astype(float)
     w.close()
     if len(x) < sr * 0.5:
         return [], 0.0
@@ -128,8 +168,9 @@ def decode_segment(path: str, pitch: float = 600.0) -> tuple[list[CharEvent], fl
     if peak < floor * 1.6:
         # flat envelope -> steady tone / noise, not keyed CW: skip
         return [], snr
-    thr = floor + 0.4 * (peak - floor)
-    on = env > thr
+    thr_hi = floor + THR_HI_FRAC * (peak - floor)
+    thr_lo = floor + THR_LO_FRAC * (peak - floor)
+    on = _hysteresis_on(env, thr_hi, thr_lo)
 
     # run-length encode on/off
     runs: list[tuple[bool, float, int]] = []  # (is_on, duration_s, start_idx)
