@@ -20,6 +20,19 @@ Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
   that genuinely cannot be tested (visual UX, hardware interactions).
 - **Tests must always pass**: never commit with a failing test. The test suite is the
   safety net for refactoring and simplification.
+- **Prove a regression test catches the bug — red before green**: write the test
+  against the still-buggy code and watch it actually fail, *then* write the fix and
+  watch the test pass. Don't just reason that a test "should" fail on the old code —
+  a test that looks right but was never seen red is unverified, and writing it after
+  the fix already exists risks unconsciously shaping the assertion around whatever the
+  fix happens to produce. If a fix was already written before the test (e.g. the bug
+  and its cause were understood in the same pass), the fallback is to temporarily
+  revert the fix (or monkeypatch the specific buggy function back), confirm the test
+  fails, then restore the fix and confirm it passes — strictly weaker than true
+  test-first, but better than trusting an unverified test. Example: `contest_video.py`'s
+  `_snap_to_cluster` regression test was confirmed via the fallback, by monkeypatching
+  the old nearest-cluster logic back in and observing the assertion fail with the old
+  (wrong) value.
 - **Tests use pinned timestamps**: `datetime.now()` in tests undermines reproducibility.
   Time is an input — pin it like any other. Production code that needs the current time
   accepts an optional `now: datetime | None = None` parameter (defaulting to
@@ -230,8 +243,63 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [-o OUT.mp4]
   ASS subtitle file burned over an `showspectrum` waterfall (dimmed to ~0.42 luma
   so text stays readable). No frame-by-frame rendering. The waterfall fills the
   frame within the first ~80 s, then stays full.
-- The video keeps the recording's full length; long listening gaps play with the
-  last decoded over lingering in the ticker.
+- The video keeps the recording's full length.
+- **Ticker clears in gaps, doesn't linger**: a ticker event's display end is capped
+  to `TICKER_HOLD_S` (3 s) after its last character, even if the next real
+  character is minutes away across a listening gap. Without this cap the last
+  decoded text stayed on screen for the entire gap, showing stale info.
+- **Ticker/panel/chapter/caption timing all come from real audio structure, not
+  the EDI clock**: the EDI contest format only stores QSO time to the *minute*
+  (no seconds field exists in the format at all), so `parse_edi`'s `qso.dt` is
+  always truncated toward zero seconds — using it directly to decide when to
+  flush the ticker or switch panels could land seconds *into* the next real
+  over, appending that over's opening characters onto the previous QSO's
+  leftover ticker transcript instead of starting fresh (this happened; the
+  regression test is `test_ticker_does_not_leak_across_a_genuine_gap`).
+  `cluster_starts(segs)` instead finds, purely from the decoded WAV segments,
+  every real over that immediately follows a genuine listening gap (a segment
+  with no trusted events and `dur > MAX_OVER_S`) — that is the true start of a
+  fresh burst of on-air activity, sub-second precise, independent of any
+  clock. The ticker flushes exactly there (see the `build_ass` ticker loop).
+  `qso_windows()` snaps each QSO's approximate EDI-derived position onto a
+  cluster start via `_snap_to_cluster` — the *latest* cluster at or before
+  that approximate time, **not the nearest one**. A QSO's own over always
+  starts before it gets logged, so "nearest" can jump ahead to the *next*
+  contact's burst if the current QSO took a while (calling, retries) to
+  complete — this was a second real bug the user caught by spotting that a
+  QSO's panel showed the *following* contact's actual start time (regression
+  test: `test_qso_window_snaps_to_own_burst_not_the_next_ones`). Since
+  `build_chapters`/`build_srt` are built from `qso_windows()`'s windows too,
+  chapters and captions inherit both fixes.
+  There is deliberately no more `LEAD` pre-show constant: once panel timing is
+  snapped to the real over, showing it exactly when the over starts *is* the
+  natural lead (the over itself takes several seconds), so an artificial
+  pre-show margin is no longer needed and was removed.
+- **Rig/rotator overlay sources ground truth from telemetry, timing from WAV
+  splits**: `--telemetry PATH` takes a `puskas_logger` `*-telemetry.jsonl` file
+  and shows a top-left `● TX`/`● RX` badge plus a QRG/mode/bearing line
+  (`144.174 MHz  CW  ROT 135°`) underneath. `align_telemetry_to_segments`
+  assigns one `SegState` per `Segment` from the 1 Hz samples whose timestamp
+  falls inside that segment's wall-clock span (falling back to the nearest
+  sample if none fall inside, since a segment can be shorter than 1 s):
+  `ptt`/`freq_hz`/`mode` by majority vote (they essentially never change
+  mid-over), `az` by median. The badge's on/off *times* in the ASS output are
+  the segment boundaries themselves, not the telemetry sample times, because
+  the WAV splits are cut exactly on the real PTT transition and are therefore
+  far more precise than a once-a-second poll. A segment with no `ptt` in its
+  aligned state (missing/older telemetry) gets no overlay at all rather than
+  a guess; `freq_hz`/`mode`/`az` are shown individually if known (missing `az`
+  specifically falls back to `ROT ---`, matching the logger's own toolbar).
+- **YouTube chapters + SRT for seeking without scrubbing**: alongside the mp4,
+  `main()` writes `<out>.chapters.txt` (paste into the YouTube description) and
+  `<out>.srt` (upload as a captions track) — both built from `qso_windows()`, the
+  same start/end used for the on-screen QSO panels. YouTube requires the first
+  chapter at `0:00` and each chapter at least `MIN_CHAPTER_GAP_S` (10 s) apart, so
+  `build_chapters` always emits a leading `0:00 Start` and drops any QSO whose
+  chapter would land closer than that to the previous one — those QSOs still get
+  an SRT cue, just no separate chapter marker. SRT cues are capped to
+  `CAPTION_DUR_S` (8 s) each so they read as short captions rather than
+  persisting on screen until the next QSO.
 
 ## puskas_logger.py – UX requirements (non-negotiable)
 

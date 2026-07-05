@@ -28,6 +28,7 @@ is handled without configuration.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -307,13 +308,96 @@ def derive_utc_offset(segs: list[Segment], qsos: list[Qso]) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Rig/rotator state -- ground truth from puskas_logger's 1 Hz telemetry, but
+# displayed on the WAV segment boundaries, since those are split exactly on
+# the real PTT transitions and so carry far better time precision than a
+# once-a-second poll.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TelemetrySample:
+    t: datetime
+    ptt: bool | None
+    freq_hz: int | None
+    mode: str | None
+    az: float | None
+
+
+@dataclass
+class SegState:
+    ptt: bool | None = None
+    freq_hz: int | None = None
+    mode: str | None = None
+    az: float | None = None
+
+
+def load_telemetry(path: str) -> list[TelemetrySample]:
+    """Parse a puskas_logger `*-telemetry.jsonl` file."""
+    samples: list[TelemetrySample] = []
+    for line in open(path, encoding='utf-8'):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+            ts = datetime.strptime(rec['t'], '%Y-%m-%dT%H:%M:%SZ')
+        except (json.JSONDecodeError, KeyError, ValueError):
+            continue
+        samples.append(TelemetrySample(ts, rec.get('ptt'), rec.get('freq_hz'),
+                                       rec.get('mode'), rec.get('az')))
+    return samples
+
+
+def _majority(values: list):
+    """Most common value (ties broken by first-seen order); None if empty."""
+    if not values:
+        return None
+    counts: dict = {}
+    for v in values:
+        counts[v] = counts.get(v, 0) + 1
+    return max(counts, key=lambda v: counts[v])
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    s = sorted(values)
+    mid = len(s) // 2
+    return s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) / 2
+
+
+def align_telemetry_to_segments(segs: list[Segment], telemetry: list[TelemetrySample],
+                                offset_h: int) -> list[SegState]:
+    """One state per WAV segment -- ptt/freq_hz/mode by majority vote (they
+    rarely change mid-over), az by median -- from the 1 Hz samples whose
+    timestamp falls inside that segment's wall-clock span; falls back to the
+    nearest sample in time if none fall inside (a segment can be shorter than
+    the 1 s telemetry interval). The segment's own boundary *times* are used
+    for display, not the telemetry timestamps -- see module docstring above."""
+    states: list[SegState] = []
+    for s in segs:
+        utc_start = s.wall - timedelta(hours=offset_h)
+        utc_end = utc_start + timedelta(seconds=s.dur)
+        inside = [t for t in telemetry if utc_start <= t.t < utc_end]
+        if not inside and telemetry:
+            inside = [min(telemetry, key=lambda t: abs((t.t - utc_start).total_seconds()))]
+        states.append(SegState(
+            ptt=_majority([t.ptt for t in inside if t.ptt is not None]),
+            freq_hz=_majority([t.freq_hz for t in inside if t.freq_hz is not None]),
+            mode=_majority([t.mode for t in inside if t.mode is not None]),
+            az=_median([t.az for t in inside if t.az is not None]),
+        ))
+    return states
+
+
+# ---------------------------------------------------------------------------
 # ASS generation
 # ---------------------------------------------------------------------------
 
 RESOLUTIONS = {'1080p': (1920, 1080), '720p': (1280, 720)}
 VIS_CHARS = 84          # characters kept in the decode ticker window
 CPL = 42                # characters per ticker line
-LEAD = 60.0             # show a QSO panel this many seconds before its log time
+TICKER_HOLD_S = 3.0     # ticker clears if no new character arrives within this long
 
 
 def _ass_time(t: float) -> str:
@@ -343,8 +427,77 @@ def _esc(s: str) -> str:
     return s.replace('\\', '\\\\').replace('{', '(').replace('}', ')')
 
 
+def cluster_starts(segs: list[Segment]) -> list[float]:
+    """audio_t of every segment beginning a fresh burst of on-air activity --
+    the first real over after a genuine listening gap (a segment with no
+    trusted decoded events and dur > MAX_OVER_S), or the very first segment.
+    A brief inter-turn silence during a normal back-and-forth exchange stays
+    well under MAX_OVER_S and does not count, so one QSO's overs share a
+    single burst. This is pure audio structure, independent of the EDI log's
+    minute-only timestamp precision."""
+    starts: list[float] = []
+    prev_was_gap = True
+    for s in segs:
+        if s.events:
+            if prev_was_gap:
+                starts.append(s.audio_t)
+            prev_was_gap = False
+        else:
+            prev_was_gap = s.dur > MAX_OVER_S
+    return starts
+
+
+def _snap_to_cluster(t: float, clusters: list[float]) -> float:
+    """The real activity-burst that produced the EDI-derived approximate
+    time `t`. A QSO's own over necessarily starts at or before its (possibly
+    minute-truncated) logged completion time, so this is the *latest*
+    cluster start <= t -- not simply the nearest one, which can jump ahead
+    to the *next* contact's burst if the current QSO took a while (calling,
+    retries) to complete before being logged."""
+    candidates = [c for c in clusters if c <= t]
+    if candidates:
+        return max(candidates)
+    return clusters[0] if clusters else t
+
+
+def qso_windows(qsos: list[Qso], segs: list[Segment], offset_h: int,
+                total: float) -> list[tuple[float, float]]:
+    """Return the (start, end) video-time window shown for each QSO's panel,
+    snapped onto the actual WAV segment/burst boundaries (see cluster_starts)
+    rather than the EDI log's minute-precision timestamp, so the panel
+    switches exactly when the real over begins."""
+    clusters = cluster_starts(segs)
+    starts = [_snap_to_cluster(audio_time_for(q.dt + timedelta(hours=offset_h), segs), clusters)
+             for q in qsos]
+    for i in range(1, len(starts)):
+        starts[i] = max(starts[i], starts[i - 1])   # keep panel order sane
+    windows: list[tuple[float, float]] = []
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else total
+        windows.append((max(0.0, start), max(start + 1.0, end)))
+    return windows
+
+
+STATE_TX_HEX = '0000FF'  # ASS \c is &HbbggrrH -- this is pure red
+STATE_RX_HEX = '00FF00'  # pure green
+
+
+def _fmt_rig_info(freq_hz: int | None, mode: str | None, az: float | None) -> str | None:
+    """QRG/mode/bearing line under the RX/TX badge; None if nothing is known."""
+    if freq_hz is None and mode is None and az is None:
+        return None
+    parts = []
+    if freq_hz is not None:
+        parts.append(f"{freq_hz / 1e6:.3f} MHz")
+    if mode is not None:
+        parts.append(mode)
+    parts.append(f"ROT {az:.0f}°" if az is not None else "ROT ---")
+    return "  ".join(parts)
+
+
 def build_ass(segs: list[Segment], qsos: list[Qso], mycall: str, mywwl: str,
-              contest: str, offset_h: int, W: int, H: int) -> str:
+              contest: str, offset_h: int, W: int, H: int,
+              seg_states: list[SegState] | None = None) -> str:
     sx = W / 1920  # scale factor from the 1080p reference layout
     fs_big = int(58 * sx)
     fs_panel = int(46 * sx)
@@ -365,6 +518,7 @@ Style: Panel,DejaVu Sans Mono,{fs_panel},&H00FFFFFF,&H000000FF,&H00000000,&HC820
 Style: PanelDup,DejaVu Sans Mono,{fs_panel},&H007070FF,&H000000FF,&H00000000,&HC8101040,-1,0,0,0,100,100,0,0,3,6,0,1,60,60,80,1
 Style: Header,DejaVu Sans Mono,{fs_hdr},&H0000FFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,2,8,60,60,40,1
 Style: Clock,DejaVu Sans Mono,{fs_clk},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,3,4,0,9,60,60,40,1
+Style: State,DejaVu Sans Mono,{fs_hdr},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,2,7,60,60,40,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -381,26 +535,45 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     # --- static header (callsign / contest) ---
     ev(0, total, 'Header', f"{_esc(mycall)}  {_esc(mywwl)}   {_esc(contest)}")
 
-    # --- decode ticker: rolling window, flushed at each QSO panel transition ---
-    qso_starts = sorted(
-        max(0.0, audio_time_for(q.dt + timedelta(hours=offset_h), segs) - LEAD)
-        for q in qsos
-    )
-    stream: list[tuple[float, str]] = []
+    # --- rig/rotator state (top-left): one event per WAV segment, since
+    # segment boundaries are split exactly on the real PTT transitions --
+    # far better time precision than the 1 Hz telemetry the state itself
+    # comes from. No event at all when ptt is unknown for that segment.
+    if seg_states is not None:
+        for s, st in zip(segs, seg_states):
+            if st.ptt is None:
+                continue
+            hexcol = STATE_TX_HEX if st.ptt else STATE_RX_HEX
+            label = 'TX' if st.ptt else 'RX'
+            text = f"{{\\c&H{hexcol}&}}● {label}"
+            info = _fmt_rig_info(st.freq_hz, st.mode, st.az)
+            if info:
+                text += f"\\N{{\\c&HFFFFFF&}}{_esc(info)}"
+            ev(s.audio_t, s.audio_t + _eff(s), 'State', text)
+
+    # --- decode ticker: rolling window, flushed at the start of every fresh
+    # burst of on-air activity (see cluster_starts) -- not at a QSO's EDI
+    # timestamp, which is only minute-precision and would flush mid-over.
+    stream: list[tuple[float, str, bool]] = []   # (t, ch, flush_before)
+    prev_was_gap = True
     for s in segs:
-        if stream and s.events:
-            stream.append((s.audio_t, ' '))   # gap between overs
-        for e in s.events:
-            stream.append((s.audio_t + e.t, e.ch))
+        if not s.events:
+            prev_was_gap = s.dur > MAX_OVER_S
+            continue
+        is_burst_start = prev_was_gap
+        if not is_burst_start and stream:
+            stream.append((s.audio_t, ' ', False))   # gap between overs, same burst
+        for j, e in enumerate(s.events):
+            stream.append((s.audio_t + e.t, e.ch, is_burst_start and j == 0))
+        prev_was_gap = False
     transcript = ''
-    flush_idx = 0
-    for i, (t, ch) in enumerate(stream):
-        while flush_idx < len(qso_starts) and t >= qso_starts[flush_idx]:
+    for i, (t, ch, flush) in enumerate(stream):
+        if flush:
             transcript = ''
-            flush_idx += 1
         transcript += ch
         vis = transcript[-VIS_CHARS:]
         end = stream[i + 1][0] if i + 1 < len(stream) else total
+        end = min(end, t + TICKER_HOLD_S)   # clear rather than show stale text in gaps
         if end <= t:
             continue
         ev(t, end, 'Ticker', _wrap(vis, CPL, 2))
@@ -413,14 +586,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                utc.strftime('%Y-%m-%d %H:%M:%SZ'))
 
     # --- QSO panels ---
+    windows = qso_windows(qsos, segs, offset_h, total)
     for i, q in enumerate(qsos):
-        local = q.dt + timedelta(hours=offset_h)
-        start = max(0.0, audio_time_for(local, segs) - LEAD)
-        if i + 1 < len(qsos):
-            nxt = qsos[i + 1].dt + timedelta(hours=offset_h)
-            end = max(start + 1.0, audio_time_for(nxt, segs) - LEAD)
-        else:
-            end = total
+        start, end = windows[i]
         tag = '  \\N{\\c&H7070FF&}*** DUPE (0 pts) ***' if q.dup else ''
         style = 'PanelDup' if q.dup else 'Panel'
         txt = (f"QSO {i + 1}/{len(qsos)}   {q.dt.strftime('%H:%MZ')}"
@@ -430,6 +598,64 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         ev(start, end, style, txt, layer=1)
 
     return ''.join(x if x.endswith('\n') else x + '\n' for x in lines)
+
+
+# ---------------------------------------------------------------------------
+# YouTube chapters + SRT captions (for seeking without scrubbing)
+# ---------------------------------------------------------------------------
+
+MIN_CHAPTER_GAP_S = 10   # YouTube ignores chapters closer together than this
+CAPTION_DUR_S = 8.0      # how long each SRT cue is shown
+
+
+def _yt_time(t: float) -> str:
+    """Format seconds as a YouTube description timestamp (M:SS or H:MM:SS)."""
+    t = int(round(max(0.0, t)))
+    h, rem = divmod(t, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def build_chapters(qsos: list[Qso], windows: list[tuple[float, float]]) -> str:
+    """YouTube description chapter markers, one per QSO (plus the mandatory 0:00).
+
+    YouTube requires the first chapter at 0:00, at least 3 chapters, and each
+    at least MIN_CHAPTER_GAP_S apart -- closer QSOs are dropped from the list
+    (they still get an SRT cue, just no separate chapter marker).
+    """
+    lines = ["0:00 Start"]
+    last_t = 0
+    for i, (q, (start, _end)) in enumerate(zip(qsos, windows)):
+        t = int(round(start))
+        if t - last_t < MIN_CHAPTER_GAP_S:
+            continue
+        tag = " (dup)" if q.dup else ""
+        lines.append(f"{_yt_time(t)} QSO {i + 1:03d} {q.call}{tag}")
+        last_t = t
+    return '\n'.join(lines) + '\n'
+
+
+def _srt_time(t: float) -> str:
+    t = max(0.0, t)
+    h = int(t // 3600)
+    m = int((t % 3600) // 60)
+    s = int(t % 60)
+    ms = int(round((t - int(t)) * 1000))
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def build_srt(qsos: list[Qso], windows: list[tuple[float, float]]) -> str:
+    """One caption cue per QSO -- gives a clickable transcript in the YouTube
+    sidebar, independent of the chapter markers (and of whether CC is on)."""
+    blocks = []
+    for i, (q, (start, end)) in enumerate(zip(qsos, windows)):
+        end = min(end, start + CAPTION_DUR_S)
+        tag = "  *** DUPE ***" if q.dup else ""
+        text = (f"QSO {i + 1}/{len(qsos)}  {q.dt.strftime('%H:%MZ')}\n"
+                f"{q.call}  {q.loc}  {q.pts} km\n"
+                f"TX {q.rst_s} {q.nr_s}   RX {q.rst_r} {q.nr_r}{tag}")
+        blocks.append(f"{i + 1}\n{_srt_time(start)} --> {_srt_time(end)}\n{text}\n")
+    return '\n'.join(blocks)
 
 
 # ---------------------------------------------------------------------------
@@ -484,6 +710,8 @@ def main() -> None:
                     help=f'trim silent gaps between QSOs to {GAP_KEEP_S:.0f}s each')
     ap.add_argument('--keep-ass', action='store_true',
                     help='keep intermediate .ass/.wav for inspection')
+    ap.add_argument('--telemetry',
+                    help='puskas_logger *-telemetry.jsonl for an RX/TX + QRG/mode/bearing overlay')
     args = ap.parse_args()
 
     W, H = RESOLUTIONS[args.res]
@@ -509,11 +737,27 @@ def main() -> None:
     offset_h = derive_utc_offset(segs, qsos)
     print(f"{mycall} {mywwl}: {len(qsos)} QSOs, UTC+{offset_h} local")
 
+    seg_states = None
+    if args.telemetry:
+        telemetry = load_telemetry(args.telemetry)
+        seg_states = align_telemetry_to_segments(segs, telemetry, offset_h)
+        known = sum(1 for st in seg_states if st.ptt is not None)
+        print(f"  RX/TX: {known}/{len(segs)} segments labelled from {args.telemetry}")
+
     ass_text = build_ass(segs, qsos, mycall, mywwl, args.contest,
-                         offset_h, W, H)
+                         offset_h, W, H, seg_states)
     ass_path = os.path.splitext(args.out)[0] + '.ass'
     with open(ass_path, 'w') as fh:
         fh.write(ass_text)
+
+    stem = os.path.splitext(args.out)[0]
+    total = segs[-1].audio_t + _eff(segs[-1])
+    windows = qso_windows(qsos, segs, offset_h, total)
+    with open(stem + '.chapters.txt', 'w') as fh:
+        fh.write(build_chapters(qsos, windows))
+    with open(stem + '.srt', 'w') as fh:
+        fh.write(build_srt(qsos, windows))
+    print(f"wrote {stem}.chapters.txt and {stem}.srt")
 
     wav = os.path.splitext(args.out)[0] + '.concat.wav'
     print("concatenating audio ...")
