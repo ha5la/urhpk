@@ -494,11 +494,15 @@ def _snap_to_cluster(t: float, clusters: list[float]) -> float:
     minute-truncated) logged completion time, so this is the *latest*
     cluster start <= t -- not simply the nearest one, which can jump ahead
     to the *next* contact's burst if the current QSO took a while (calling,
-    retries) to complete before being logged."""
+    retries) to complete before being logged.
+
+    If no cluster is <= t -- e.g. a QSO logged before any CW was ever
+    decoded, common on a mostly-voice recording, or simply the first QSO --
+    there is nothing to snap to, so `t` itself is used as-is. Falling back to
+    the *first* cluster in the whole recording here was a real bug: it could
+    pull an early QSO's panel minutes into the future."""
     candidates = [c for c in clusters if c <= t]
-    if candidates:
-        return max(candidates)
-    return clusters[0] if clusters else t
+    return max(candidates) if candidates else t
 
 
 def qso_windows(qsos: list[Qso], segs: list[Segment], offset_h: int,

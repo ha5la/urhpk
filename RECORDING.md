@@ -88,12 +88,41 @@ already-decoded WAV segments and finds every real over that immediately
 follows a genuine listening gap (no trusted events, `dur > MAX_OVER_S`) —
 that's the true, sub-second-precise start of a fresh burst of activity,
 straight from the audio. The ticker flushes exactly there, and
-`qso_windows()` snaps each QSO's approximate EDI-derived position onto the
-nearest such burst, so the panel, chapters, and captions all switch at that
-same instant. The old `LEAD` (fixed pre-show) constant is gone — once
-timing is snapped to the real over, showing the panel exactly when it
-starts already gives a natural few-seconds lead (the over itself takes a
-few seconds), so an artificial margin was no longer needed.
+`qso_windows()` snaps each QSO's approximate EDI-derived position onto one
+of those bursts via `_snap_to_cluster`, so the panel, chapters, and captions
+all switch at that same instant. The old `LEAD` (fixed pre-show) constant is
+gone — once timing is snapped to the real over, showing the panel exactly
+when it starts already gives a natural few-seconds lead (the over itself
+takes a few seconds), so an artificial margin was no longer needed.
+
+Two follow-up bugs turned up once this was checked against real recordings
+(both now covered by regression tests, found test-first where practical):
+
+- **Snap to the *latest* burst at or before the approximate time, not the
+  *nearest* one.** A QSO's own over always starts before it gets logged, so
+  "nearest" can jump ahead onto the *next* contact's burst if the current
+  QSO took a while (calling, retries) to complete first. Caught by the user
+  noticing a QSO's panel showing the timestamp of the *following* contact
+  instead of its own.
+- **Falling back to the first cluster when none qualify was itself a bug.**
+  If a QSO's approximate time is before *every* detected burst — the very
+  first QSO, or any QSO on a recording where little or no CW has been
+  decoded yet — there's nothing to snap to. The old fallback jumped to the
+  first cluster in the whole recording, which could be minutes away. It now
+  just uses the approximate time as-is in that case (no worse than before
+  this whole timing feature existed). Caught by the user on the "mix"
+  session: a QSO they could hear starting at 0:26 in the video was
+  chaptered at 9:28, because that session is mostly voice and the first CW
+  ever decoded doesn't happen until minutes in.
+
+That last point matters beyond just this one bug: **`cluster_starts()` only
+finds bursts where CW was actually decoded.** A mostly-SSB recording (like
+"mix", 27 voice QSOs vs 3 CW) has very few of them — five, across 51 minutes,
+in that session — so most QSOs there get no audio-precision benefit at all
+and stay at plain EDI-minute accuracy. This tool decodes CW, not voice; on a
+CW-heavy recording ("cw", all 8 QSOs CW) nearly every QSO snaps to a real
+burst and timing is tight. Don't expect the same precision on a mixed-mode
+session's voice QSOs.
 
 This also makes the pipeline far more tolerant of clock skew between the
 radio and the PC. The WAV filenames' timestamps come from the **radio's own

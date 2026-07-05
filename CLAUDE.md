@@ -280,6 +280,20 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [-o OUT.mp4]
   test: `test_qso_window_snaps_to_own_burst_not_the_next_ones`). Since
   `build_chapters`/`build_srt` are built from `qso_windows()`'s windows too,
   chapters and captions inherit both fixes.
+  A third real bug: when a QSO's approximate time is *before every* detected
+  cluster (e.g. an early QSO, or any QSO on a mostly-voice recording where
+  little or no CW ever gets decoded), `_snap_to_cluster` used to fall back to
+  the *first* cluster in the whole recording — pulling an early QSO's panel
+  minutes into the future (regression test:
+  `test_qso_window_before_any_cluster_uses_approx_time`). It now falls back
+  to the raw approximate time itself in that case. **This means voice QSOs
+  get no audio-precision benefit at all** — there's no CW to detect a burst
+  from, so they're stuck at EDI-minute precision, the same as before any of
+  this timing work. `cluster_starts` only finds real bursts where CW was
+  actually decoded; a mostly-SSB recording will have very few of them, so
+  don't expect CW-round-level precision there. This tool is CW-focused by
+  design (see its own docstring) — voice content isn't something it
+  understands, only tolerates.
   There is deliberately no more `LEAD` pre-show constant: once panel timing is
   snapped to the real over, showing it exactly when the over starts *is* the
   natural lead (the over itself takes several seconds), so an artificial

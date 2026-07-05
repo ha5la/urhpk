@@ -453,6 +453,29 @@ class TestAss:
         [(start, _end)] = qso_windows(qsos, segs, offset_h=0, total=210.0)
         assert start == 100.0    # not 205.0 (the next burst, numerically closer)
 
+    def test_qso_window_before_any_cluster_uses_approx_time(self, tmp_path):
+        # Regression test for a real bug found by the user on a mostly-voice
+        # ("mix" mode) recording: a QSO logged before any CW was ever
+        # decoded (e.g. an early SSB contact, or simply the very first QSO)
+        # has no earlier cluster to snap to. Falling back to the *first*
+        # cluster in the whole recording pulled the panel far into the
+        # future (minutes off in the real case) instead of just using the
+        # coarse EDI-derived time, which -- while not audio-precise -- is at
+        # least in the right neighbourhood.
+        edi = tmp_path / 'log.edi'
+        edi.write_text(
+            "PCall=HA5LA\nPWWLo=JN97MM\n[QSORecords;1]\n"
+            "260704;1300;HA7NK;1;59;001;59;014;;JN97WW;77;;;;\n"
+        )
+        mycall, mywwl, qsos = parse_edi(str(edi))
+        segs = [
+            Segment('a', datetime(2026, 7, 4, 13, 0, 0), 300.0, 0.0),   # voice, no CW events
+            Segment('b', datetime(2026, 7, 4, 13, 5, 0), 5.0, 300.0,
+                    events=[CharEvent(0.0, 'Z')]),                     # first-ever CW burst
+        ]
+        [(start, _end)] = qso_windows(qsos, segs, offset_h=0, total=305.0)
+        assert start == 0.0     # not 300.0 (the first cluster, minutes away)
+
 
 class TestChaptersAndSrt:
     def test_yt_time_formats(self):
