@@ -115,14 +115,36 @@ Two follow-up bugs turned up once this was checked against real recordings
   chaptered at 9:28, because that session is mostly voice and the first CW
   ever decoded doesn't happen until minutes in.
 
-That last point matters beyond just this one bug: **`cluster_starts()` only
-finds bursts where CW was actually decoded.** A mostly-SSB recording (like
-"mix", 27 voice QSOs vs 3 CW) has very few of them — five, across 51 minutes,
-in that session — so most QSOs there get no audio-precision benefit at all
-and stay at plain EDI-minute accuracy. This tool decodes CW, not voice; on a
-CW-heavy recording ("cw", all 8 QSOs CW) nearly every QSO snaps to a real
-burst and timing is tight. Don't expect the same precision on a mixed-mode
-session's voice QSOs.
+That last point led to a fourth bug, also fixed: **`cluster_starts()`
+originally required a segment to have decoded CW events to count as a burst
+start.** A voice-mode over never carries decodable CW, so on the "mix"
+session (27 voice QSOs, 3 CW) this found only 5 bursts across the whole
+51-minute recording — nearly every QSO got no audio-precision benefit at
+all. The fix: key on segment duration alone (`dur <= MAX_OVER_S`) instead of
+requiring events. A WAV segment boundary is a precise real-world RX/TX
+transition no matter what's being transmitted — CW and voice are equally
+real switches. After the fix, the same session has 27 clusters, and QSO 1
+(logged at 0:48 after this fix, was jumping to 9:28 before the third bug fix
+above) is at least in the right *burst* now.
+
+One tempting further idea, tried and rejected: make *every* real-over
+segment a snap candidate, not just the first one per coalesced burst, to
+pin down exactly which segment within a burst a specific voice QSO started
+on. This actually made the CW round *worse* — QSO 2's panel, independently
+verified earlier against the real audio at 520.03s, shifted to a wrong
+579.14s, because a single QSO's own exchange spans several segments and
+"latest candidate at or before the logged time" then lands on some later
+point inside that same exchange rather than its start. Coalescing to one
+candidate per burst is precisely what makes "latest cluster" mean "the
+start of this exchange" — necessary, not incidental.
+
+Bottom line: a CW-heavy recording ("cw", all 8 QSOs CW) gets tight,
+audio-precise timing on essentially every QSO. A mostly-voice recording
+("mix") now gets the *right burst* for every QSO instead of being wildly
+wrong, but can't (yet) pinpoint the exact segment within a burst where a
+particular voice exchange began — there's no way to tell that from duration
+alone. A future recording with PTT telemetry (see below) could resolve this
+properly by aligning to the QSO's actual TX segment instead of guessing.
 
 This also makes the pipeline far more tolerant of clock skew between the
 radio and the PC. The WAV filenames' timestamps come from the **radio's own

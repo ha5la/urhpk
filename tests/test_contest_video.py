@@ -405,6 +405,21 @@ class TestAss:
         ]
         assert cluster_starts(segs) == [0.0, 50.0]
 
+    def test_cluster_starts_counts_voice_segments_too(self):
+        # Regression test for a real bug found by the user: a WAV segment
+        # boundary is a precise real-world RX/TX transition regardless of
+        # what's actually being transmitted. A voice-mode QSO's segments
+        # never carry decoded CW events (there's no CW there to decode), so
+        # requiring `s.events` made cluster_starts blind to every voice
+        # over -- on a mostly-voice recording this meant almost no QSO ever
+        # got the audio-precise snap at all. Duration alone (a real over is
+        # short; a genuine gap is long) works identically for voice and CW.
+        segs = [
+            Segment('a', datetime(2026, 7, 4, 13, 0, 0), MAX_OVER_S + 1, 0.0),  # listening gap
+            Segment('b', datetime(2026, 7, 4, 13, 0, 40), 5.0, 40.0),           # voice over, no CW events
+        ]
+        assert cluster_starts(segs) == [40.0]
+
     def test_qso_window_snaps_to_real_burst_not_edi_minute(self, tmp_path):
         # EDI only has minute precision, so audio_time_for(qso.dt) lands
         # somewhere inside the real over rather than at its start. The panel

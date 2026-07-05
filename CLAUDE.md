@@ -286,14 +286,34 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [-o OUT.mp4]
   the *first* cluster in the whole recording — pulling an early QSO's panel
   minutes into the future (regression test:
   `test_qso_window_before_any_cluster_uses_approx_time`). It now falls back
-  to the raw approximate time itself in that case. **This means voice QSOs
-  get no audio-precision benefit at all** — there's no CW to detect a burst
-  from, so they're stuck at EDI-minute precision, the same as before any of
-  this timing work. `cluster_starts` only finds real bursts where CW was
-  actually decoded; a mostly-SSB recording will have very few of them, so
-  don't expect CW-round-level precision there. This tool is CW-focused by
-  design (see its own docstring) — voice content isn't something it
-  understands, only tolerates.
+  to the raw approximate time itself in that case.
+  A fourth: `cluster_starts` originally required `s.events` (successful CW
+  decode) to mark a burst start, so it was blind to every voice-mode over —
+  there's no CW there to decode no matter how good the decoder is. On a
+  mostly-voice recording this left almost no burst to snap to at all
+  (regression test: `test_cluster_starts_counts_voice_segments_too`). It now
+  keys on segment duration alone (`dur <= MAX_OVER_S`), since a WAV segment
+  boundary is a precise real-world RX/TX transition regardless of content —
+  voice and CW alike. Verified against the real "mix" recording: clusters
+  went from 5 to 27 across the 51-minute session.
+  **A tempting further step, rejected after testing**: making *every*
+  real-over segment a candidate (not just the first one per coalesced
+  burst) looked appealing for pinpointing exactly which segment within a
+  burst a voice QSO started on, but it regressed the CW round's
+  independently-verified precision — a single QSO's own multi-over exchange
+  spans several segments, and "latest candidate at or before the logged
+  time" then lands on a *later point within that same QSO's own exchange*
+  rather than its true start (confirmed: QSO 2's panel shifted from the
+  verified-correct 520.03s to a wrong 579.14s). Coalescing to one candidate
+  per burst is what makes "latest cluster" mean "start of *this* exchange"
+  rather than "some segment inside it" — don't remove it.
+  **Residual limitation**: voice QSOs still only snap to the start of
+  whichever *whole burst* they fall in, not to the specific segment where
+  that particular exchange began within a burst containing several rapid
+  RX/TX flips — there's no way to tell those apart from duration alone. A
+  future recording with PTT telemetry (see the RX/TX overlay above) could
+  do better by aligning to the QSO's own actual TX segment directly instead
+  of guessing from duration.
   There is deliberately no more `LEAD` pre-show constant: once panel timing is
   snapped to the real over, showing it exactly when the over starts *is* the
   natural lead (the over itself takes several seconds), so an artificial

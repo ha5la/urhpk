@@ -470,21 +470,27 @@ def _esc(s: str) -> str:
 
 def cluster_starts(segs: list[Segment]) -> list[float]:
     """audio_t of every segment beginning a fresh burst of on-air activity --
-    the first real over after a genuine listening gap (a segment with no
-    trusted decoded events and dur > MAX_OVER_S), or the very first segment.
-    A brief inter-turn silence during a normal back-and-forth exchange stays
-    well under MAX_OVER_S and does not count, so one QSO's overs share a
-    single burst. This is pure audio structure, independent of the EDI log's
-    minute-only timestamp precision."""
+    the first segment after a genuine listening gap (dur > MAX_OVER_S), or
+    the very first segment. A brief inter-turn silence during a normal
+    back-and-forth exchange stays well under MAX_OVER_S and does not count,
+    so one QSO's overs share a single burst.
+
+    Deliberately keyed on duration alone, not on whether CW was actually
+    decoded (`s.events`): a WAV segment boundary is a precise real-world
+    RX/TX transition regardless of what's being transmitted. A voice-mode
+    QSO never carries decodable CW, so requiring events made this blind to
+    every voice over -- on a mostly-voice recording almost no QSO got the
+    audio-precise snap at all. This is pure audio structure, independent of
+    both CW content and the EDI log's minute-only timestamp precision."""
     starts: list[float] = []
     prev_was_gap = True
     for s in segs:
-        if s.events:
+        if s.dur <= MAX_OVER_S:
             if prev_was_gap:
                 starts.append(s.audio_t)
             prev_was_gap = False
         else:
-            prev_was_gap = s.dur > MAX_OVER_S
+            prev_was_gap = True
     return starts
 
 
