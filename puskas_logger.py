@@ -173,7 +173,7 @@ def load_loc_cache() -> dict[str, list[str]]:
 # ──────────────────────────────────────────────────────────────
 # rigctld — background daemon thread
 # ──────────────────────────────────────────────────────────────
-_rig: dict        = {"band": "", "mode": "", "qrg": "", "online": False}
+_rig: dict        = {"band": "", "mode": "", "qrg": "", "online": False, "ptt": False}
 _rig_lock         = threading.Lock()
 _rig_manual: dict = {"band": "", "mode": ""}
 
@@ -189,10 +189,12 @@ def _band_from_qrg(mhz: float) -> str:
     if mhz < 1000: return "70CM"
     return "23CM"
 
-def _read_rig() -> tuple[str, str]:
+def _read_rig() -> tuple[str, str, str]:
+    """Query freq ('f' -> 1 line), mode ('m' -> mode + passband, 2 lines), and
+    PTT ('t' -> 0/1/2, 1 line) in one round trip. 4 lines total."""
     try:
         with socket.create_connection((RIGCTLD_HOST, RIGCTLD_PORT), timeout=2.0) as s:
-            s.sendall(b"f\nm\n")
+            s.sendall(b"f\nm\nt\n")
             buf, t0 = b"", time.monotonic()
             while time.monotonic() - t0 < 2.0:
                 s.settimeout(2.0 - (time.monotonic() - t0))
@@ -200,23 +202,27 @@ def _read_rig() -> tuple[str, str]:
                 if not chunk:
                     break
                 buf += chunk
-                if len(buf.decode(errors="replace").splitlines()) >= 2:
+                if len(buf.decode(errors="replace").splitlines()) >= 4:
                     break
             lines = buf.decode(errors="replace").splitlines()
-            return f"{float(lines[0]) / 1e6:.3f}", lines[1].strip() if len(lines) > 1 else ""
+            qrg = f"{float(lines[0]) / 1e6:.3f}"
+            mode = lines[1].strip() if len(lines) > 1 else ""
+            ptt = lines[3].strip() if len(lines) > 3 else ""
+            return qrg, mode, ptt
     except Exception:
-        return "", ""
+        return "", "", ""
 
 def _rig_thread():
     while True:
         try:
-            qrg, raw = _read_rig()
+            qrg, raw, ptt_raw = _read_rig()
             with _rig_lock:
                 if qrg:
                     _rig.update(band=_band_from_qrg(float(qrg)),
-                                mode=_mode_str(raw), qrg=qrg, online=True)
+                                mode=_mode_str(raw), qrg=qrg, online=True,
+                                ptt=ptt_raw.strip() not in ("", "0"))
                 else:
-                    _rig.update(band="", mode="", qrg="", online=False)
+                    _rig.update(band="", mode="", qrg="", online=False, ptt=False)
         except Exception:
             pass
         time.sleep(RIGCTLD_POLL_S)
@@ -227,6 +233,11 @@ def current_rig() -> tuple[str, str, str, bool]:
         if _rig["online"]:
             return _rig["band"], _rig["mode"], _rig["qrg"], True
     return _rig_manual["band"], _rig_manual["mode"], "", False
+
+def current_ptt() -> bool | None:
+    """True while transmitting, False while receiving, None if rig offline."""
+    with _rig_lock:
+        return _rig["ptt"] if _rig["online"] else None
 
 # ──────────────────────────────────────────────────────────────
 # rotctld — background daemon thread
@@ -311,11 +322,13 @@ def _clock_sync() -> None:
 def _telemetry_record(now: datetime) -> str:
     """Build one telemetry JSON line from the current rig/rotator state."""
     _, mode, qrg, rig_online = current_rig()
+    ptt = current_ptt()
     az, rot_online = current_rot()
     return json.dumps({
         "t":       now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "freq_hz": round(float(qrg) * 1e6) if rig_online and qrg else None,
         "mode":    mode                     if rig_online          else None,
+        "ptt":     ptt,
         "az":      round(az, 1)             if rot_online          else None,
     })
 
