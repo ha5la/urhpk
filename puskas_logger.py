@@ -713,7 +713,7 @@ def _band_summary(lb: LogBook) -> str:
         parts.append(f"{b}:{len(qsos)}q/{pts}pt")
     return "  ".join(parts) or "no QSOs yet"
 
-_CW_LEGEND = "  F1:CQ  F2:MY  F3:EXCH  A+F3:SH  F4:TU73  F5:HIS  F6:DE  F7:?  F8:QSY  ESC:STOP"
+_CW_LEGEND = "  F1:CQ  F2:MY  F3:EXCH  F4:TU  F5:HIS  F6:DE  F7:?  F8:QSY  ESC:STOP"
 
 def _print_header(lb: LogBook):
     bar = "━" * W
@@ -1064,14 +1064,6 @@ def run(lb: LogBook, tname: str):
             hiscall = tokens[0].upper() if tokens else ''
             band, *_ = current_rig()
             _cw_send(_expand_cw(_tmpl, lb, hiscall, band))
-
-    @kb.add('escape', 'f3')
-    def _on_alt_f3(event):
-        buf = event.app.current_buffer
-        tokens = buf.text.strip().split()
-        hiscall = tokens[0].upper() if tokens else ''
-        band, *_ = current_rig()
-        _cw_send(_expand_cw("5NN <NUMBER> <NUMBER>", lb, hiscall, band))
 
     @kb.add('escape', 'b')
     def _on_alt_b(event):

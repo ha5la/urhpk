@@ -519,18 +519,17 @@ HA7NS 599 014 JN97WM   → CW with locator
 - Escape → exits edit mode (screen redraws immediately) and/or aborts CW transmission
 - Alt+R → point rotator at bearing of selected/typed station (no-op when rotctld offline)
 
-**CW macros** (F1–F7, requires rigctld):
+**CW macros** (F1–F8, requires rigctld):
 | Key | Template |
 |-----|----------|
 | F1  | `CQ <MYCALL> <MYCALL> TEST` |
 | F2  | `<MYCALL>` |
-| F3  | `<HISCALL> DE <MYCALL> 5NN <NUMBER> <NUMBER> <LOCATOR>` |
-| Alt+F3 | `5NN <NUMBER> <NUMBER>` (short exchange for scatter/time pressure) |
-| F4  | `TU 73 EE` |
+| F3  | `5NN <NUMBER> <LOCATOR>` |
+| F4  | `TU` |
 | F5  | `<HISCALL>` |
 | F6  | `DE <MYCALL>` |
 | F7  | `?` |
-| F8  | `272 272 SSB` |
+| F8  | `282 282 SSB` |
 
 `<HISCALL>` is the first token in the input buffer at key-press time.
 `<NUMBER>` uses CW abbreviations: `0→T`, `9→N` (e.g. 014 → `T14`).
