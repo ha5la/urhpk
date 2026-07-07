@@ -667,12 +667,12 @@ _REDRAW = object()  # sentinel: exit prompt to force a full screen refresh
 CW_MACROS = [
     "CQ <MYCALL> <MYCALL> TEST",                               # F1
     "<MYCALL>",                                                # F2
-    "<HISCALL> DE <MYCALL> 5NN <NUMBER> <NUMBER> <LOCATOR>",  # F3
-    "TU 73 EE",                                               # F4
+    "5NN <NUMBER> <LOCATOR>",  # F3
+    "TU",                                               # F4
     "<HISCALL>",                                               # F5
     "DE <MYCALL>",                                             # F6
     "?",                                                       # F7
-    "272 272 SSB",                                             # F8
+    "282 282 SSB",                                             # F8
 ]
 
 def _expand_cw(template: str, lb: LogBook, hiscall: str, band: str) -> str:
