@@ -307,13 +307,28 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [-o OUT.mp4]
   verified-correct 520.03s to a wrong 579.14s). Coalescing to one candidate
   per burst is what makes "latest cluster" mean "start of *this* exchange"
   rather than "some segment inside it" — don't remove it.
-  **Residual limitation**: voice QSOs still only snap to the start of
-  whichever *whole burst* they fall in, not to the specific segment where
-  that particular exchange began within a burst containing several rapid
-  RX/TX flips — there's no way to tell those apart from duration alone. A
-  future recording with PTT telemetry (see the RX/TX overlay above) could
-  do better by aligning to the QSO's own actual TX segment directly instead
-  of guessing from duration.
+  **Resolved with a heuristic, not telemetry**: a burst can begin with the
+  operator listening (RX) before their own initiating transmission, so the
+  burst's first segment isn't always where a QSO really starts (e.g. the
+  recording starting mid-listen, before any TX). `_tx_start` finds the real
+  start within a burst without needing PTT data at all: RX and TX strictly
+  alternate (the recorder splits on every switch), and a TX segment — a
+  brief call or report — is consistently shorter than the RX segment either
+  side of it. So whichever alternating phase (even/odd position in the
+  burst) has the shorter median duration is TX, and its first occurrence is
+  the real start (regression test:
+  `test_cluster_starts_skips_leading_rx_to_find_the_tx_start`, built from
+  the exact real durations the user identified by ear: RX 26.11s, TX 2.13s,
+  RX 5.54s, TX 5.41s). Verified to leave the CW round byte-for-byte
+  unchanged — every one of its bursts already happened to start on TX, so
+  there was nothing to correct there; the heuristic only ever moves a snap
+  point *later* within its own burst, never earlier or into a different one.
+  **Known unsolved case, from the user directly**: this breaks down while
+  calling CQ — a stretch of many brief TX calls with only short listening
+  gaps in between has no single "real" start, and an earlier fruitless call
+  looks identical to the one that finally got answered. No fix attempted;
+  falls back to the burst's first segment when the two phases aren't
+  distinguishable (equal medians, or fewer than one of each).
   There is deliberately no more `LEAD` pre-show constant: once panel timing is
   snapped to the real over, showing it exactly when the over starts *is* the
   natural lead (the over itself takes several seconds), so an artificial

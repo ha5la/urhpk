@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import statistics
 import subprocess
 import sys
 import wave
@@ -468,12 +469,61 @@ def _esc(s: str) -> str:
     return s.replace('\\', '\\\\').replace('{', '(').replace('}', ')')
 
 
+def _bursts(segs: list[Segment]) -> list[list[Segment]]:
+    """Group into maximal runs of consecutive real-over segments (dur <=
+    MAX_OVER_S), separated by genuine listening gaps."""
+    groups: list[list[Segment]] = []
+    cur: list[Segment] = []
+    for s in segs:
+        if s.dur <= MAX_OVER_S:
+            cur.append(s)
+        else:
+            if cur:
+                groups.append(cur)
+            cur = []
+    if cur:
+        groups.append(cur)
+    return groups
+
+
+def _tx_start(burst: list[Segment]) -> float:
+    """Where a QSO actually starts within a burst: the operator's own first
+    TX, not necessarily the burst's first segment.
+
+    Without PTT telemetry there's no ground truth for which segments are
+    RX vs TX, but two things reliably hold: RX and TX strictly alternate
+    (the recorder splits on every switch), and a TX segment -- a brief call
+    or report -- is consistently shorter than the RX segment either side of
+    it (listening for a reply). So whichever alternating phase (even or odd
+    position in the burst) has the shorter median duration is TX, and its
+    first occurrence is where this exchange really begins.
+
+    This breaks down while calling CQ: a long stretch of repeated brief TX
+    calls with only short listening gaps between them has no single
+    "real" start to find this way, and an earlier fruitless call can look
+    identical to the one that finally got answered. There's no fix for that
+    here -- falls back to the burst's own first segment when the two phases
+    aren't distinguishable (fewer than one of each, or equal medians)."""
+    if len(burst) < 2:
+        return burst[0].audio_t
+    even = [s.dur for s in burst[0::2]]
+    odd = [s.dur for s in burst[1::2]]
+    if not even or not odd:
+        return burst[0].audio_t
+    even_med, odd_med = statistics.median(even), statistics.median(odd)
+    if even_med == odd_med:
+        return burst[0].audio_t
+    tx_is_even = even_med < odd_med
+    for i, s in enumerate(burst):
+        if (i % 2 == 0) == tx_is_even:
+            return s.audio_t
+    return burst[0].audio_t  # unreachable: one phase is always non-empty
+
+
 def cluster_starts(segs: list[Segment]) -> list[float]:
-    """audio_t of every segment beginning a fresh burst of on-air activity --
-    the first segment after a genuine listening gap (dur > MAX_OVER_S), or
-    the very first segment. A brief inter-turn silence during a normal
-    back-and-forth exchange stays well under MAX_OVER_S and does not count,
-    so one QSO's overs share a single burst.
+    """audio_t of the real start of every fresh burst of on-air activity --
+    see `_bursts` for how a burst is delimited and `_tx_start` for how its
+    real (TX-initiated) start is found within it.
 
     Deliberately keyed on duration alone, not on whether CW was actually
     decoded (`s.events`): a WAV segment boundary is a precise real-world
@@ -482,16 +532,7 @@ def cluster_starts(segs: list[Segment]) -> list[float]:
     every voice over -- on a mostly-voice recording almost no QSO got the
     audio-precise snap at all. This is pure audio structure, independent of
     both CW content and the EDI log's minute-only timestamp precision."""
-    starts: list[float] = []
-    prev_was_gap = True
-    for s in segs:
-        if s.dur <= MAX_OVER_S:
-            if prev_was_gap:
-                starts.append(s.audio_t)
-            prev_was_gap = False
-        else:
-            prev_was_gap = True
-    return starts
+    return [_tx_start(b) for b in _bursts(segs)]
 
 
 def _snap_to_cluster(t: float, clusters: list[float]) -> float:

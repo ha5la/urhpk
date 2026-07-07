@@ -138,13 +138,35 @@ point inside that same exchange rather than its start. Coalescing to one
 candidate per burst is precisely what makes "latest cluster" mean "the
 start of this exchange" — necessary, not incidental.
 
+That gap closed without needing telemetry, from an idea of the user's:
+**a burst's own first segment isn't always where a QSO starts**, if the
+operator was listening (RX) before their own initiating call -- e.g. the
+very first burst of the "mix" session starts mid-listen. `_tx_start` finds
+the real start within a burst by exploiting two things that hold without
+any PTT data: RX and TX strictly alternate (the recorder splits on every
+switch), and a TX segment -- a brief call or report -- is consistently
+shorter than the RX either side of it. Whichever alternating phase has the
+shorter median duration is TX; its first occurrence is the real start.
+Verified against the exact real burst the user identified by ear (RX
+26.11s, TX 2.13s, RX 5.54s, TX 5.41s) -- QSO 1 now starts at 26.11s, not
+0:00. Checked against the CW round too: it's byte-for-byte unchanged, since
+every one of its bursts already happened to start on TX -- the heuristic
+only ever moves a snap point *later* within its own burst, never earlier or
+into a different burst.
+
+**The user's own caveat, left unsolved**: this breaks down while calling
+CQ. A stretch of many brief TX calls with only short listening gaps in
+between has no single "real" start to find this way, and an earlier
+fruitless call looks identical to the one that finally got answered.
+Falls back to the burst's own first segment when the two phases aren't
+distinguishable (equal medians, or fewer than one of each) -- no better
+answer for the CQ case than that right now.
+
 Bottom line: a CW-heavy recording ("cw", all 8 QSOs CW) gets tight,
 audio-precise timing on essentially every QSO. A mostly-voice recording
-("mix") now gets the *right burst* for every QSO instead of being wildly
-wrong, but can't (yet) pinpoint the exact segment within a burst where a
-particular voice exchange began — there's no way to tell that from duration
-alone. A future recording with PTT telemetry (see below) could resolve this
-properly by aligning to the QSO's actual TX segment instead of guessing.
+("mix") now gets the operator's own real TX start for most QSOs too,
+purely from segment durations -- except during CQ-calling stretches, which
+remain an open problem.
 
 This also makes the pipeline far more tolerant of clock skew between the
 radio and the PC. The WAV filenames' timestamps come from the **radio's own

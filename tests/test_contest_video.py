@@ -420,6 +420,28 @@ class TestAss:
         ]
         assert cluster_starts(segs) == [40.0]
 
+    def test_cluster_starts_skips_leading_rx_to_find_the_tx_start(self):
+        # Regression test for the user's own RX/TX heuristic, verified
+        # against this exact real burst from the "mix" recording: when a
+        # recording/burst begins with the operator listening (RX) rather
+        # than transmitting, the burst's own first segment is not where a
+        # QSO actually starts -- the QSO starts on the operator's own TX.
+        # Without telemetry there's no ground truth, but RX and TX reliably
+        # alternate, and TX segments (a brief call/report) are consistently
+        # shorter than RX segments (listening for a reply) -- so whichever
+        # alternating phase has the shorter median duration is TX, and the
+        # first segment in that phase is the real start.
+        # (Real durations from urhob2026mix: RX 26.11s, TX 2.13s, RX 5.54s,
+        # TX 5.41s -- user confirmed by ear that the TX at t=26.11s is
+        # exactly when they started calling.)
+        segs = [
+            Segment('a', datetime(2026, 7, 4, 13, 0, 0), 26.11, 0.0),     # RX: listening
+            Segment('b', datetime(2026, 7, 4, 13, 0, 26), 2.13, 26.11),   # TX: the real start
+            Segment('c', datetime(2026, 7, 4, 13, 0, 28), 5.54, 28.24),   # RX: listening for reply
+            Segment('d', datetime(2026, 7, 4, 13, 0, 34), 5.41, 33.78),   # TX: continuing
+        ]
+        assert cluster_starts(segs) == [26.11]
+
     def test_qso_window_snaps_to_real_burst_not_edi_minute(self, tmp_path):
         # EDI only has minute precision, so audio_time_for(qso.dt) lands
         # somewhere inside the real over rather than at its start. The panel
