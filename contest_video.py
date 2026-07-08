@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import statistics
 import subprocess
 import sys
@@ -290,6 +291,25 @@ def remap_audio_t(segs: list[Segment]) -> None:
         t += _eff(s)
 
 
+def trim_to_duration(segs: list[Segment], max_dur: float) -> list[Segment]:
+    """Keep only the segments needed to cover the first max_dur seconds of
+    real session time (a --duration preview), shortening the last one to
+    land exactly on the cutoff.
+
+    Called *before* CW decoding, not after: decode_segment/gate_events are
+    the expensive part of the pipeline, and a short preview has no use for
+    segments past the cutoff, so this skips decoding them at all rather than
+    decoding the full session and discarding most of the result.
+    """
+    out = [s for s in segs if s.audio_t < max_dur]
+    if out:
+        last = out[-1]
+        cut = max(0.0, min(_eff(last), max_dur - last.audio_t))
+        if cut < _eff(last):
+            last.eff_dur = cut
+    return out
+
+
 def parse_edi(path: str) -> tuple[str, str, list[Qso]]:
     mycall, mywwl = '', ''
     qsos: list[Qso] = []
@@ -316,6 +336,21 @@ def parse_edi(path: str) -> tuple[str, str, list[Qso]]:
                 pts = 0
             dup = len(f) > 13 and f[13].strip().upper() == 'D'
             qsos.append(Qso(dt, f[2], f[4], f[5], f[6], f[7], f[9], pts, dup))
+    return mycall, mywwl, qsos
+
+
+def merge_edi(paths: list[str]) -> tuple[str, str, list[Qso]]:
+    """Merge one or more per-band EDI logs (e.g. 2M + 70CM from the same
+    session) into a single chronological QSO list -- the recording is one
+    continuous audio timeline regardless of how many bands were worked."""
+    mycall, mywwl = '', ''
+    qsos: list[Qso] = []
+    for path in paths:
+        mc, mw, qs = parse_edi(path)
+        if not mycall:
+            mycall, mywwl = mc, mw
+        qsos.extend(qs)
+    qsos.sort(key=lambda q: q.dt)
     return mycall, mywwl, qsos
 
 
@@ -347,6 +382,38 @@ def derive_utc_offset(segs: list[Segment], qsos: list[Qso]) -> int:
         seconds=(segs[-1].audio_t + segs[-1].dur) / 2)
     qso_mid = qsos[0].dt + (qsos[-1].dt - qsos[0].dt) / 2
     return round((wav_mid - qso_mid).total_seconds() / 3600)
+
+
+_WEBCAM_TS_RE = re.compile(r'(\d{8}_\d{6})')
+
+
+def parse_webcam_wall(path: str) -> datetime:
+    """Parse a phone/webcam filename's embedded timestamp (e.g.
+    VID_20260706_180003.mp4) the same way scan_segments reads WAV filenames."""
+    m = _WEBCAM_TS_RE.search(os.path.basename(path))
+    if not m:
+        raise ValueError(f"no YYYYMMDD_HHMMSS timestamp found in {path}")
+    return datetime.strptime(m.group(1), '%Y%m%d_%H%M%S')
+
+
+def sync_webcam_start(cam_wall: datetime, cam_dur: float, qsos: list[Qso],
+                      segs: list[Segment], offset_h: int) -> float:
+    """Video-timeline position (seconds) where the webcam recording begins.
+
+    The webcam is a separate device with its own clock convention, which
+    need not match the WAV recorder's (in practice the WAV recorder here
+    stamped filenames in plain UTC, while the phone stamped its own in local
+    wall time -- two different offsets for the same session). So its offset
+    can't be assumed to equal `offset_h`; it's derived the same way
+    `offset_h` itself was, by treating the whole webcam clip as a one-segment
+    "recording" and reusing derive_utc_offset's span-midpoint match against
+    the *full* QSO list (not any --duration-trimmed subset, since a short
+    preview's QSO span is too narrow an anchor for reliable hour rounding).
+    """
+    cam_seg = Segment('', cam_wall, cam_dur, 0.0)
+    cam_offset_h = derive_utc_offset([cam_seg], qsos)
+    cam_utc_start = cam_wall - timedelta(hours=cam_offset_h)
+    return audio_time_for(cam_utc_start + timedelta(hours=offset_h), segs)
 
 
 # ---------------------------------------------------------------------------
@@ -768,7 +835,20 @@ def concat_audio(segs: list[Segment], out_wav: str) -> None:
     os.remove(listfile)
 
 
-def render(wav: str, ass: str, out: str, W: int, H: int) -> None:
+def _ffprobe_duration(path: str) -> float:
+    out = subprocess.run(
+        ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+         '-of', 'csv=p=0', path],
+        check=True, capture_output=True, text=True).stdout
+    return float(out.strip())
+
+
+PIP_WIDTH_FRAC = 0.20   # webcam PiP width as a fraction of the frame width
+PIP_MARGIN_FRAC = 0.02  # gap from the frame edge, same fraction basis
+
+
+def render(wav: str, ass: str, out: str, W: int, H: int,
+          webcam: str | None = None, webcam_start: float = 0.0) -> None:
     ass_esc = ass.replace('\\', '\\\\').replace(':', '\\:').replace("'", "\\'")
     # Full-screen scrolling waterfall, dimmed to ~half luma so it reads as an
     # ambient background and the text stays crisp on top. overlap=0.8 makes it
@@ -777,10 +857,30 @@ def render(wav: str, ass: str, out: str, W: int, H: int) -> None:
         f"[0:a]showspectrum=s={W}x{H}:mode=combined:slide=scroll:overlap=0.8:"
         f"color=intensity:scale=cbrt:fscale=log:saturation=1.6,"
         f"lutyuv=y=val*0.42,format=yuv420p,fps=30[bg];"
-        f"[bg]subtitles='{ass_esc}':fontsdir=/usr/share/fonts[v]"
+        f"[bg]subtitles='{ass_esc}':fontsdir=/usr/share/fonts[v0]"
     )
     cmd = ['ffmpeg', '-y', '-hide_banner', '-stats', '-loglevel', 'warning',
-           '-i', wav, '-filter_complex', fchain,
+           '-i', wav]
+    if webcam:
+        # itsoffset delays the whole cam stream's presentation timestamps so
+        # its own frame 0 lands at webcam_start in the output timeline --
+        # exactly right, since that's the real moment the phone started
+        # recording. tpad clones the cam's last frame indefinitely so a clip
+        # a little shorter than the session (as here) can never end the
+        # shared filtergraph early and truncate the main waterfall/audio.
+        # hflip un-mirrors a phone front-camera recording, which records raw
+        # (not mirrored like the on-screen viewfinder the operator saw).
+        pip_w = round(W * PIP_WIDTH_FRAC)
+        margin = round(W * PIP_MARGIN_FRAC)
+        cmd += ['-itsoffset', f'{webcam_start:.3f}', '-i', webcam]
+        fchain += (
+            f";[1:v]scale={pip_w}:-2,hflip,tpad=stop_mode=clone:stop_duration=99999[pip]"
+            f";[v0][pip]overlay=x=main_w-w-{margin}:y=main_h-h-{margin}:"
+            f"enable='gte(t,{webcam_start:.3f})'[v]"
+        )
+    else:
+        fchain = fchain.replace('[v0]', '[v]')
+    cmd += ['-filter_complex', fchain,
            '-map', '[v]', '-map', '0:a',
            '-c:v', 'libx264', '-preset', 'fast', '-crf', '21',
            '-c:a', 'aac', '-b:a', '96k', '-shortest', out]

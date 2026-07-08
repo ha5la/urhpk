@@ -216,15 +216,21 @@ scrolling audio waterfall, a live CW-decode ticker, and a panel showing the
 current QSO. Built for reuse across future contests recorded the same way.
 
 ```
-uv run contest_video.py RECORDING_DIR EDI_FILE [-o OUT.mp4]
+uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
 ```
-- Dependencies: `numpy` (uv script header) + `ffmpeg` on PATH
+- Dependencies: `numpy` (uv script header) + `ffmpeg`/`ffprobe` on PATH
 - **Input**: a directory of WAV segments named `YYYYMMDD_HHMMSS...wav` (local
   time), split on RX/TX switches, plus the EDI log for the same round. The
   recorder splits continuously, so segments are contiguous — the audio timeline
   is the sum of segment durations; filename wall-clock is used only to line QSOs
   against the audio. Segments must share one sample rate/format (concatenated
   with `ffmpeg -f concat -c copy`).
+- **Multiple EDI files merge into one timeline**: a session worked across
+  several bands (e.g. 2M + 70CM) writes one EDI per band, but it's still a
+  single physical recording. `edi` takes `nargs='+'`; `merge_edi` parses each
+  file and concatenates+sorts by `dt` into one chronological QSO list. `Qso`
+  itself carries no band field — the pipeline never needed one, since a QSO's
+  band only mattered for logging, not for rendering.
 - **CW decode is per-segment**: each WAV is one over at one speed, so a
   complex-demodulate-at-`--pitch` (default 600 Hz) envelope decoder with
   per-segment adaptive dit estimation is robust and yields absolute per-character
@@ -253,6 +259,39 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [-o OUT.mp4]
   so text stays readable). No frame-by-frame rendering. The waterfall fills the
   frame within the first ~80 s, then stays full.
 - The video keeps the recording's full length.
+- **`--duration SECONDS` for a chronological preview cut**: trims to the first
+  `SECONDS` of real session time — a straight, uncut trim (not a curated
+  highlight reel; that was considered and rejected as much more machinery for
+  a first cut). `trim_to_duration` runs *before* the CW-decode loop, not
+  after, and drops segments past the cutoff outright rather than decoding the
+  full session and discarding most of the result — the main cost of this
+  pipeline is CW decoding, so a 10-minute preview of a 2-hour session decodes
+  roughly 12x less audio. QSOs past the cutoff are filtered out of the merged
+  list before `build_ass`/chapters/SRT so nothing shows a QSO panel with no
+  time left to display it in.
+- **`--webcam PATH` for a picture-in-picture selfie/webcam overlay**, bottom-
+  right corner, muted (radio audio is the only soundtrack — the cam mic would
+  just add room noise/echo of the operator's own on-air voice), mirrored with
+  `hflip` since a phone's front camera records un-mirrored relative to what
+  the operator saw in the viewfinder while recording. Sync is the interesting
+  part: the webcam is a *different device* with its own clock convention, not
+  necessarily the WAV recorder's — in the first real use of this feature the
+  WAV recorder happened to stamp filenames in plain UTC while the phone
+  stamped its own in local wall time, two different offsets for the same
+  session. So the webcam's start position in the output timeline is derived,
+  not assumed: `sync_webcam_start` wraps the whole clip as a synthetic
+  one-segment "recording" and reuses `derive_utc_offset`'s own span-midpoint
+  match against the *full* QSO list (never a `--duration`-trimmed subset —
+  a short preview's QSO span is too narrow an anchor for reliable hour
+  rounding) to find the webcam's own offset, then maps its true start onto
+  the main timeline via `audio_time_for`. In `render()`, `-itsoffset` delays
+  the whole cam stream's presentation timestamps so its own frame 0 lands
+  exactly at that computed start — no input seeking needed, since the cam's
+  own t=0 already *is* the first frame we want. `tpad=stop_mode=clone`
+  clones the cam's last frame indefinitely so a clip a little shorter than
+  the session (as in that first real case) can never end the shared
+  ffmpeg filtergraph early and silently truncate the main waterfall/audio —
+  a real risk class with multi-input filtergraphs, not a hypothetical.
 - **Ticker clears in gaps, doesn't linger**: a ticker event's display end is capped
   to `TICKER_HOLD_S` (3 s) after its last character, even if the next real
   character is minutes away across a listening gap. Without this cap the last

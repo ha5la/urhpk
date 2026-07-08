@@ -34,9 +34,13 @@ from contest_video import (
     derive_utc_offset,
     gate_events,
     load_telemetry,
+    merge_edi,
     parse_edi,
+    parse_webcam_wall,
     qso_windows,
     remap_audio_t,
+    sync_webcam_start,
+    trim_to_duration,
 )
 
 SR = 16000
@@ -232,6 +236,90 @@ class TestEdi:
         assert qsos[0].call == 'HG7F' and qsos[0].pts == 26
         assert qsos[0].dt == datetime(2026, 7, 4, 9, 8)
         assert qsos[1].dup is True and qsos[1].pts == 0
+
+    def test_merge_edi_combines_and_sorts_multiple_bands(self, tmp_path):
+        # A session worked on two bands writes two EDI files -- one physical
+        # recording still needs a single chronological QSO list.
+        band_2m = tmp_path / '2m.edi'
+        band_2m.write_text(
+            "PCall=HA5LA\nPWWLo=JN97TF\n[QSORecords;2]\n"
+            "260706;1601;A;1;59;001;59;001;;JN86SR;167;;;;\n"
+            "260706;1720;C;1;59;003;59;003;;JN86SR;167;;;;\n"
+        )
+        band_70cm = tmp_path / '70cm.edi'
+        band_70cm.write_text(
+            "PCall=HA5LA\nPWWLo=JN97TF\n[QSORecords;1]\n"
+            "260706;1615;B;1;59;001;59;002;;JN97WM;37;;;;\n"
+        )
+        mycall, mywwl, qsos = merge_edi([str(band_2m), str(band_70cm)])
+        assert (mycall, mywwl) == ('HA5LA', 'JN97TF')
+        assert [q.call for q in qsos] == ['A', 'B', 'C']  # chronological, bands interleaved
+
+
+class TestTrimToDuration:
+    def _segs(self):
+        return [
+            Segment('a', datetime(2026, 7, 4, 11, 0, 0), 60.0, 0.0),
+            Segment('b', datetime(2026, 7, 4, 11, 1, 0), 60.0, 60.0),
+            Segment('c', datetime(2026, 7, 4, 11, 2, 0), 60.0, 120.0),
+        ]
+
+    def test_drops_segments_past_the_cutoff(self):
+        out = trim_to_duration(self._segs(), 90.0)
+        assert [s.path for s in out] == ['a', 'b']
+
+    def test_shortens_the_last_kept_segment_to_land_on_the_cutoff(self):
+        out = trim_to_duration(self._segs(), 90.0)
+        assert out[-1].eff_dur == 30.0
+        assert _eff(out[-1]) == 30.0
+
+    def test_cutoff_beyond_total_keeps_everything_unchanged(self):
+        segs = self._segs()
+        out = trim_to_duration(segs, 999.0)
+        assert len(out) == 3
+        assert out[-1].eff_dur is None
+
+
+class TestWebcamSync:
+    def test_parse_webcam_wall_reads_filename_timestamp(self):
+        assert parse_webcam_wall('VID_20260706_180003.mp4') == \
+            datetime(2026, 7, 6, 18, 0, 3)
+
+    def test_sync_derives_the_cams_own_offset_not_the_recorders(self):
+        # Main WAV recorder's own convention: wall = UTC+2 (mirrors
+        # TestTimeline.test_derive_utc_offset).
+        segs = [
+            Segment('a', datetime(2026, 7, 4, 11, 0, 0), 60.0, 0.0),
+            Segment('b', datetime(2026, 7, 4, 11, 1, 0), 60.0, 60.0),
+        ]
+        qsos = [
+            Qso(datetime(2026, 7, 4, 9, 0), 'A', '599', '1', '599', '2',
+                'JN97MM', 10, False),
+            Qso(datetime(2026, 7, 4, 9, 2), 'B', '599', '3', '599', '4',
+                'JN97MM', 10, False),
+        ]
+        offset_h = derive_utc_offset(segs, qsos)
+        assert offset_h == 2
+
+        # The phone uses a *different* clock convention (UTC+5, not +2) --
+        # its filename wall-clock is 14:00:00, real recording start is UTC
+        # 09:00:00, which is exactly the start of the session.
+        cam_wall = datetime(2026, 7, 4, 14, 0, 0)
+        start = sync_webcam_start(cam_wall, cam_dur=120.0, qsos=qsos,
+                                  segs=segs, offset_h=offset_h)
+        assert start == 0.0
+
+    def test_sync_clamps_to_session_start_when_cam_starts_earlier(self):
+        segs = [Segment('a', datetime(2026, 7, 4, 11, 0, 0), 60.0, 0.0)]
+        qsos = [Qso(datetime(2026, 7, 4, 9, 0), 'A', '599', '1', '599', '2',
+                     'JN97MM', 10, False)]
+        # cam wall-clock a full day earlier than the session -- however its
+        # own offset resolves, the real recording predates segs[0], so the
+        # result clamps to the session's own start rather than going negative.
+        cam_wall = datetime(2026, 7, 3, 8, 0, 0)
+        start = sync_webcam_start(cam_wall, cam_dur=30.0, qsos=qsos,
+                                  segs=segs, offset_h=2)
+        assert start == 0.0
 
 
 class TestSkipGaps:
