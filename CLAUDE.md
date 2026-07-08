@@ -232,25 +232,80 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
   itself carries no band field — the pipeline never needed one, since a QSO's
   band only mattered for logging, not for rendering.
 - **CW decode is per-segment**: each WAV is one over at one speed, so a
-  complex-demodulate-at-`--pitch` (default 600 Hz) envelope decoder with
-  per-segment adaptive dit estimation is robust and yields absolute per-character
-  timestamps for sync. My own keying and the direct exchanges decode cleanly.
+  complex-demodulate envelope decoder with per-segment adaptive dit estimation
+  is robust and yields absolute per-character timestamps for sync.
   `decode_segment` skips segments longer than `MAX_OVER_S` before doing any
   signal processing, since `gate_events` would reject them on duration alone
   regardless — this alone roughly halved total decode time on real recordings.
+- **The demodulation pitch is auto-detected per segment** (`_detect_pitch`),
+  not assumed to be a single `--pitch` (default 600 Hz) for the whole
+  session — that argument is now only a fallback for the rare case nothing
+  is found at all (e.g. true silence). Found from real received-signal
+  segments: one RX segment's true tone was ~1296 Hz against the 600 Hz
+  default, a 695 Hz gap entirely outside the envelope lowpass's passband
+  (`LOWPASS_CUTOFF_HZ=120`) — not a decode-quality problem but a near-total
+  loss of the actual signal before decoding even started (measured SNR
+  near 0). The operator's own TX sidetone auto-detects to within ~1 Hz of
+  600 Hz regardless (verified across several real TX segments from two
+  different QSOs), so always auto-detecting is strictly better than only
+  doing it conditionally.
 - **Envelope filter/threshold constants** (`LOWPASS_CUTOFF_HZ`, `LOWPASS_NTAPS`,
   `THR_HI_FRAC`/`THR_LO_FRAC`): a windowed-sinc lowpass (`_lowpass_kernel`) plus
   hysteresis thresholding (`_hysteresis_on`), verified against real recordings to
   raise SNR for moderate-offset interference (~150 Hz+) with no effect on
   genuine nearby QSOs. See RECORDING.md's "CW decoder behaviour" section for
   the full before/after numbers and the hard limit on closer-in interference.
+- **RX (received signal) decodes far worse than TX (the operator's own
+  sidetone) at the same SNR, and needed its own fix.** Diagnosed against a
+  real RX segment with known ground truth (`20260706_160342A.wav`, the
+  user transcribed it by ear as `TU CFM 5NN TT3 TT3 JN86SR K`): despite a
+  33 dB SNR (well above `MIN_SNR_DB`), the raw decode was gibberish. SNR
+  measures average loudness, not the cleanliness of individual element
+  edges — dumping the exact hysteresis run durations showed many on/off
+  runs a fraction of a dit long (10-40 ms against a ~55 ms dit), fragmenting
+  single dits/dahs into several pieces. The operator's own TX sidetone is
+  a clean, locally-generated tone with none of this; a real received signal
+  picks up QSB/AGC/near-threshold noise the sidetone never has to deal
+  with. `_debounce_on` merges any on/off run shorter than
+  `DEBOUNCE_DIT_FRAC` (0.5) of the segment's own *preliminary* dit estimate
+  into its neighbour, run in `decode_segment` between hysteresis and the
+  final (real) dit estimate — two passes, since the debounce threshold
+  itself needs a dit estimate to scale against. Deliberately relative to
+  the segment's own dit, not a fixed time: a fixed 30 ms threshold (tuned
+  against this one file) silently ate *all* decode at 45 WPM in the
+  existing synthesized-WPM regression test, where a dit is only ~27 ms —
+  caught by that test, not by the real-data check, which is exactly why
+  both exist. `THR_HI_FRAC`/`THR_LO_FRAC` were also lowered (0.5/0.3 →
+  0.35/0.15) as part of the same tuning pass, both found via a grid search
+  scored by edit distance to the known ground truth text. Net effect on
+  the real July recording's first 20 minutes: 187 characters from 13
+  trusted overs → 500 characters from 30, with no regressions in the
+  existing decoder test suite (12-60 WPM) or on previously-good TX segments.
 - **Trust gate** (`gate_events`): the long "listening / calling CQ" stretches
   between QSOs carry overlapping signals and noise at the CW pitch that decode to
   gibberish. A segment's decode is shown only if it is short (`< MAX_OVER_S`),
   loud enough (`>= MIN_SNR_DB`), word-shaped (`_quality >= MIN_QUALITY`), and not
-  a chopped steady carrier (`_dominance <= MAX_DOMINANCE`). This keeps every real
-  over and rejects the noise. Tune these four constants, not the decoder, if a
-  future recording gates too aggressively/loosely.
+  a chopped steady carrier (`_dominance <= MAX_DOMINANCE`, only checked at all
+  once there's `>= MIN_CHARS_FOR_DOMINANCE` characters — see below). This keeps
+  every real over and rejects the noise. Tune these constants, not the decoder,
+  if a future recording gates too aggressively/loosely.
+  - `MAX_OVER_S` is 35s (was 30s): raised after a real, correctly
+    transcribable 32.5-second exchange (a full report + locator handoff)
+    was being skipped before decoding even started. No clean statistical
+    gap here the way there is for `FREQ_MATCH_TOLERANCE_HZ` — real segment
+    durations form a continuum from 30s past 100s — so this is a modest,
+    evidence-backed nudge for one confirmed case, not a broad guess; the
+    other three gates still guard genuinely long listening periods that
+    happen to land in the 30-35s range.
+  - `MIN_CHARS_FOR_DOMINANCE` (5): any 2-character decode has dominance
+    `>= 0.5` by construction (the two characters either match, giving 1.0,
+    or don't, giving exactly 1/2 — never less), so `MAX_DOMINANCE=0.4` was
+    structurally impossible to pass for *any* two-letter contest word
+    ("TU", "R", "K"...), independent of content. Found from real,
+    correctly-decoded "TU" and "73 EE" being silently dropped from the
+    ticker. Below this length, `_dominance` just returns `0.0` — the
+    "chopped carrier" pattern it guards against only shows up over many
+    characters in practice anyway.
 - **UTC offset is derived**, not hardcoded: EDI times are UTC, WAV filenames are
   local; `derive_utc_offset` rounds the span-midpoint difference to whole hours,
   so DST is handled automatically.

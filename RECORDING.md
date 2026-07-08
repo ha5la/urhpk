@@ -35,15 +35,62 @@ Render speed at 1080p without `--skip-gaps`: ~0.28× realtime (~2.5 h for 42 min
 
 - Works per-segment: each WAV is one over at one speed — adaptive dit estimation
   is robust per file.
-- CW tone: 600 Hz (IC-9700 sidetone default). Pass `--pitch` if different.
+- **CW tone is auto-detected per segment**, not assumed to be 600 Hz (IC-9700
+  sidetone default) for the whole session — `--pitch` is now only a fallback
+  for the rare case `_detect_pitch` finds nothing (e.g. true silence). Found
+  from real received-signal segments the user transcribed by ear: one RX
+  segment's true tone was ~1296 Hz against the 600 Hz default, a 695 Hz gap
+  entirely outside the envelope lowpass's passband (`LOWPASS_CUTOFF_HZ=120`)
+  — not a decode-quality problem but a near-total loss of the actual signal
+  before decoding even started (SNR measured near 0). The operator's own TX
+  sidetone auto-detects to within ~1 Hz of 600 Hz regardless (verified
+  across several real TX segments from two different QSOs), so always
+  auto-detecting is strictly better than only doing it conditionally.
 - **Trust gate**: a segment's decode is shown in the ticker only if it is
-  short (< 30 s), has high SNR (≥ 20 dB), word-shaped text (≥ 50% multi-char
-  tokens), and not a chopped carrier (no single character > 40% of all chars).
-  This keeps all real exchanges and drops band noise / listening stretches.
+  short (< `MAX_OVER_S`, 35 s), has high SNR (≥ 20 dB), word-shaped text
+  (≥ 50% multi-char tokens), and not a chopped carrier (no single character
+  > 40% of all chars *once there's enough text for that pattern to mean
+  anything* — see `MIN_CHARS_FOR_DOMINANCE` below). This keeps all real
+  exchanges and drops band noise / listening stretches.
+  - `MAX_OVER_S` was raised from 30s to 35s after a real, correctly
+    transcribable 32.5-second exchange (a full report + locator handoff)
+    was being skipped before decoding even started. There's no clean
+    statistical gap between "long real over" and "genuine listening
+    period" the way there is for e.g. `FREQ_MATCH_TOLERANCE_HZ` — real
+    segment durations form a continuum from 30s past 100s — so this is a
+    modest, evidence-backed nudge for one confirmed case, not a broad
+    guess; the other three gates still guard genuinely long listening
+    periods that happen to fall in the 30-35s range.
+  - `MIN_CHARS_FOR_DOMINANCE` (5): any 2-character decode has dominance
+    ≥ 0.5 by construction (the two characters either match, giving 1.0, or
+    don't, giving exactly 1/2 — never less), so `MAX_DOMINANCE=0.4` was
+    structurally impossible to pass for *any* two-letter contest word ("TU",
+    "R", "K"...) independent of content. Found from real, correctly-decoded
+    "TU" and "73 EE" being silently dropped from the ticker. Text shorter
+    than this length skips the dominance check entirely — the "chopped
+    carrier" pattern it guards against only shows up over many characters
+    in practice anyway.
 - Dah-heavy CW (e.g. "CQ TEST") needs the min/max-midpoint dit estimator — a
   plain median collapses when dahs dominate.
-- My own transmissions and direct partner reports decode cleanly. Received
-  signals from third parties on the band are filtered by the trust gate.
+- My own transmissions decode cleanly. Received signals from third parties
+  on the band are filtered by the trust gate. Direct partner reports
+  (received CW from the actual QSO partner, not third-party QRM) turned out
+  *not* to decode cleanly by default — see debounce below, found from a
+  real received segment the user transcribed by ear.
+- **Debounce**: `_debounce_on` merges any on/off run under `DEBOUNCE_DIT_FRAC`
+  (0.5) of the segment's own preliminary dit estimate into its neighbour.
+  The operator's own TX sidetone is a clean, locally-generated tone; a real
+  received signal has near-threshold noise/QSB the sidetone never does, and
+  it was fragmenting single dits/dahs into several pieces even at a
+  respectable 33 dB SNR (SNR is average loudness, not edge cleanliness).
+  Relative to the segment's own dit, not a fixed time, because a fixed
+  threshold tuned against one real file (30 ms) turned out to silently eat
+  *all* decode at 45 WPM in the synthesized-WPM regression test, where a
+  dit is only ~27 ms. `THR_HI_FRAC`/`THR_LO_FRAC` (0.5/0.3 → 0.35/0.15) were
+  lowered in the same tuning pass. Grid-searched by edit distance against
+  the one real segment with known ground truth; net effect on the first 20
+  minutes of that recording: 187 characters from 13 trusted overs → 500
+  from 30, no regressions in the WPM sweep or on previously-good TX segments.
 - **Envelope filter**: a windowed-sinc lowpass (`LOWPASS_CUTOFF_HZ=120`,
   `LOWPASS_NTAPS=321`) replaced a plain boxcar average of the same cutoff.
   Verified against both real recordings before adopting: it measurably

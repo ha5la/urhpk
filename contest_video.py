@@ -60,18 +60,31 @@ LOWPASS_CUTOFF_HZ = 120.0  # envelope filter cutoff -- covers real CW keying ban
 LOWPASS_NTAPS = 321        # windowed-sinc length; longer than the old boxcar for a
                            # much sharper stopband (rejects moderate-offset QRM
                            # noticeably better -- verified against real recordings)
-THR_HI_FRAC = 0.5   # hysteresis: fraction of (peak-floor) to trigger "on"
-THR_LO_FRAC = 0.3   # hysteresis: fraction of (peak-floor) to release back to "off"
+THR_HI_FRAC = 0.35  # hysteresis: fraction of (peak-floor) to trigger "on"
+THR_LO_FRAC = 0.15  # hysteresis: fraction of (peak-floor) to release back to "off"
+DEBOUNCE_DIT_FRAC = 0.5  # on/off runs shorter than this fraction of the segment's
+                         # own preliminary dit estimate are noise, not real keying
+                         # -- merged into their neighbour (see _debounce_on)
 
 # A segment's decode is trusted (shown in the ticker) only if it looks like a
 # real over rather than band noise. The long "listening / calling CQ" stretches
 # between QSOs carry many overlapping signals and noise at the CW pitch, which a
 # single-tone decoder turns into gibberish; these three gates reject them while
 # keeping every genuine exchange.
-MAX_OVER_S = 30.0    # a real over is short; long segments are listening periods
+MAX_OVER_S = 35.0    # a real over is short; long segments are listening periods.
+                     # No clean statistical gap here (unlike e.g.
+                     # FREQ_MATCH_TOLERANCE_HZ) -- real segment durations form
+                     # a continuum from 30s up past 100s, so this is a modest,
+                     # evidence-backed nudge (was 30.0) to capture one confirmed
+                     # real 32.5s exchange with a full locator exchange, not a
+                     # broad guess. The other three gates (SNR/quality/dominance)
+                     # still guard against genuine long listening periods that
+                     # happen to fall in the 30-35s range.
 MIN_SNR_DB = 20.0    # reject weak noise-only segments
 MIN_QUALITY = 0.5    # reject text dominated by isolated single letters (noise)
 MAX_DOMINANCE = 0.4  # reject text where one letter dominates (chopped carrier)
+MIN_CHARS_FOR_DOMINANCE = 5  # below this length, dominance is structurally
+                             # high regardless of content -- see _dominance
 
 
 def _quality(text: str) -> float:
@@ -85,10 +98,20 @@ def _quality(text: str) -> float:
 
 def _dominance(text: str) -> float:
     """Share of the most common non-space character. A chopped steady carrier
-    decodes to a run of one letter (TTTTT / EEEEE); real text is diverse."""
+    decodes to a run of one letter (TTTTT / EEEEE); real text is diverse.
+
+    Exempts short text (< MIN_CHARS_FOR_DOMINANCE) from this check
+    entirely: a 2-character decode has dominance >= 0.5 by construction
+    (either both characters match, or -- the *only* other option -- they
+    don't, giving exactly 1/2) regardless of content, which made
+    MAX_DOMINANCE=0.4 structurally impossible to pass for any two-letter
+    contest word ("TU", "R", "K"...). Found from a real reported case:
+    correctly-decoded "TU" and "73EE" were being silently dropped from
+    the ticker. The "chopped carrier" pattern this guards against only
+    shows up over many characters in practice anyway (see test_contest_video)."""
     chars = [c for c in text if c != ' ']
-    if not chars:
-        return 1.0
+    if len(chars) < MIN_CHARS_FOR_DOMINANCE:
+        return 0.0
     return max(chars.count(c) for c in set(chars)) / len(chars)
 
 
@@ -119,6 +142,37 @@ def _lowpass_kernel(cutoff_hz: float, sr: int, ntaps: int) -> np.ndarray:
     return h / h.sum()
 
 
+PITCH_SEARCH_LO_HZ = 300.0
+PITCH_SEARCH_HI_HZ = 1600.0
+
+
+def _detect_pitch(x: np.ndarray, sr: int, fallback: float) -> float:
+    """Find the actual dominant tone frequency in a segment, rather than
+    trusting a single assumed pitch for the whole session.
+
+    A received signal's true beat note can be very different from the
+    operator's own TX sidetone -- confirmed against real data far more
+    dramatically than the ~70 Hz WAV/telemetry-frequency disagreement
+    found earlier: one real RX segment's true tone was ~1296 Hz against
+    the assumed 600 Hz, a 695 Hz gap entirely outside the envelope
+    lowpass's passband (LOWPASS_CUTOFF_HZ=120), so almost none of the
+    actual signal survived demodulation at the wrong frequency at all --
+    not a decode-quality problem but a near-total loss of the signal
+    before decoding even started. TX segments' own sidetone is reliably
+    the loudest peak in the search band regardless (verified: several real
+    TX segments across two different QSOs all auto-detected to within
+    ~1 Hz of the nominal 600 Hz), so always detecting is safe rather than
+    only doing it conditionally."""
+    if len(x) < 8:
+        return fallback
+    spec = np.abs(np.fft.rfft(x * np.hanning(len(x))))
+    freqs = np.fft.rfftfreq(len(x), 1 / sr)
+    mask = (freqs >= PITCH_SEARCH_LO_HZ) & (freqs <= PITCH_SEARCH_HI_HZ)
+    if not mask.any() or not spec[mask].any():
+        return fallback
+    return float(freqs[mask][np.argmax(spec[mask])])
+
+
 def _envelope(x: np.ndarray, sr: int, pitch: float) -> tuple[np.ndarray, float]:
     """Complex-demodulate at `pitch` and return the low-rate magnitude envelope."""
     t = np.arange(len(x)) / sr
@@ -144,8 +198,71 @@ def _hysteresis_on(env: np.ndarray, thr_hi: float, thr_lo: float) -> np.ndarray:
     return on
 
 
+def _debounce_on(on: np.ndarray, min_samples: int) -> np.ndarray:
+    """Absorb on/off runs shorter than min_samples into the preceding run.
+
+    A received (not the operator's own TX sidetone) signal is weaker and
+    noisier, and the hysteresis thresholds -- however well tuned -- still
+    let brief spikes/dropouts near the threshold flip state for a handful
+    of samples. Verified against a real received-CW segment with known
+    ground truth text: those brief flips fragmented single dits/dahs into
+    several shorter pieces, corrupting the decode into gibberish despite a
+    high overall SNR (33 dB) -- SNR measures the signal's average
+    loudness, not the cleanliness of individual element edges. Left
+    unfiltered, decode was unusable; with this debounce it recovered the
+    great majority of the actual text."""
+    if min_samples <= 1:
+        return on
+    out = on.copy()
+    i = 0
+    n = len(out)
+    while i < n:
+        j = i
+        while j < n and out[j] == out[i]:
+            j += 1
+        if j - i < min_samples and i > 0:
+            out[i:j] = out[i - 1]
+        i = j
+    return out
+
+
+def _run_length_encode(on: np.ndarray, efs: float) -> list[tuple[bool, float, int]]:
+    """(is_on, duration_s, start_sample_idx) for each run in `on`."""
+    runs: list[tuple[bool, float, int]] = []
+    i = 0
+    n = len(on)
+    while i < n:
+        j = i
+        while j < n and on[j] == on[i]:
+            j += 1
+        runs.append((bool(on[i]), (j - i) / efs, i))
+        i = j
+    return runs
+
+
+def _estimate_dit(runs: list[tuple[bool, float, int]]) -> float | None:
+    """Median of the shorter (dit) cluster of ON durations, or None if
+    there aren't enough ON runs to estimate from. Split dits from dahs at
+    the midpoint between the robust min/max so the estimate holds even
+    when an over is dah-heavy (a plain median lands between dit and dah
+    and collapses the two)."""
+    ons = [d for s, d, _ in runs if s]
+    if len(ons) < 3:
+        return None
+    lo = float(np.percentile(ons, 10))
+    hi = float(np.percentile(ons, 90))
+    dits = [d for d in ons if d <= (lo + hi) / 2] or ons
+    dit = float(np.median(dits))
+    return dit if dit > 0 else None
+
+
 def decode_segment(path: str, pitch: float = 600.0) -> tuple[list[CharEvent], float]:
     """Decode one WAV segment into timed characters and its SNR in dB.
+
+    `pitch` is only a fallback for the rare case _detect_pitch can't find
+    anything (e.g. a silent segment) -- the actual demodulation frequency
+    is always auto-detected per segment, see _detect_pitch's docstring for
+    why a single assumed pitch for the whole session doesn't hold.
 
     Returns (events, snr_db). Events is empty when the segment carries no
     keyed CW (flat envelope / silence)."""
@@ -163,6 +280,7 @@ def decode_segment(path: str, pitch: float = 600.0) -> tuple[list[CharEvent], fl
     if len(x) < sr * 0.5:
         return [], 0.0
 
+    pitch = _detect_pitch(x, sr, pitch)
     env, efs = _envelope(x, sr, pitch)
     floor = np.percentile(env, 25)
     peak = np.percentile(env, 95)
@@ -174,28 +292,20 @@ def decode_segment(path: str, pitch: float = 600.0) -> tuple[list[CharEvent], fl
     thr_lo = floor + THR_LO_FRAC * (peak - floor)
     on = _hysteresis_on(env, thr_hi, thr_lo)
 
-    # run-length encode on/off
-    runs: list[tuple[bool, float, int]] = []  # (is_on, duration_s, start_idx)
-    i = 0
-    while i < len(on):
-        j = i
-        while j < len(on) and on[j] == on[i]:
-            j += 1
-        runs.append((bool(on[i]), (j - i) / efs, i))
-        i = j
+    # Debounce, but relative to a *preliminary* dit estimate, not a fixed
+    # time: a fixed threshold that's short enough to only catch noise at
+    # slow WPM is longer than a real dit at high WPM and starts eating
+    # legitimate fast keying (confirmed: a fixed 30ms threshold silently
+    # dropped all decode at 45 WPM, where a dit is ~27ms). DEBOUNCE_DIT_FRAC
+    # of the *segment's own* preliminary dit estimate scales correctly
+    # with whatever speed this particular over turns out to be.
+    prelim_dit = _estimate_dit(_run_length_encode(on, efs))
+    if prelim_dit:
+        on = _debounce_on(on, max(1, int(efs * DEBOUNCE_DIT_FRAC * prelim_dit)))
 
-    ons = [d for s, d, _ in runs if s]
-    if len(ons) < 3:
-        return [], snr
-    # dit = median of the shorter (dit) cluster of ON durations. Split dits from
-    # dahs at the midpoint between the robust min/max so the estimate holds even
-    # when an over is dah-heavy (a plain median lands between dit and dah and
-    # collapses the two).
-    lo = float(np.percentile(ons, 10))
-    hi = float(np.percentile(ons, 90))
-    dits = [d for d in ons if d <= (lo + hi) / 2] or ons
-    dit = float(np.median(dits))
-    if dit <= 0:
+    runs = _run_length_encode(on, efs)
+    dit = _estimate_dit(runs)
+    if dit is None:
         return [], snr
 
     events: list[CharEvent] = []

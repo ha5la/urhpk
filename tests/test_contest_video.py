@@ -176,6 +176,86 @@ class TestDecoderRobustness:
         _, snr = decode_segment(p, PITCH)
         assert snr > 16.0
 
+    def test_decodes_correctly_when_actual_tone_is_far_from_assumed_pitch(self, tmp_path):
+        # Regression test for a real reported bug, much more severe than the
+        # small WAV/telemetry frequency disagreement found earlier: a real
+        # received-signal segment's actual tone was ~1296 Hz against the
+        # assumed 600 Hz -- a 695 Hz gap entirely outside the envelope
+        # lowpass's passband (LOWPASS_CUTOFF_HZ=120), so almost none of the
+        # real signal survived demodulation at the wrong frequency at all.
+        # decode_segment must auto-detect the real tone per segment rather
+        # than trusting a single assumed pitch for the whole session.
+        tone = self._cw_tone('HG7F DE HA5LA', 20, 1300.0, 8000.0)
+        p = str(tmp_path / '20260704_120000A.wav')
+        w = wave.open(p, 'wb')
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(SR)
+        w.writeframes(tone.astype(np.int16).tobytes())
+        w.close()
+        events, _ = decode_segment(p, 600.0)  # deliberately wrong nominal pitch
+        assert ''.join(e.ch for e in events).strip() == 'HG7F DE HA5LA'
+
+    @staticmethod
+    def _cw_tone_with_dah_glitches(text, wpm, pitch, amp, glitch_frac=0.3):
+        """Like _cw_tone, but splits every dah with a brief spurious dropout
+        in the middle -- simulating the near-threshold chatter a real
+        received signal has that the operator's own clean TX sidetone
+        doesn't (see DEBOUNCE_DIT_FRAC)."""
+        unit = 1.2 / wpm
+        on: list[tuple[bool, float]] = []
+        for wi, word in enumerate(text.split(' ')):
+            if wi:
+                on.append((False, 7 * unit))
+            for ci, ch in enumerate(word):
+                if ci:
+                    on.append((False, 3 * unit))
+                for si, sym in enumerate(_MORSE_INV[ch]):
+                    if si:
+                        on.append((False, unit))
+                    dur = unit if sym == '.' else 3 * unit
+                    if sym == '-':
+                        g = unit * glitch_frac
+                        on.append((True, dur / 2 - g / 2))
+                        on.append((False, g))
+                        on.append((True, dur / 2 - g / 2))
+                    else:
+                        on.append((True, dur))
+        on.append((False, 3 * unit))
+        samples: list[np.ndarray] = []
+        phase = 0.0
+        for is_on, dur in on:
+            n = int(dur * SR)
+            t = (np.arange(n) + phase) / SR
+            phase += n
+            samples.append(np.sin(2 * np.pi * pitch * t) * (amp if is_on else 0.0))
+        return np.concatenate(samples)
+
+    def test_debounce_recovers_text_fragmented_by_near_threshold_chatter(self, tmp_path):
+        # Regression test for a real reported bug: a received-signal segment
+        # with known ground truth (the user transcribed it by ear) decoded
+        # to gibberish despite a high (33 dB) SNR. Root cause found by
+        # dumping the raw hysteresis run durations: many on/off runs were a
+        # fraction of a dit long, fragmenting single dits/dahs into several
+        # pieces -- the operator's own TX sidetone is clean and never does
+        # this, but a real received signal's near-threshold noise does.
+        # This synthesizes the same failure mode (a brief dropout injected
+        # into the middle of every dah) on a fully clean signal otherwise,
+        # so the test is deterministic and needs no real recording.
+        # Verified red before green: monkeypatching _debounce_on back to a
+        # no-op on this exact signal decodes to 'H55 HE HS55S 5SS II SHH'.
+        text = 'HG7F DE HA5LA 5NN TT1 JN97MM'
+        sig = self._cw_tone_with_dah_glitches(text, 20, PITCH, 8000.0, glitch_frac=0.3)
+        p = str(tmp_path / '20260704_120000A.wav')
+        w = wave.open(p, 'wb')
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(SR)
+        w.writeframes(sig.astype(np.int16).tobytes())
+        w.close()
+        events, _ = decode_segment(p, PITCH)
+        assert ''.join(e.ch for e in events).strip() == text
+
     def test_long_segment_is_skipped_without_decoding(self, tmp_path):
         # Segments longer than MAX_OVER_S always fail gate_events on duration
         # alone, so decode_segment should short-circuit rather than run the
@@ -217,6 +297,19 @@ class TestGate:
     def test_chopped_carrier_rejected(self):
         ev = [CharEvent(0.1 * i, 'T') for i in range(40)]
         assert gate_events(12.0, ev, snr=30.0) == []
+
+    def test_short_valid_words_are_not_falsely_dominance_rejected(self):
+        # Regression test for a real reported bug: a correctly-decoded "TU"
+        # and "73 EE" were silently dropped from the ticker. Any 2-character
+        # decode has dominance >= 0.5 by construction -- the two characters
+        # either match (1.0) or don't (exactly 1/2), never less -- so
+        # MAX_DOMINANCE=0.4 was structurally impossible to pass for *any*
+        # two-letter contest word ("TU", "R", "K"...), independent of content.
+        assert _dominance('TU') == 0.0
+        assert _dominance('73EE') == 0.0
+        # the pattern this check actually guards against still gets caught
+        # once there's enough text for "chopped carrier" to show at all
+        assert _dominance('TTTTTTTT') == 1.0
 
 
 class TestEdi:
