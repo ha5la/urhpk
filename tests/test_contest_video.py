@@ -33,6 +33,8 @@ from contest_video import (
     build_srt,
     build_state_events,
     cluster_starts,
+    cw_subranges,
+    decode_long_segment,
     decode_segment,
     derive_utc_offset,
     gate_events,
@@ -113,6 +115,50 @@ def _write_cw(path: str, text: str, wpm: int = 24, amp: float = 8000.0,
     w.setframerate(SR)
     w.writeframes(sig.astype(np.int16).tobytes())
     w.close()
+
+
+def _write_long_wav_with_cw_window(path: str, total_dur: float, cw_start: float,
+                                   text: str, wpm: int = 20, pitch: float = PITCH,
+                                   amp: float = 8000.0) -> tuple[float, float]:
+    """Write a `total_dur`-second WAV that's silent except for `text` keyed
+    as CW starting at `cw_start` -- simulating a segment far longer than
+    MAX_OVER_S (e.g. listening to two other stations for several minutes)
+    that still contains one real, decodable CW exchange somewhere inside it.
+    Returns the CW window's own (start, end) in seconds."""
+    unit = 1.2 / wpm
+    on: list[tuple[bool, float]] = []
+    for wi, word in enumerate(text.split(' ')):
+        if wi:
+            on.append((False, 7 * unit))
+        for ci, ch in enumerate(word):
+            if ci:
+                on.append((False, 3 * unit))
+            for si, sym in enumerate(_MORSE_INV[ch]):
+                if si:
+                    on.append((False, unit))
+                on.append((True, unit if sym == '.' else 3 * unit))
+    cw_chunks: list[np.ndarray] = []
+    phase = 0.0
+    for is_on, dur in on:
+        n = int(dur * SR)
+        t = (np.arange(n) + phase) / SR
+        phase += n
+        cw_chunks.append(np.sin(2 * np.pi * pitch * t) * (amp if is_on else 0.0))
+    cw = np.concatenate(cw_chunks)
+
+    n_total = int(total_dur * SR)
+    sig = np.zeros(n_total)
+    i0 = int(cw_start * SR)
+    n_fit = min(len(cw), max(0, n_total - i0))
+    sig[i0:i0 + n_fit] = cw[:n_fit]
+
+    w = wave.open(path, 'wb')
+    w.setnchannels(1)
+    w.setsampwidth(2)
+    w.setframerate(SR)
+    w.writeframes(sig.astype(np.int16).tobytes())
+    w.close()
+    return cw_start, cw_start + len(cw) / SR
 
 
 class TestDecoder:
@@ -339,6 +385,115 @@ class TestGate:
         # the pattern this check actually guards against still gets caught
         # once there's enough text for "chopped carrier" to show at all
         assert _dominance('TTTTTTTT') == 1.0
+
+
+class TestLongSegmentCwRecovery:
+    """decode_long_segment recovers CW content from a segment too long to
+    decode as a whole (see MAX_OVER_S) -- e.g. two other stations
+    negotiating a CW frequency over voice, working each other in CW, then
+    moving on, all while we just listened without ever transmitting
+    ourselves, so our own recorder never split the file."""
+
+    def test_gate_events_check_duration_false_bypasses_length_but_not_quality(self):
+        ev = [CharEvent(0.1 * i, c) for i, c in enumerate('HA5LA DE HG7F')]
+        # a real over this long is normally rejected outright ...
+        assert gate_events(474.0, ev, snr=40.0) == []
+        # ... but not once duration is confirmed genuine by other means
+        # (telemetry mode confirmation, for a sub-range extracted from a
+        # longer segment)
+        assert gate_events(474.0, ev, snr=40.0, check_duration=False) == ev
+        # SNR/quality/dominance still apply regardless
+        noisy = [CharEvent(0.1 * i, 'T') for i in range(40)]
+        assert gate_events(474.0, noisy, snr=40.0, check_duration=False) == []
+
+    def test_cw_subranges_extracts_only_cw_windows_within_segment_span(self):
+        seg = Segment('a', datetime(2026, 7, 6, 16, 30, 45), 300.0, 1000.0)
+        state_events = [
+            (900.0, 1010.0, SegState(mode='FM')),    # starts before seg -- FM, ignored
+            (1010.0, 1080.0, SegState(mode='CW')),   # fully inside -- CW, kept
+            (1080.0, 1200.0, SegState(mode='SSB')),  # inside -- SSB, ignored
+            (1200.0, 1400.0, SegState(mode='CW')),   # ends after seg -- CW, clipped
+        ]
+        # seg spans [1000, 1300); results are relative to seg.audio_t (1000)
+        assert cw_subranges(seg, state_events) == [(10.0, 80.0), (200.0, 300.0)]
+
+    def test_decode_long_segment_recovers_cw_from_a_too_long_segment(self, tmp_path):
+        # Regression test for a real reported case: two other stations
+        # negotiate a CW frequency over voice, work each other in CW, then
+        # move on -- all while we just listened, so our own recorder never
+        # split the file and the whole thing became one segment far longer
+        # than MAX_OVER_S. decode_segment alone never even attempts to
+        # decode any of it; decode_long_segment recovers the CW portion
+        # using telemetry's own confirmation of exactly when our radio was
+        # tuned to their frequency in CW mode.
+        p = str(tmp_path / '20260706_163045A.wav')
+        total_dur = MAX_OVER_S * 3
+        text = 'HG7F DE HA5LA'
+        cw_start = MAX_OVER_S * 1.2
+        _, cw_end = _write_long_wav_with_cw_window(p, total_dur, cw_start, text)
+        seg = Segment(p, datetime(2026, 7, 6, 16, 30, 45), total_dur, 0.0)
+        assert seg.dur > MAX_OVER_S
+
+        # whole-file decode never even attempts it
+        events, snr = decode_segment(p, PITCH)
+        assert events == [] and snr == 0.0
+
+        state_events = [(cw_start, cw_end, SegState(mode='CW'))]
+        spans = decode_long_segment(seg, state_events, PITCH)
+        assert len(spans) == 1
+        t0, t1, events = spans[0]
+        assert abs(t0 - cw_start) < 0.01
+        assert ''.join(e.ch for e in events).strip() == text
+
+    def test_decode_long_segment_ignores_non_cw_subranges(self, tmp_path):
+        p = str(tmp_path / '20260706_163045A.wav')
+        total_dur = MAX_OVER_S * 3
+        _write_long_wav_with_cw_window(p, total_dur, MAX_OVER_S * 1.2, 'HG7F')
+        seg = Segment(p, datetime(2026, 7, 6, 16, 30, 45), total_dur, 0.0)
+        # same audio, but telemetry says this whole span was SSB, not CW --
+        # nothing should be extracted or decoded
+        state_events = [(0.0, total_dur, SegState(mode='SSB'))]
+        assert decode_long_segment(seg, state_events, PITCH) == []
+
+    def test_remap_audio_t_preserves_a_long_segment_with_recovered_cw(self):
+        # Without the exemption, --skip-gaps' outpoint trimming in
+        # concat_audio would cut the very audio decode_long_segment just
+        # recovered text from out of the rendered output entirely.
+        long_seg = Segment('long.wav', datetime(2026, 7, 4, 13, 0, 0),
+                           MAX_OVER_S + 50, 0.0)
+        remap_audio_t([long_seg], long_cw_segs={id(long_seg)})
+        assert long_seg.eff_dur is None
+
+        other = Segment('other.wav', datetime(2026, 7, 4, 13, 0, 0),
+                        MAX_OVER_S + 50, 0.0)
+        remap_audio_t([other])
+        assert other.eff_dur == GAP_KEEP_S
+
+    def test_ticker_treats_disjoint_long_cw_spans_as_separate_bursts(self, tmp_path):
+        # Two CW exchanges recovered from within the *same* long segment,
+        # ~150s apart -- more than a genuine gap (MAX_OVER_S) -- must not
+        # be shown as one continuous, un-flushed transcript: they're
+        # unrelated exchanges we happened to follow one after the other.
+        edi = tmp_path / 'log.edi'
+        edi.write_text("PCall=HA5LA\nPWWLo=JN97MM\n[QSORecords;0]\n")
+        mycall, mywwl, qsos = parse_edi(str(edi))
+        long_seg = Segment('a', datetime(2026, 7, 4, 13, 0, 0), 300.0, 0.0)
+        long_cw_spans = [
+            (30.0, 85.0, [CharEvent(0.0, 'A'), CharEvent(1.0, 'B')]),
+            (203.0, 260.0, [CharEvent(0.0, 'X'), CharEvent(1.0, 'Y')]),
+        ]
+        ass = build_ass([long_seg], qsos, mycall, mywwl, 'TEST', 0, 1920, 1080,
+                        long_cw_spans=long_cw_spans)
+        texts = [line.rsplit(',', 1)[-1] for line in ass.splitlines()
+                if line.startswith('Dialogue:') and ',Ticker,' in line]
+        seen_x = False
+        for text in texts:
+            if 'X' in text:
+                seen_x = True
+            if seen_x:
+                assert 'A' not in text and 'B' not in text, \
+                    f"first exchange leaked into the second: {text!r}"
+        assert seen_x, "second exchange's characters never reached the ticker"
 
 
 class TestEdi:

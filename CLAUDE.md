@@ -313,6 +313,53 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
     ticker. Below this length, `_dominance` just returns `0.0` — the
     "chopped carrier" pattern it guards against only shows up over many
     characters in practice anyway.
+- **Long segments can still hide a real CW exchange between *other*
+  stations**: our own recorder only splits a new WAV file on our own PTT,
+  so a segment where we just listened to someone else's whole exchange --
+  e.g. two stations negotiating a CW frequency over voice, working each
+  other in CW, then moving on -- stays one long file, and `decode_segment`
+  never even attempts it once it exceeds `MAX_OVER_S`. `decode_long_segment`
+  recovers this: it finds telemetry-confirmed CW-mode sub-ranges within the
+  segment (`cw_subranges`, from `build_state_events` -- exactly the same
+  sub-division already used for the rig/rotator badge), extracts just that
+  audio (`_read_wav_range`), and decodes it with `_decode_samples` (the
+  actual pipeline, factored out of `decode_segment` so both can share it).
+  The sub-range's own duration is deliberately *not* checked against
+  `MAX_OVER_S` (`gate_events(..., check_duration=False)`) -- a real two-way
+  exchange between other stations can easily run longer than one of our own
+  overs, and the duration gate's only purpose was rejecting segments whose
+  *unexplained* length made them suspicious; telemetry mode confirmation is
+  already stronger evidence than length that this specific span is genuine
+  CW, not noise. SNR/quality/dominance still apply. Verified against a real
+  reported case (`20260706_163045A.wav`, 305s: FM voice → CW → SSB → FM →
+  CW, the two stations negotiating a frequency and working each other) --
+  recovered readable text from both CW windows, where before there was
+  nothing at all. One known limitation: the two stations may key at
+  noticeably different speeds, but dit-length is estimated once across the
+  whole sub-range, which can degrade accuracy for whichever side differs
+  most from that single estimate. `main()` loads WAV metadata and telemetry
+  *before* decoding now (previously after), since finding these sub-ranges
+  needs `state_events` up front. A second, easy-to-miss bug this exposed:
+  `remap_audio_t`'s `--skip-gaps` trimming decides whether to shrink a
+  segment to `GAP_KEEP_S` based on whether it has any `s.events` -- but a
+  long segment's recovered content is deliberately kept *out* of `s.events`
+  (to keep per-span burst-flushing correct in the ticker, see below), so
+  without an explicit exemption `--skip-gaps` would trim exactly the
+  segment whose audio was just recovered, and `concat_audio`'s `outpoint`
+  would cut that audio out of the rendered file entirely. `remap_audio_t`
+  now takes a `long_cw_segs` set (`id(seg)` for segments decode_long_segment
+  found content in) to exempt them.
+- **The ticker merges normal per-segment decodes with recovered long-segment
+  spans into one chronological list before building the transcript**,
+  flushing wherever the real gap since the previous chunk exceeds
+  `MAX_OVER_S` -- the same threshold used everywhere else to tell a genuine
+  over from a genuine gap -- rather than the old per-segment bookkeeping.
+  This matters because a single long segment can contain *two* unrelated
+  recovered exchanges (e.g. we followed one QSO, then later another, without
+  ever transmitting in between): dumping both into that segment's own event
+  list the way normal segments work would show them as one continuous,
+  un-flushed burst, which is why they're kept separate from `s.events` and
+  passed to `build_ass` as `long_cw_spans` instead.
 - **UTC offset is derived**, not hardcoded: EDI times are UTC, WAV filenames are
   local; `derive_utc_offset` rounds the span-midpoint difference to whole hours,
   so DST is handled automatically.

@@ -115,10 +115,18 @@ def _dominance(text: str) -> float:
     return max(chars.count(c) for c in set(chars)) / len(chars)
 
 
-def gate_events(dur: float, events: list["CharEvent"], snr: float) -> list["CharEvent"]:
-    """Return events if the segment is a trustworthy over, else []."""
+def gate_events(dur: float, events: list["CharEvent"], snr: float,
+                check_duration: bool = True) -> list["CharEvent"]:
+    """Return events if the segment is a trustworthy over, else [].
+
+    check_duration=False skips the MAX_OVER_S check -- for telemetry-
+    confirmed CW sub-ranges extracted from an otherwise-too-long segment
+    (see decode_long_segment), where the duration gate's usual purpose --
+    rejecting a segment whose unexplained length makes it suspicious --
+    doesn't apply: telemetry mode confirmation is already stronger evidence
+    than length that this specific span is genuine CW, not noise."""
     text = ''.join(e.ch for e in events)
-    if (dur < MAX_OVER_S and snr >= MIN_SNR_DB
+    if ((not check_duration or dur < MAX_OVER_S) and snr >= MIN_SNR_DB
             and _quality(text) >= MIN_QUALITY
             and _dominance(text) <= MAX_DOMINANCE):
         return events
@@ -256,27 +264,20 @@ def _estimate_dit(runs: list[tuple[bool, float, int]]) -> float | None:
     return dit if dit > 0 else None
 
 
-def decode_segment(path: str, pitch: float = 600.0) -> tuple[list[CharEvent], float]:
-    """Decode one WAV segment into timed characters and its SNR in dB.
+def _decode_samples(x: np.ndarray, sr: int, pitch: float = 600.0) -> tuple[list[CharEvent], float]:
+    """Decode a raw sample buffer into timed characters and its SNR in dB --
+    the actual demod/hysteresis/debounce/decode pipeline, factored out of
+    decode_segment so decode_long_segment (see below) can run the same
+    pipeline on an extracted sub-range of a WAV file instead of always the
+    whole thing.
 
     `pitch` is only a fallback for the rare case _detect_pitch can't find
     anything (e.g. a silent segment) -- the actual demodulation frequency
-    is always auto-detected per segment, see _detect_pitch's docstring for
-    why a single assumed pitch for the whole session doesn't hold.
+    is always auto-detected, see _detect_pitch's docstring for why a single
+    assumed pitch for the whole session doesn't hold.
 
-    Returns (events, snr_db). Events is empty when the segment carries no
+    Returns (events, snr_db). Events is empty when the signal carries no
     keyed CW (flat envelope / silence)."""
-    w = wave.open(path)
-    sr = w.getframerate()
-    n_frames = w.getnframes()
-    if n_frames / sr > MAX_OVER_S:
-        # gate_events rejects any segment this long regardless of decode
-        # quality -- skip the expensive filtering/thresholding pipeline over
-        # what can be several minutes of "listening" audio.
-        w.close()
-        return [], 0.0
-    x = np.frombuffer(w.readframes(n_frames), dtype=np.int16).astype(float)
-    w.close()
     if len(x) < sr * 0.5:
         return [], 0.0
 
@@ -332,6 +333,107 @@ def decode_segment(path: str, pitch: float = 600.0) -> tuple[list[CharEvent], fl
         if ch:
             events.append(CharEvent(sym_start, ch))
     return events, snr
+
+
+def decode_segment(path: str, pitch: float = 600.0) -> tuple[list[CharEvent], float]:
+    """Decode one whole WAV segment into timed characters and its SNR in dB.
+
+    Returns (events, snr_db). Events is empty when the segment carries no
+    keyed CW (flat envelope / silence)."""
+    w = wave.open(path)
+    sr = w.getframerate()
+    n_frames = w.getnframes()
+    if n_frames / sr > MAX_OVER_S:
+        # gate_events rejects any segment this long regardless of decode
+        # quality -- skip the expensive filtering/thresholding pipeline over
+        # what can be several minutes of "listening" audio. The one
+        # exception is a telemetry-confirmed CW sub-range *within* such a
+        # segment, which decode_long_segment (below) handles separately by
+        # extracting and decoding just that sub-range.
+        w.close()
+        return [], 0.0
+    x = np.frombuffer(w.readframes(n_frames), dtype=np.int16).astype(float)
+    w.close()
+    return _decode_samples(x, sr, pitch)
+
+
+def _read_wav_range(path: str, t0: float, t1: float) -> tuple[np.ndarray, int]:
+    """Read samples in [t0, t1) seconds from a WAV file without loading the
+    whole file -- for extracting one sub-range out of a long segment (see
+    decode_long_segment). t0/t1 are clamped to the file's own bounds."""
+    w = wave.open(path)
+    sr = w.getframerate()
+    n_frames = w.getnframes()
+    f0 = max(0, min(n_frames, int(t0 * sr)))
+    f1 = max(f0, min(n_frames, int(t1 * sr)))
+    w.setpos(f0)
+    x = np.frombuffer(w.readframes(f1 - f0), dtype=np.int16).astype(float)
+    w.close()
+    return x, sr
+
+
+def cw_subranges(seg: "Segment", state_events: list[tuple[float, float, "SegState"]]
+                 ) -> list[tuple[float, float]]:
+    """Telemetry-confirmed CW-mode time ranges within `seg`'s own span,
+    expressed as (start, end) offsets in seconds relative to the segment's
+    own start (0..seg.dur) -- deliberately not absolute video-timeline
+    seconds, so the result stays valid even if audio_t is later remapped
+    (see decode_long_segment and remap_audio_t's long_cw_segs parameter).
+
+    Only meaningful for a segment too long to decode as a whole (see
+    decode_long_segment): our own recorder only splits a new WAV file on
+    our own PTT, so a segment where we just listened to someone else's
+    entire exchange -- possibly spanning several of their own mode changes
+    -- stays one long file. state_events (from build_state_events) already
+    carries the right sub-division for this, seeded from the WAV's own
+    starting mode and refined by telemetry wherever it shows a genuine
+    change within the segment."""
+    seg_start, seg_end = seg.audio_t, seg.audio_t + seg.dur
+    out: list[tuple[float, float]] = []
+    for start, end, st in state_events:
+        if st.mode != 'CW':
+            continue
+        s0, s1 = max(start, seg_start), min(end, seg_end)
+        if s1 > s0:
+            out.append((s0 - seg.audio_t, s1 - seg.audio_t))
+    return out
+
+
+def decode_long_segment(seg: "Segment", state_events: list[tuple[float, float, "SegState"]],
+                        pitch: float = 600.0) -> list[tuple[float, float, list[CharEvent]]]:
+    """Recover CW content from a segment too long to decode as a whole (see
+    MAX_OVER_S) by decoding just its telemetry-confirmed CW-mode sub-ranges,
+    if any -- e.g. two other stations negotiating a CW frequency over voice,
+    working each other in CW, then moving on, all while we just listened
+    without ever keying up ourselves, so our recorder never split the file.
+
+    Each returned (t0, t1, events) is relative to the segment's own start,
+    like cw_subranges -- resolve to absolute video-timeline time (seg.audio_t
+    + t0) only once the final audio_t is known, i.e. after any --skip-gaps
+    remap. Each CharEvent's own .t is relative to that sub-range's start
+    (t0), not the segment's.
+
+    The sub-range's own duration is deliberately *not* checked against
+    MAX_OVER_S (gate_events(..., check_duration=False)): a real two-way
+    exchange between other stations can easily run longer than one of our
+    own overs, and the duration gate's only purpose is rejecting segments
+    whose unexplained length makes them suspicious -- telemetry mode
+    confirmation is already stronger evidence than length that this
+    specific span is genuine CW, not noise. SNR/quality/dominance still
+    apply.
+
+    One known limitation: the two stations may key at noticeably different
+    speeds, but dit-length is estimated once across the whole sub-range
+    (see _estimate_dit), which can degrade accuracy for whichever side
+    differs most from that single estimate."""
+    out: list[tuple[float, float, list[CharEvent]]] = []
+    for t0, t1 in cw_subranges(seg, state_events):
+        x, sr = _read_wav_range(seg.path, t0, t1)
+        events, snr = _decode_samples(x, sr, pitch)
+        events = gate_events(t1 - t0, events, snr, check_duration=False)
+        if events:
+            out.append((t0, t1, events))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -458,17 +560,25 @@ def read_wav_metadata(segs: list[Segment]) -> None:
 GAP_KEEP_S = 3.0  # seconds kept from each silent gap when --skip-gaps is used
 
 
-def remap_audio_t(segs: list[Segment]) -> None:
+def remap_audio_t(segs: list[Segment], long_cw_segs: set[int] | None = None) -> None:
     """Shorten gap segments to GAP_KEEP_S and recompute audio_t for all segments.
 
     A gap segment is one with no trusted decoded events and a duration longer
     than MAX_OVER_S — i.e. a listening / calling-CQ stretch between QSOs.
     Call this *after* gate_events has been applied to s.events.
+
+    `long_cw_segs` (a set of `id(seg)`, from the segments decode_long_segment
+    recovered content from) marks segments that are long for this reason but
+    still carry real recovered CW content -- these must not be trimmed to
+    GAP_KEEP_S, or concat_audio's outpoint would cut the very audio just
+    decoded out of the rendered output entirely, even though the ticker
+    still expects to show its text.
     """
+    long_cw_segs = long_cw_segs or set()
     t = 0.0
     for s in segs:
         s.audio_t = t
-        if not s.events and s.dur > MAX_OVER_S:
+        if not s.events and s.dur > MAX_OVER_S and id(s) not in long_cw_segs:
             s.eff_dur = GAP_KEEP_S
         t += _eff(s)
 
@@ -1052,7 +1162,8 @@ def build_ass(segs: list[Segment], qsos: list[Qso], mycall: str, mywwl: str,
               contest: str, offset_h: int, W: int, H: int,
               state_events: list[tuple[float, float, SegState]] | None = None,
               input_events: list[tuple[float, float, str]] | None = None,
-              qso_times: list[datetime | None] | None = None) -> str:
+              qso_times: list[datetime | None] | None = None,
+              long_cw_spans: list[tuple[float, float, list[CharEvent]]] | None = None) -> str:
     sx = W / 1920  # scale factor from the 1080p reference layout
     fs_big = int(58 * sx)
     fs_panel = int(46 * sx)
@@ -1133,26 +1244,42 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             ev(start, end, 'State', text)
 
     # --- decode ticker: rolling window, flushed at the start of every fresh
-    # burst of on-air activity (see cluster_starts) -- not at a QSO's EDI
-    # timestamp, which is only minute-precision and would flush mid-over.
-    # Segments telemetry confirms were *not* CW are skipped outright: the
-    # decoder runs blind on every segment (there's no way to know the mode
-    # in advance) and gate_events rejects most non-CW noise, but a strong
-    # tone in voice audio can occasionally still slip through trusted --
-    # telemetry's own mode is ground truth where we have it.
-    stream: list[tuple[float, str, bool]] = []   # (t, ch, flush_before)
-    prev_was_gap = True
+    # burst of on-air activity -- not at a QSO's EDI timestamp, which is
+    # only minute-precision and would flush mid-over. Trusted CW content
+    # comes from two sources, merged into one chronological list of
+    # (start, end, events) chunks: segments decoded whole (dur <= MAX_OVER_S,
+    # each producing one chunk), and telemetry-confirmed CW sub-ranges
+    # recovered from an otherwise-too-long segment we only listened to (see
+    # decode_long_segment) -- possibly several per segment, since we may
+    # have followed more than one on-air exchange without ever transmitting
+    # ourselves. Segments telemetry confirms were *not* CW are skipped
+    # outright: the decoder runs blind on every segment (there's no way to
+    # know the mode in advance) and gate_events rejects most non-CW noise,
+    # but a strong tone in voice audio can occasionally still slip through
+    # trusted -- telemetry's own mode is ground truth where we have it.
+    # Flushing is decided uniformly across all chunks by the real time gap
+    # since the previous one (> MAX_OVER_S -- the same threshold used
+    # everywhere else to tell a genuine over from a genuine gap), rather
+    # than per-segment bookkeeping: two CW sub-ranges recovered from the
+    # *same* long segment (e.g. two separate exchanges we listened in on)
+    # are otherwise indistinguishable from one continuous burst.
+    chunks: list[tuple[float, float, list[CharEvent]]] = []
     for s in segs:
         mode = _mode_at(s.audio_t, state_events) if state_events is not None else None
-        if not s.events or (mode is not None and mode != 'CW'):
-            prev_was_gap = s.dur > MAX_OVER_S
-            continue
-        is_burst_start = prev_was_gap
+        if s.events and (mode is None or mode == 'CW'):
+            chunks.append((s.audio_t, s.audio_t + _eff(s), s.events))
+    chunks.extend(long_cw_spans or [])
+    chunks.sort(key=lambda c: c[0])
+
+    stream: list[tuple[float, str, bool]] = []   # (t, ch, flush_before)
+    prev_end: float | None = None
+    for start, end, events in chunks:
+        is_burst_start = prev_end is None or start - prev_end > MAX_OVER_S
         if not is_burst_start and stream:
-            stream.append((s.audio_t, ' ', False))   # gap between overs, same burst
-        for j, e in enumerate(s.events):
-            stream.append((s.audio_t + e.t, e.ch, is_burst_start and j == 0))
-        prev_was_gap = False
+            stream.append((start, ' ', False))   # gap between overs, same burst
+        for j, e in enumerate(events):
+            stream.append((start + e.t, e.ch, is_burst_start and j == 0))
+        prev_end = end
     transcript = ''
     for i, (t, ch, flush) in enumerate(stream):
         if flush:
@@ -1402,16 +1529,43 @@ def main() -> None:
         print(f"  duration: preview cut to first {args.duration:.0f}s "
               f"({len(segs)} segments)")
 
+    read_wav_metadata(segs)
+    known_wav = sum(1 for s in segs if s.ptt is not None)
+    print(f"  WAV metadata: {known_wav}/{len(segs)} segments have IC-9700 rig tags")
+
+    telemetry = load_telemetry(args.telemetry) if args.telemetry else []
+    state_events = build_state_events(segs, telemetry, offset_h)
+    known = sum(1 for _, _, st in state_events if st.ptt is not None)
+    suffix = f" ({args.telemetry} refines freq/mode within long segments)" if args.telemetry else ""
+    print(f"  RX/TX: {known} state changes{suffix}")
+
     print("decoding CW ...")
+    # Segments longer than MAX_OVER_S are never decoded as a whole (see
+    # decode_segment) -- but one can still contain a real CW exchange
+    # between *other* stations that we only listened to, with no PTT of
+    # our own to split the file on. decode_long_segment recovers those
+    # from state_events' telemetry-confirmed CW sub-ranges. Offsets are
+    # kept segment-relative (t0, t1) rather than resolved to absolute
+    # video-timeline time here, so they stay valid even if remap_audio_t
+    # (below, --skip-gaps) later shifts audio_t.
+    long_cw_raw: list[tuple[Segment, float, float, list[CharEvent]]] = []
     for s in segs:
+        if s.dur > MAX_OVER_S:
+            for t0, t1, events in decode_long_segment(s, state_events, args.pitch):
+                long_cw_raw.append((s, t0, t1, events))
+            continue
         events, snr = decode_segment(s.path, args.pitch)
         s.events = gate_events(s.dur, events, snr)
-    decoded = sum(len(s.events) for s in segs)
-    print(f"  {decoded} characters from "
-          f"{sum(1 for s in segs if s.events)} trusted overs")
+    decoded = sum(len(s.events) for s in segs) + sum(len(ev) for _, _, _, ev in long_cw_raw)
+    trusted_overs = sum(1 for s in segs if s.events) + len(long_cw_raw)
+    print(f"  {decoded} characters from {trusted_overs} trusted overs")
+    if long_cw_raw:
+        print(f"  including {len(long_cw_raw)} CW exchange(s) recovered from "
+              f"otherwise-too-long listening segments")
 
     if args.skip_gaps:
-        remap_audio_t(segs)
+        long_cw_segs = {id(s) for s, _, _, _ in long_cw_raw}
+        remap_audio_t(segs, long_cw_segs)
         total = segs[-1].audio_t + _eff(segs[-1])
         print(f"  skip-gaps: {total:.0f}s video (was {segs[-1].audio_t + segs[-1].dur:.0f}s)")
 
@@ -1425,15 +1579,10 @@ def main() -> None:
         print("  webcam starts after the cut ends -- dropping the PiP overlay")
         webcam_start = None
 
-    read_wav_metadata(segs)
-    known_wav = sum(1 for s in segs if s.ptt is not None)
-    print(f"  WAV metadata: {known_wav}/{len(segs)} segments have IC-9700 rig tags")
-
-    telemetry = load_telemetry(args.telemetry) if args.telemetry else []
-    state_events = build_state_events(segs, telemetry, offset_h)
-    known = sum(1 for _, _, st in state_events if st.ptt is not None)
-    suffix = f" ({args.telemetry} refines freq/mode within long segments)" if args.telemetry else ""
-    print(f"  RX/TX: {known} state changes{suffix}")
+    # Resolved to absolute video-timeline time only now, using each
+    # segment's final audio_t (post-remap, if --skip-gaps was used).
+    long_cw_spans = [(seg.audio_t + t0, seg.audio_t + t1, events)
+                     for seg, t0, t1, events in long_cw_raw]
 
     input_events = None
     qso_times = None
@@ -1446,7 +1595,8 @@ def main() -> None:
         print(f"  {matched}/{len(qsos)} QSOs got an exact submit time from the input log")
 
     ass_text = build_ass(segs, qsos, mycall, mywwl, args.contest,
-                         offset_h, W, H, state_events, input_events, qso_times)
+                         offset_h, W, H, state_events, input_events, qso_times,
+                         long_cw_spans=long_cw_spans)
     ass_path = os.path.splitext(args.out)[0] + '.ass'
     with open(ass_path, 'w') as fh:
         fh.write(ass_text)
