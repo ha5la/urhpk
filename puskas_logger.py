@@ -173,7 +173,7 @@ def load_loc_cache() -> dict[str, list[str]]:
 # ──────────────────────────────────────────────────────────────
 # rigctld — background daemon thread
 # ──────────────────────────────────────────────────────────────
-_rig: dict        = {"band": "", "mode": "", "qrg": "", "online": False, "ptt": False}
+_rig: dict        = {"band": "", "mode": "", "qrg": "", "online": False}
 _rig_lock         = threading.Lock()
 _rig_manual: dict = {"band": "", "mode": ""}
 
@@ -189,12 +189,21 @@ def _band_from_qrg(mhz: float) -> str:
     if mhz < 1000: return "70CM"
     return "23CM"
 
-def _read_rig() -> tuple[str, str, str]:
-    """Query freq ('f' -> 1 line), mode ('m' -> mode + passband, 2 lines), and
-    PTT ('t' -> 0/1/2, 1 line) in one round trip. 4 lines total."""
+def _read_rig() -> tuple[str, str]:
+    """Query freq ('f' -> 1 line) and mode ('m' -> mode + passband, 2 lines)
+    in one round trip. 3 lines total.
+
+    PTT used to be queried here too ('t') and recorded into telemetry, but
+    the WAV recordings themselves turned out to carry the same information
+    straight from the rig (IC-9700 'Voice Recorder' metadata, read by
+    contest_video.py's read_wav_metadata) with zero polling lag -- telemetry
+    was in practice used to *reconstruct* something already recorded
+    losslessly elsewhere. Removed rather than kept for redundancy per Kent
+    Beck's rule: dead weight, not a safety net.
+    """
     try:
         with socket.create_connection((RIGCTLD_HOST, RIGCTLD_PORT), timeout=2.0) as s:
-            s.sendall(b"f\nm\nt\n")
+            s.sendall(b"f\nm\n")
             buf, t0 = b"", time.monotonic()
             while time.monotonic() - t0 < 2.0:
                 s.settimeout(2.0 - (time.monotonic() - t0))
@@ -202,27 +211,25 @@ def _read_rig() -> tuple[str, str, str]:
                 if not chunk:
                     break
                 buf += chunk
-                if len(buf.decode(errors="replace").splitlines()) >= 4:
+                if len(buf.decode(errors="replace").splitlines()) >= 3:
                     break
             lines = buf.decode(errors="replace").splitlines()
             qrg = f"{float(lines[0]) / 1e6:.3f}"
             mode = lines[1].strip() if len(lines) > 1 else ""
-            ptt = lines[3].strip() if len(lines) > 3 else ""
-            return qrg, mode, ptt
+            return qrg, mode
     except Exception:
-        return "", "", ""
+        return "", ""
 
 def _rig_thread():
     while True:
         try:
-            qrg, raw, ptt_raw = _read_rig()
+            qrg, raw = _read_rig()
             with _rig_lock:
                 if qrg:
                     _rig.update(band=_band_from_qrg(float(qrg)),
-                                mode=_mode_str(raw), qrg=qrg, online=True,
-                                ptt=ptt_raw.strip() not in ("", "0"))
+                                mode=_mode_str(raw), qrg=qrg, online=True)
                 else:
-                    _rig.update(band="", mode="", qrg="", online=False, ptt=False)
+                    _rig.update(band="", mode="", qrg="", online=False)
         except Exception:
             pass
         time.sleep(RIGCTLD_POLL_S)
@@ -233,11 +240,6 @@ def current_rig() -> tuple[str, str, str, bool]:
         if _rig["online"]:
             return _rig["band"], _rig["mode"], _rig["qrg"], True
     return _rig_manual["band"], _rig_manual["mode"], "", False
-
-def current_ptt() -> bool | None:
-    """True while transmitting, False while receiving, None if rig offline."""
-    with _rig_lock:
-        return _rig["ptt"] if _rig["online"] else None
 
 # ──────────────────────────────────────────────────────────────
 # rotctld — background daemon thread
@@ -320,15 +322,20 @@ def _clock_sync() -> None:
 # ──────────────────────────────────────────────────────────────
 
 def _telemetry_record(now: datetime) -> str:
-    """Build one telemetry JSON line from the current rig/rotator state."""
+    """Build one telemetry JSON line from the current rig/rotator state.
+
+    No ptt field: the WAV recordings' own IC-9700 metadata already carries
+    it, straight from the rig with zero polling lag (see contest_video.py's
+    read_wav_metadata) -- telemetry only needs to cover what the WAV
+    metadata *can't*: freq/mode drift within a long segment, and az, which
+    has no on-air equivalent at all.
+    """
     _, mode, qrg, rig_online = current_rig()
-    ptt = current_ptt()
     az, rot_online = current_rot()
     return json.dumps({
         "t":       now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "freq_hz": round(float(qrg) * 1e6) if rig_online and qrg else None,
         "mode":    mode                     if rig_online          else None,
-        "ptt":     ptt,
         "az":      round(az, 1)             if rot_online          else None,
     })
 
@@ -341,6 +348,49 @@ def _telemetry_thread(path: Path) -> None:
             except Exception:
                 pass
             time.sleep(1.0)
+
+# ──────────────────────────────────────────────────────────────
+# Input-box recorder — event-triggered (one line per keystroke), not
+# polled: a 1 Hz sample like telemetry would blur or entirely miss fast
+# typing, and the buffer only changes on a keypress in the first place, so
+# there's nothing to poll. Feeds contest_video.py's typewriter overlay.
+#
+# Two event kinds share the file: "text" (one per keystroke, the full
+# current buffer contents) and "qso" (one per QSO actually appended to the
+# log, microsecond-precise). The EDI format only stores QSO time to the
+# minute, which is what makes contest_video.py's QSO-panel timing an
+# audio-structure-snapping guess rather than exact — this file's "qso"
+# events give it an exact submit timestamp to use instead, when available.
+# Note this deliberately does *not* try to distinguish a submit from an
+# abort (Enter vs Ctrl+U/Escape) at the "text" level — both just clear the
+# buffer the same way, and even Enter's own clear only happens at the start
+# of the *next* prompt, not at keypress time. Trying to infer "QSO logged"
+# from that stream is unreliable; the explicit "qso" event below, written
+# from the one place in the code that actually knows a QSO was appended, is
+# the unambiguous alternative.
+# ──────────────────────────────────────────────────────────────
+
+_input_log_fh = None
+
+def _input_log_open(path: Path) -> None:
+    global _input_log_fh
+    _input_log_fh = open(path, "a")
+
+def _log_input_event(rec: dict) -> None:
+    if _input_log_fh is None:
+        return
+    try:
+        _input_log_fh.write(json.dumps(rec) + "\n")
+        _input_log_fh.flush()
+    except Exception:
+        pass
+
+def _on_buffer_changed(buf) -> None:
+    _log_input_event({
+        "t":     datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+        "event": "text",
+        "text":  buf.text,
+    })
 
 # ──────────────────────────────────────────────────────────────
 # Data model
@@ -1128,6 +1178,7 @@ def run(lb: LogBook, tname: str):
         complete_while_typing=False,
         enable_history_search=False,
     )
+    session.default_buffer.on_text_changed += _on_buffer_changed
 
     try:
         _offline_setup()
@@ -1231,8 +1282,9 @@ def run(lb: LogBook, tname: str):
         nr_s    = lb.next_nr(band)
         dist_km = lb.dist(loc)
 
+        now = datetime.now(timezone.utc)
         qso = QSO(
-            dt=datetime.now(timezone.utc).replace(second=0, microsecond=0),
+            dt=now.replace(second=0, microsecond=0),
             band=band, mode=mode or "SSB", call=call,
             rst_s=rst_s, nr_s=nr_s, rst_r=rst_r, nr_r=nr_r,
             loc=loc, dist_km=dist_km,
@@ -1242,6 +1294,16 @@ def run(lb: LogBook, tname: str):
         if dup:
             print(f"\033[31m  *** DUP *** {call} already in log for {band} {mode}\033[0m")
             input("  [Enter to continue]")
+
+        _log_input_event({
+            "t":     now.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            "event": "qso",
+            "call":  call,
+            "band":  band,
+            "mode":  qso.mode,
+            "nr_s":  nr_s,
+            "dup":   dup,
+        })
 
         _cache_loc(call, loc)
         save_all(lb, tname)
@@ -1321,6 +1383,9 @@ def main():
     _telem_path = Path(f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{my_call}-telemetry.jsonl")
     threading.Thread(target=_telemetry_thread, args=(_telem_path,), daemon=True).start()
     print(f"Telemetry: {_telem_path}")
+    _input_log_path = Path(f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{my_call}-input.jsonl")
+    _input_log_open(_input_log_path)
+    print(f"Input log: {_input_log_path}")
 
     print()
     print("Input: CALL RST NR [LOC]   e.g.  HA7NS 59 015   or  HA7NS 59 015 JN97WM")

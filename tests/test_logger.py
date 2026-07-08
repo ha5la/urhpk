@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+import puskas_logger as pl
 from puskas_logger import (
     QSO,
     RE_LOC,
@@ -11,9 +12,11 @@ from puskas_logger import (
     _band_summary,
     _bearing_arrow,
     _edi_qso_count,
+    _input_log_open,
     _is_contest_time,
     _is_dup_in_log,
     _merge_loc_sources,
+    _on_buffer_changed,
     _predict_nr,
     _print_recent,
     _rig,
@@ -963,9 +966,9 @@ class TestLocatorOnlyBearing:
 
 
 class TestTelemetryRecord:
-    def _set_rig(self, qrg="144.174", mode="CW", online=True, ptt=False):
+    def _set_rig(self, qrg="144.174", mode="CW", online=True):
         with _rig_lock:
-            _rig.update(band="2M", mode=mode, qrg=qrg, online=online, ptt=ptt)
+            _rig.update(band="2M", mode=mode, qrg=qrg, online=online)
 
     def _set_rot(self, az=135.0, online=True):
         with _rot_lock:
@@ -973,13 +976,13 @@ class TestTelemetryRecord:
 
     def test_rig_and_rot_online(self):
         import json
-        self._set_rig("144.174", "CW", online=True, ptt=True)
+        self._set_rig("144.174", "CW", online=True)
         self._set_rot(135.0, online=True)
         rec = json.loads(_telemetry_record(datetime(2026, 7, 4, 9, 8, 15, tzinfo=timezone.utc)))
         assert rec["t"] == "2026-07-04T09:08:15Z"
         assert rec["freq_hz"] == 144174000
         assert rec["mode"] == "CW"
-        assert rec["ptt"] is True
+        assert "ptt" not in rec
         assert rec["az"] == 135.0
 
     def test_rig_offline_fields_are_null(self):
@@ -988,6 +991,71 @@ class TestTelemetryRecord:
         self._set_rot(online=False)
         rec = json.loads(_telemetry_record(datetime(2026, 7, 4, 9, 8, 15, tzinfo=timezone.utc)))
         assert rec["freq_hz"] is None
-        assert rec["ptt"] is None
+        assert "ptt" not in rec
         assert rec["mode"] is None
         assert rec["az"] is None
+
+
+class TestInputLog:
+    """Event-triggered input-box recorder feeding contest_video.py's
+    typewriter overlay -- one JSON line per buffer change, not polled."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_fh(self):
+        yield
+        if pl._input_log_fh is not None:
+            pl._input_log_fh.close()
+        pl._input_log_fh = None
+
+    class _Buf:
+        def __init__(self, text):
+            self.text = text
+
+    def test_writes_a_line_per_change(self, tmp_path):
+        import json
+        path = tmp_path / "input.jsonl"
+        _input_log_open(path)
+        _on_buffer_changed(self._Buf("H"))
+        _on_buffer_changed(self._Buf("HA"))
+        _on_buffer_changed(self._Buf(""))  # Enter/Escape clears the buffer
+        pl._input_log_fh.close()
+        lines = path.read_text().splitlines()
+        assert [json.loads(line)["text"] for line in lines] == ["H", "HA", ""]
+
+    def test_noop_before_a_log_is_opened(self):
+        _on_buffer_changed(self._Buf("X"))  # must not raise with no file open
+
+    def test_record_has_microsecond_timestamp(self, tmp_path):
+        import json
+        path = tmp_path / "input.jsonl"
+        _input_log_open(path)
+        _on_buffer_changed(self._Buf("HA7NS"))
+        rec = json.loads(path.read_text().splitlines()[0])
+        assert rec["t"].endswith("Z")
+        datetime.strptime(rec["t"], "%Y-%m-%dT%H:%M:%S.%fZ")  # doesn't raise
+
+    def test_keystroke_event_is_tagged_text(self, tmp_path):
+        import json
+        path = tmp_path / "input.jsonl"
+        _input_log_open(path)
+        _on_buffer_changed(self._Buf("HA7NS"))
+        rec = json.loads(path.read_text().splitlines()[0])
+        assert rec["event"] == "text"
+
+    def test_log_input_event_writes_arbitrary_qso_record(self, tmp_path):
+        # This is what the "New QSO" path in run() writes -- an explicit,
+        # unambiguous marker distinct from the keystroke stream, since
+        # submit vs. abort can't be told apart at the buffer-changed level.
+        import json
+        path = tmp_path / "input.jsonl"
+        _input_log_open(path)
+        pl._log_input_event({
+            "t": "2026-07-06T16:01:02.345678Z", "event": "qso",
+            "call": "HA3KHB", "band": "2M", "mode": "CW", "nr_s": 3, "dup": False,
+        })
+        pl._input_log_fh.close()
+        rec = json.loads(path.read_text().splitlines()[0])
+        assert rec == {
+            "t": "2026-07-06T16:01:02.345678Z", "event": "qso",
+            "call": "HA3KHB", "band": "2M", "mode": "CW", "nr_s": 3, "dup": False,
+        }

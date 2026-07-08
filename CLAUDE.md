@@ -427,21 +427,76 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
   snapped to the real over, showing it exactly when the over starts *is* the
   natural lead (the over itself takes several seconds), so an artificial
   pre-show margin is no longer needed and was removed.
-- **Rig/rotator overlay sources ground truth from telemetry, timing from WAV
-  splits**: `--telemetry PATH` takes a `puskas_logger` `*-telemetry.jsonl` file
-  and shows a top-left `● TX`/`● RX` badge plus a QRG/mode/bearing line
-  (`144.174 MHz  CW  ROT 135°`) underneath. `align_telemetry_to_segments`
-  assigns one `SegState` per `Segment` from the 1 Hz samples whose timestamp
-  falls inside that segment's wall-clock span (falling back to the nearest
-  sample if none fall inside, since a segment can be shorter than 1 s):
-  `ptt`/`freq_hz`/`mode` by majority vote (they essentially never change
-  mid-over), `az` by median. The badge's on/off *times* in the ASS output are
-  the segment boundaries themselves, not the telemetry sample times, because
-  the WAV splits are cut exactly on the real PTT transition and are therefore
-  far more precise than a once-a-second poll. A segment with no `ptt` in its
-  aligned state (missing/older telemetry) gets no overlay at all rather than
-  a guess; `freq_hz`/`mode`/`az` are shown individually if known (missing `az`
-  specifically falls back to `ROT ---`, matching the logger's own toolbar).
+- **Rig/rotator overlay: WAV metadata is ground truth, telemetry is a
+  refinement.** Shows a top-left `● TX`/`● RX` badge plus a QRG/mode/bearing
+  line (`144.174 MHz  CW  ROT 135°`) underneath. This went through two
+  designs before landing here, both driven by real bugs spotted from
+  watching an actual rendered preview:
+  - **Design 1 (telemetry-only)**: one `SegState` per `Segment`,
+    majority-voted from whichever 1 Hz `puskas_logger` telemetry samples
+    fell inside the segment's span. Wrong in two ways: freq_hz/mode
+    genuinely can change *within* one long idle/listening segment (nothing
+    to split the WAV on there), so a majority vote could let an early
+    stable reading outvote a later stretch of continuously-tuned,
+    individually-unique readings for minutes; and even ptt itself could lag
+    the true transition by up to a second, since a 1 Hz poll isn't
+    synced to the WAV split at all.
+  - **Design 2 (telemetry, split into runs)**: fixed both problems from
+    within telemetry alone -- sub-dividing freq_hz/mode into runs *within*
+    a segment, and taking ptt from the segment's *last* known telemetry
+    reading (most likely to have caught up) rather than the first or a
+    vote. Both real, working fixes -- but then the user discovered
+    something better while inspecting a WAV file directly.
+  - **Design 3 (current): the WAV files themselves carry this ground
+    truth.** IC-9700 "Voice Recorder" mode embeds a `title` metadata tag in
+    every WAV file it writes, e.g. `IC-9700 Voice Recorder Data
+    144.299.84 USB    ----.---.-- ------ -- TX 2026-07-06 16:00:37` --
+    frequency, mode, and RX/TX, straight from the rig at the exact instant
+    it started recording that file, with *no polling lag at all* (unlike
+    telemetry, which is a separate, unsynced 1 Hz poll). `parse_wav_title`
+    parses this (mode aliases USB/LSB/AM/DSB/SAM normalized to `SSB`,
+    matching `puskas_logger._mode_str`); `read_wav_metadata` populates
+    `Segment.freq_hz`/`.mode`/`.ptt` from it. `_read_wav_title` reads the
+    RIFF `LIST/INFO/INAM` chunk directly rather than shelling out to
+    `ffprobe` per file -- measured 707 files at ~112s via `ffprobe` vs.
+    ~0.02s reading raw chunk headers (~6500x), since ffprobe's per-process
+    spawn cost dominates at this file count even though the work itself is
+    trivial.
+  - **ptt no longer needs telemetry at all**: unlike freq/mode it cannot
+    legitimately change mid-segment (a real transition is exactly what
+    causes the recorder to cut a new WAV file), so `s.ptt` alone is
+    authoritative for a segment's whole span -- Design 2's "last sample"
+    fix is now dead code, deleted rather than kept as a fallback.
+    `puskas_logger.py` no longer queries or records ptt in telemetry at
+    all (see below) -- it would just be reconstructing, with more latency,
+    something the WAV file already has losslessly.
+  - **freq_hz/mode still benefit from telemetry**, though, for exactly
+    Design 1's original reason: the WAV metadata is fixed at
+    file-creation time, so on a long segment with no PTT activity at all,
+    it only captures the *starting* frequency/mode. `build_state_events`
+    seeds each segment's first run from the WAV value and lets telemetry
+    sub-divide it further wherever a later sample shows a genuine change.
+  - **The WAV value and telemetry's own reading don't agree to the exact
+    Hz even when nothing changed** -- a second real bug, found immediately
+    after switching to Design 3, from comparing the two sources directly.
+    Checked against the real July round: a systematic disagreement of
+    160/250/300/310 Hz (depending on band) appears on nearly every
+    segment's very first telemetry sample, which without a tolerance
+    looked like a spurious retune at the start of almost every segment.
+    Genuine retunes in the same data are >=1000 Hz (mostly round kHz
+    steps, as a human tuning by hand would produce) -- a clean gap, zero
+    occurrences between 310 Hz and 1000 Hz -- so
+    `FREQ_MATCH_TOLERANCE_HZ = 500` safely separates the two. Mode has no
+    such problem (exact string match; "SSB" vs "CW" isn't a rounding
+    question).
+  - A segment with no WAV metadata at all (freq_hz/mode/ptt all `None` --
+    not an IC-9700 recording, or a parse failure) is skipped rather than
+    guessed at from telemetry alone. `az` has no equivalent in the WAV
+    metadata at all and is purely telemetry's own (median per run); missing
+    `az` falls back to `ROT ---`, matching the logger's own toolbar.
+  - `--telemetry PATH` is therefore now *optional* for the whole badge --
+    it only adds `az`/bearing and the within-segment freq/mode refinement.
+    The RX/TX + starting QRG/mode badge works from the WAV files alone.
 - **YouTube chapters + SRT for seeking without scrubbing**: alongside the mp4,
   `main()` writes `<out>.chapters.txt` (paste into the YouTube description) and
   `<out>.srt` (upload as a captions track) — both built from `qso_windows()`, the
@@ -452,6 +507,104 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
   an SRT cue, just no separate chapter marker. SRT cues are capped to
   `CAPTION_DUR_S` (8 s) each so they read as short captions rather than
   persisting on screen until the next QSO.
+- **`--input-log PATH` for a live "typewriter" overlay**, and for exact QSO-panel
+  timing when available. `PATH` is a `puskas_logger *-input.jsonl` file
+  (see below) — optional, so older recordings without one still render
+  normally, falling back to the EDI-minute + cluster-snap timing described
+  above. `load_input_log` parses two event kinds sharing the file, into one
+  `InputLogEvent` list (`kind` is `'text'` or `'qso'`):
+  - **`'text'` events → the typewriter overlay**, bottom-center, styled
+    bright green like the logger's own TX line since both mark the
+    operator's own action rather than something heard on the air. Unlike
+    the CW ticker or QSO panels, this needs no burst-snapping heuristic at
+    all: every record is the operator's own keystroke, already exact
+    ground truth, so `build_input_events` just maps each timestamp straight
+    through `audio_time_for` and shows that state verbatim until the next
+    keystroke changes it (`'qso'` events are ignored here — they don't
+    change what's on screen). Empty-text states (buffer cleared by
+    Enter/Ctrl+U/Escape) are dropped rather than rendered, so nothing shows
+    while the input line is genuinely idle — same "no visual glitches"
+    principle as the logger's own UI.
+  - **`'qso'` events → exact QSO-panel timing.** `match_qso_times` pairs
+    each `Qso` (from the EDI, minute-precision) to its `'qso'` event by
+    **call, in chronological order within that call** — not by exact
+    minute, even though `puskas_logger` derives both `q.dt` and the event's
+    `t` from the same captured `now` and so *could* match exactly by
+    `(call, minute-truncated time)`. That was the first implementation, and
+    it was wrong: it silently breaks the moment a hand-crafted log (seeded
+    from the EDI via `--seed-input-log`, then hand-tuned against the audio —
+    see below) has an edited timestamp cross a minute boundary from what the
+    EDI happened to record, which is exactly the kind of edit the feature
+    exists to make possible. Call+order has no such trap — a `--duration`
+    cut only ever removes a *suffix* in time, so the surviving occurrences
+    of any call are still a prefix of the full sequence, and "next unused"
+    stays correct regardless of what the edited timestamps say.
+    `qso_windows` then feeds that exact time into `_snap_to_cluster` in
+    place of the EDI's coarse `q.dt` wherever a match exists. The snap
+    itself is still necessary even with an exact timestamp — the moment the
+    operator hits Enter is the *end* of data entry, at or after the real
+    over, not its start — but an exact anchor removes the EDI's
+    minute-level slop that could otherwise point the snap at the wrong
+    neighbouring burst, which is what caused visibly wrong QSO timing in
+    the first video generated with this feature. Falls back to the plain
+    EDI `q.dt` per-QSO wherever unmatched (no input log, an older
+    recording, or a `--duration` cut that excludes the matching event).
+  - **Only a QSO's *start* is ever a heuristic — its end doesn't need to
+    be.** `qso_windows` used to close a QSO's panel exactly when the
+    *next* QSO's panel opened (or at `total` for the last QSO) — but
+    `qso_times` gives an exact, real end for a QSO wherever known: the
+    moment the operator hit Enter. Reported directly from watching a
+    rendered preview: a QSO's panel was staying up long after that QSO was
+    actually done, and the running score (below) was crediting points the
+    instant a panel *appeared* rather than once the contact was actually
+    complete. Now `windows[i][1]` is `qso_times[i]` (mapped to video time)
+    wherever available, so the panel clears the moment the QSO is actually
+    finished, leaving a real gap with nothing shown if the next QSO's own
+    over hasn't started yet. Falls back to the old "next QSO's start" (or
+    `total` for the last QSO) wherever `qso_times[i]` is `None` for that
+    particular QSO — no better information exists then.
+  - **Two (or more) QSOs sharing one burst is a second, separate timing bug
+    `qso_times` exposed**: the same station worked on multiple modes
+    back-to-back with no real listening gap between them (e.g. SSB, then
+    FM, then CW with the same callsign, all within a couple of minutes) is
+    *one* burst as far as `cluster_starts` is concerned — there's no audio
+    structure to tell the individual overs apart at all. Snapping every one
+    of those QSOs' anchors onto that single shared cluster start collapsed
+    all their panels onto the same instant; the pre-existing
+    minimum-1-second window then papered over the collision by showing two
+    panels on screen simultaneously for that one second, and the earlier
+    QSO's panel vanished before its own real submit time. `qso_windows` now
+    tracks the previously resolved cluster: when a QSO's anchor resolves
+    (via `_snap_to_cluster`) to the *same* cluster as the previous QSO **and**
+    an exact `qso_times` entry is available, it starts exactly where the
+    *previous* QSO's own window ended (its real, known finish) instead of
+    the shared cluster start — not audio-structure-precise either, but
+    real, and leaves no overlap and no gap between the two. Without
+    `qso_times` for that QSO, falls back to the original squeeze behaviour.
+  - **`--seed-input-log OUT.jsonl`**: writes one `'qso'` event per QSO from
+    the EDI(s) (`t` is just `q.dt` with seconds zeroed) and exits without
+    rendering — for a recording made before this feature existed, so there's
+    no automatically-generated `*-input.jsonl` to fall back on. Edit each
+    `t` against the audio, then pass the result back in as `--input-log` for
+    exact QSO-panel timing with no cluster-snapping guesswork involved for
+    those QSOs. This is what `match_qso_times`'s call+order (not
+    call+minute) matching exists for — a seed's timestamps are expected to
+    move freely across minute boundaries once hand-edited.
+- **Running score in the header**: `running_score(qsos)` returns
+  `(qso_count, cumulative_points)` after each QSO — every QSO counts
+  toward `qso_count` including dups (still logged, just worth nothing,
+  matching `puskas_logger`'s own `_band_summary` and the EDI's `CQSOP`),
+  only non-dup QSOs add to points. `build_ass`'s header shows
+  `{mycall} {mywwl} {contest}   NQ Mpts` once there's a first QSO to show
+  a score for, updating in step with each QSO's own *finish* — see the
+  `qso_windows` bullet above — not when its panel first appears, for the
+  same reason as the panel-clearing fix: crediting points for a contact
+  the instant its over starts, before it's actually complete, is wrong.
+  Where a QSO's finish isn't known exactly (no `qso_times` entry for it),
+  its score trigger falls back to its own panel's *start* instead — using
+  `windows[i][1]` there would just be "next QSO's start" (or `total` for
+  the last QSO, leaving no room at all to display that QSO's own score
+  before the clip ends).
 
 ## puskas_logger.py – UX requirements (non-negotiable)
 
@@ -641,6 +794,42 @@ Mid-session rig disconnect uses `_rig_manual` values as fallback (set by the wiz
 - Current azimuth shown in toolbar as `ROT: 045°` when online, `ROT: ---` when offline
 - **Alt+R** sends `P az 0` to rotctld to slew the rotator; fires in a background thread
 - To start rotctld: `rotctld -m MODEL -r /dev/ttyUSB0` (see Hamlib docs for MODEL number)
+
+**Telemetry recorder** (`*-telemetry.jsonl`, always on, one JSON line per
+second): `{"t", "freq_hz", "mode", "az"}` -- band/mode/QRG from rigctld,
+bearing from rotctld. No `ptt` field: it used to be queried and recorded
+here too, but the WAV recordings' own IC-9700 metadata already carries it
+straight from the rig with zero polling lag (see `contest_video.py`'s
+`read_wav_metadata`) -- this was in practice reconstructing, with more
+latency, something already recorded losslessly elsewhere, so it was removed
+rather than kept for redundancy.
+
+**Input-box logging** (`*-input.jsonl`, always on, feeds `contest_video.py --input-log`):
+- Event-triggered, not polled: `session.default_buffer.on_text_changed` fires
+  `_on_buffer_changed`, which appends `{"t": <UTC with microseconds>, "event":
+  "text", "text": <full current buffer>}` to `YYMMDD-CALL-input.jsonl` on every
+  keystroke. A 1 Hz poll like the telemetry recorder would blur or entirely
+  miss fast typing, and the buffer only changes on a keypress in the first
+  place, so there's nothing to poll.
+- Microsecond precision (unlike telemetry's whole-second stamps) matters here:
+  the video overlay built from this file is a "typewriter" effect keyed to
+  exactly when each character was typed.
+- **A second event kind, `"event": "qso"`, is written from the "New QSO"
+  block** in `run()` — one line per QSO actually appended to the log:
+  `{"t": ..., "event": "qso", "call", "band", "mode", "nr_s", "dup"}`. This is
+  deliberately *not* inferred from the `"text"` stream (Enter-submit,
+  Ctrl+U/unix-line-discard, and Escape-abort all just clear the buffer the
+  same way — see the long comment above `_input_log_open` for why that's
+  unreliable). It's written from the one place in the code that unambiguously
+  knows a QSO was logged, right next to `lb.add(qso)`. `now = datetime.now
+  (timezone.utc)` is captured **once** and used for both `qso.dt = now.replace
+  (second=0, microsecond=0)` and this event's `t` — not two separate
+  `datetime.now()` calls — so the two are *always* related by exact minute
+  truncation with no possible race at a minute boundary. This is what lets
+  `contest_video.py`'s `match_qso_times` match them up exactly (see below);
+  it's the fix for "weird QSO timing" in a preview, where the EDI's
+  minute-only precision let `_snap_to_cluster` occasionally pick the wrong
+  neighbouring burst.
 
 **Contest rules**:
 - Reads band/QRG/mode from rigctld; falls back to Alt+B/Alt+M (or `!band`/`!mode`) if rig offline

@@ -346,6 +346,9 @@ class Segment:
     audio_t: float      # start offset in the output video (seconds)
     events: list[CharEvent] = field(default_factory=list)
     eff_dur: float | None = None  # trimmed duration in output; None = use full dur
+    freq_hz: int | None = None    # from the WAV's own IC-9700 metadata (read_wav_metadata)
+    mode: str | None = None       # ditto
+    ptt: bool | None = None       # ditto -- ground truth at the segment's own start, no telemetry lag
 
 
 def _eff(s: Segment) -> float:
@@ -381,6 +384,75 @@ def scan_segments(recdir: str) -> list[Segment]:
         segs.append(Segment(p, wall, dur, audio_t))
         audio_t += dur
     return segs
+
+
+_WAV_TITLE_RE = re.compile(
+    r'(\d+)\.(\d+)\.(\d+)\s+(\S+)\s+.*?(RX|TX)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s*$')
+_SSB_ALIASES = ('USB', 'LSB', 'AM', 'DSB', 'SAM')  # matches puskas_logger.py's _mode_str
+
+
+def parse_wav_title(title: str) -> tuple[int, str, bool] | None:
+    """Parse an IC-9700 'Voice Recorder' title tag, e.g.
+    'IC-9700 Voice Recorder Data   144.299.84 USB    ----.---.-- ------ -- '
+    'TX 2026-07-06 16:00:37' -> (144299840, 'SSB', True).
+
+    This is ground truth straight from the radio at the exact instant it
+    started recording the file -- unlike telemetry (a separate 1 Hz poll,
+    not synced to the WAV split at all), there is no possible lag here.
+    Returns None if the title doesn't match this format (not an IC-9700
+    recording, or a future firmware changing it)."""
+    m = _WAV_TITLE_RE.search(title)
+    if not m:
+        return None
+    mhz, khz, h10, mode, rxtx = m.groups()
+    freq_hz = int(mhz) * 1_000_000 + int(khz) * 1_000 + int(h10) * 10
+    if mode in _SSB_ALIASES:
+        mode = 'SSB'
+    return freq_hz, mode, rxtx == 'TX'
+
+
+def _read_wav_title(path: str) -> str | None:
+    """Read the LIST/INFO/INAM ('title') tag directly from a WAV file's own
+    RIFF chunk structure -- no subprocess. ffprobe can read the same tag
+    but spawning it once per file doesn't scale: measured 707 files at
+    ~112s via ffprobe vs. ~0.02s reading the raw chunk headers directly."""
+    with open(path, 'rb') as f:
+        header = f.read(12)
+        if len(header) < 12 or header[0:4] != b'RIFF' or header[8:12] != b'WAVE':
+            return None
+        while True:
+            chunk_header = f.read(8)
+            if len(chunk_header) < 8:
+                return None
+            chunk_id = chunk_header[0:4]
+            chunk_size = int.from_bytes(chunk_header[4:8], 'little')
+            if chunk_id == b'LIST':
+                data = f.read(chunk_size)
+                if chunk_size % 2:
+                    f.read(1)  # chunks are padded to an even size
+                if data[0:4] == b'INFO':
+                    pos = 4
+                    while pos + 8 <= len(data):
+                        sub_id = data[pos:pos + 4]
+                        sub_size = int.from_bytes(data[pos + 4:pos + 8], 'little')
+                        sub_data = data[pos + 8:pos + 8 + sub_size]
+                        if sub_id == b'INAM':
+                            return sub_data.rstrip(b'\x00').decode('ascii', errors='replace')
+                        pos += 8 + sub_size + (sub_size % 2)
+            else:
+                f.seek(chunk_size + (chunk_size % 2), 1)
+
+
+def read_wav_metadata(segs: list[Segment]) -> None:
+    """Populate freq_hz/mode/ptt on each segment straight from its own WAV
+    file's embedded IC-9700 metadata. Leaves them None for a file with no
+    recognized tag -- no fallback heuristic, since there's nothing to
+    fall back to that's as trustworthy (see build_state_events)."""
+    for s in segs:
+        title = _read_wav_title(s.path)
+        parsed = parse_wav_title(title) if title else None
+        if parsed:
+            s.freq_hz, s.mode, s.ptt = parsed
 
 
 GAP_KEEP_S = 3.0  # seconds kept from each silent gap when --skip-gaps is used
@@ -527,16 +599,17 @@ def sync_webcam_start(cam_wall: datetime, cam_dur: float, qsos: list[Qso],
 
 
 # ---------------------------------------------------------------------------
-# Rig/rotator state -- ground truth from puskas_logger's 1 Hz telemetry, but
-# displayed on the WAV segment boundaries, since those are split exactly on
-# the real PTT transitions and so carry far better time precision than a
-# once-a-second poll.
+# Rig/rotator state. ptt/freq_hz/mode at a segment's own start come from the
+# WAV file's own embedded IC-9700 metadata (read_wav_metadata) -- ground
+# truth straight from the rig, with none of a 1 Hz poll's lag. Telemetry
+# (puskas_logger's *-telemetry.jsonl) is still used for freq_hz/mode drift
+# *within* a long segment (see build_state_events), and for az, which has
+# no equivalent in the WAV metadata at all.
 # ---------------------------------------------------------------------------
 
 @dataclass
 class TelemetrySample:
     t: datetime
-    ptt: bool | None
     freq_hz: int | None
     mode: str | None
     az: float | None
@@ -562,19 +635,42 @@ def load_telemetry(path: str) -> list[TelemetrySample]:
             ts = datetime.strptime(rec['t'], '%Y-%m-%dT%H:%M:%SZ')
         except (json.JSONDecodeError, KeyError, ValueError):
             continue
-        samples.append(TelemetrySample(ts, rec.get('ptt'), rec.get('freq_hz'),
+        samples.append(TelemetrySample(ts, rec.get('freq_hz'),
                                        rec.get('mode'), rec.get('az')))
     return samples
 
 
-def _majority(values: list):
-    """Most common value (ties broken by first-seen order); None if empty."""
-    if not values:
-        return None
-    counts: dict = {}
-    for v in values:
-        counts[v] = counts.get(v, 0) + 1
-    return max(counts, key=lambda v: counts[v])
+@dataclass
+class InputLogEvent:
+    t: datetime
+    kind: str            # 'text' (keystroke) or 'qso' (an actual submit)
+    text: str = ''        # kind == 'text': the full input-box contents
+    call: str = ''        # kind == 'qso'
+    dup: bool = False     # kind == 'qso'
+
+
+def load_input_log(path: str) -> list[InputLogEvent]:
+    """Parse a puskas_logger `*-input.jsonl` log. Two event kinds share the
+    file (see puskas_logger.py's own comment on why): 'text' is one line per
+    keystroke feeding the typewriter overlay, microsecond-precise but with
+    no reliable way to tell a submit from an abort. 'qso' is one line per
+    QSO actually appended to the log, written from the one place that
+    unambiguously knows -- see match_qso_times, which uses it to give QSO
+    panels an exact submit time instead of the EDI's minute-precision guess."""
+    out: list[InputLogEvent] = []
+    for line in open(path, encoding='utf-8'):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+            ts = datetime.strptime(rec['t'], '%Y-%m-%dT%H:%M:%S.%fZ')
+        except (json.JSONDecodeError, KeyError, ValueError):
+            continue
+        kind = rec.get('event', 'text')
+        out.append(InputLogEvent(ts, kind, rec.get('text', ''),
+                                 rec.get('call', ''), rec.get('dup', False)))
+    return out
 
 
 def _median(values: list[float]) -> float | None:
@@ -585,28 +681,157 @@ def _median(values: list[float]) -> float | None:
     return s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) / 2
 
 
-def align_telemetry_to_segments(segs: list[Segment], telemetry: list[TelemetrySample],
-                                offset_h: int) -> list[SegState]:
-    """One state per WAV segment -- ptt/freq_hz/mode by majority vote (they
-    rarely change mid-over), az by median -- from the 1 Hz samples whose
-    timestamp falls inside that segment's wall-clock span; falls back to the
-    nearest sample in time if none fall inside (a segment can be shorter than
-    the 1 s telemetry interval). The segment's own boundary *times* are used
-    for display, not the telemetry timestamps -- see module docstring above."""
-    states: list[SegState] = []
+FREQ_MATCH_TOLERANCE_HZ = 500  # see build_state_events' docstring
+
+
+def build_state_events(segs: list[Segment], telemetry: list[TelemetrySample],
+                       offset_h: int) -> list[tuple[float, float, SegState]]:
+    """RX/TX + QRG/mode/bearing badge events.
+
+    ptt/freq_hz/mode at a segment's own start come straight from
+    `Segment.ptt`/`.freq_hz`/`.mode` (read_wav_metadata) -- the WAV file's
+    own embedded IC-9700 recorder metadata, ground truth from the rig at
+    the exact instant it started recording, with none of a 1 Hz telemetry
+    poll's lag. A segment with no such metadata (rare -- e.g. a non-IC-9700
+    recording) is skipped entirely rather than guessed at.
+
+    ptt never needs telemetry at all: unlike freq/mode it cannot
+    legitimately change mid-segment -- a real transition is exactly what
+    causes the recorder to cut a new WAV file -- so it's one value,
+    `s.ptt`, for the whole segment. (An earlier version tried to derive
+    ptt from telemetry, including a "last sample wins" fix for telemetry's
+    own polling lag -- all now unnecessary and removed, since the WAV
+    metadata has no lag to correct for in the first place.)
+
+    freq_hz/mode still benefit from telemetry, though: a long segment with
+    no PTT activity at all (minutes of listening/tuning between overs) can
+    still see the operator QSY with nothing to split the WAV on, so the
+    WAV's own metadata (fixed at file-creation time) only captures the
+    *starting* frequency/mode. Telemetry sub-divides the segment wherever a
+    later 1 Hz sample shows them actually changing -- seeded from the WAV's
+    starting value, not from telemetry, so a segment with no telemetry
+    change at all just keeps the WAV-sourced value for its whole span.
+
+    az has no equivalent in the WAV metadata at all and is purely
+    telemetry's own -- the median of whichever samples make up each
+    freq/mode run.
+
+    Comparing the two frequency sources exactly (Hz for Hz) is unsound:
+    the WAV metadata and rigctld-via-telemetry don't agree to the exact
+    Hz even when nothing changed. Checked against this real session's own
+    data: a systematic disagreement of 160/250/300/310 Hz (depending on
+    band) shows up on *every* segment's very first telemetry sample, which
+    would otherwise look like a spurious retune right at the start of
+    almost every segment. Genuine retunes in the same data are >=1000 Hz
+    (mostly round kHz steps, as a human tuning by hand would produce) --
+    a clean gap, zero occurrences between 310 Hz and 1000 Hz -- so
+    FREQ_MATCH_TOLERANCE_HZ=500 safely separates "same frequency, two
+    slightly disagreeing sources" from "the operator actually retuned"."""
+    events: list[tuple[float, float, SegState]] = []
     for s in segs:
+        if s.ptt is None and s.freq_hz is None and s.mode is None:
+            continue
+
         utc_start = s.wall - timedelta(hours=offset_h)
         utc_end = utc_start + timedelta(seconds=s.dur)
-        inside = [t for t in telemetry if utc_start <= t.t < utc_end]
-        if not inside and telemetry:
-            inside = [min(telemetry, key=lambda t: abs((t.t - utc_start).total_seconds()))]
-        states.append(SegState(
-            ptt=_majority([t.ptt for t in inside if t.ptt is not None]),
-            freq_hz=_majority([t.freq_hz for t in inside if t.freq_hz is not None]),
-            mode=_majority([t.mode for t in inside if t.mode is not None]),
-            az=_median([t.az for t in inside if t.az is not None]),
-        ))
-    return states
+        inside = sorted((t for t in telemetry if utc_start <= t.t < utc_end),
+                        key=lambda t: t.t)
+
+        # Runs of consecutive (freq_hz, mode), seeded from the WAV's own
+        # metadata, not from telemetry -- only sub-divided when a later
+        # telemetry sample shows a genuine change within the segment
+        # (frequency beyond FREQ_MATCH_TOLERANCE_HZ, mode by exact string
+        # match -- mode has no equivalent rounding-disagreement problem).
+        runs: list[tuple[tuple, list[TelemetrySample]]] = [((s.freq_hz, s.mode), [])]
+        cur_freq, cur_mode = s.freq_hz, s.mode
+        for t in inside:
+            new_freq = t.freq_hz if t.freq_hz is not None else cur_freq
+            new_mode = t.mode if t.mode is not None else cur_mode
+            freq_changed = (new_freq is not None and cur_freq is not None
+                            and abs(new_freq - cur_freq) > FREQ_MATCH_TOLERANCE_HZ)
+            mode_changed = new_mode is not None and new_mode != cur_mode
+            if freq_changed or mode_changed:
+                cur_freq, cur_mode = new_freq, new_mode
+                runs.append(((cur_freq, cur_mode), [t]))
+            else:
+                runs[-1][1].append(t)
+
+        seg_end = s.audio_t + _eff(s)
+        for i, (key, samples) in enumerate(runs):
+            start = s.audio_t if i == 0 else \
+                audio_time_for(samples[0].t + timedelta(hours=offset_h), segs)
+            end = (audio_time_for(runs[i + 1][1][0].t + timedelta(hours=offset_h), segs)
+                   if i + 1 < len(runs) else seg_end)
+            if end <= start:
+                continue
+            freq_hz, mode = key
+            events.append((start, end, SegState(
+                ptt=s.ptt, freq_hz=freq_hz, mode=mode,
+                az=_median([t.az for t in samples if t.az is not None]),
+            )))
+    return events
+
+
+def build_input_events(input_log: list[InputLogEvent], segs: list[Segment],
+                       offset_h: int, total: float) -> list[tuple[float, float, str]]:
+    """(start, end, text) windows for the typewriter overlay -- one per
+    recorded input-box state, shown verbatim from the moment it was typed
+    until the next keystroke changes it. Only 'text' events matter here (a
+    'qso' event doesn't change what's on screen). Unlike the CW ticker or
+    the QSO panels, this needs no burst-snapping heuristic at all: every
+    record's timestamp is the operator's own keystroke, already exact
+    ground truth. Empty-text windows (buffer cleared by Enter/Escape) are
+    dropped rather than rendered, so nothing shows while the input line is
+    genuinely idle."""
+    keystrokes = [e for e in input_log if e.kind == 'text']
+    if not keystrokes:
+        return []
+    times = [audio_time_for(e.t + timedelta(hours=offset_h), segs) for e in keystrokes]
+    windows: list[tuple[float, float, str]] = []
+    for i, e in enumerate(keystrokes):
+        if not e.text:
+            continue
+        start = times[i]
+        end = times[i + 1] if i + 1 < len(times) else total
+        if end <= start:
+            continue
+        windows.append((start, end, e.text))
+    return windows
+
+
+def match_qso_times(qsos: list[Qso], input_log: list[InputLogEvent]) -> list[datetime | None]:
+    """Precise submit timestamp for each qsos[i], from the input log's 'qso'
+    events -- an exact replacement for the EDI's minute-precision q.dt when
+    available, None otherwise (older recordings, or a --duration cut that
+    excludes the matching event).
+
+    Matched by call, in chronological order *within that call* -- not by
+    exact time. Time-based matching was tried first (q.dt is exactly the
+    minute-truncation of the same real moment an automatically-generated
+    'qso' event's microsecond timestamp records, since puskas_logger derives
+    both from one captured `now`) but rejected: it silently breaks for a
+    hand-crafted log seeded from the EDI and then hand-tuned against the
+    audio (see --seed-input-log) the moment an edited timestamp crosses a
+    minute boundary from what the EDI happened to record -- exactly the kind
+    of edit this feature exists to make possible. Call+order has no such
+    trap: a --duration cut only ever removes a *suffix* in time, so the
+    surviving occurrences of any call are still a prefix of the full
+    sequence, and "next unused" stays correct."""
+    by_call: dict[str, list[datetime]] = {}
+    for e in input_log:
+        if e.kind == 'qso':
+            by_call.setdefault(e.call, []).append(e.t)
+    used: dict[str, int] = {}
+    out: list[datetime | None] = []
+    for q in qsos:
+        i = used.get(q.call, 0)
+        cands = by_call.get(q.call, [])
+        if i < len(cands):
+            out.append(cands[i])
+            used[q.call] = i + 1
+        else:
+            out.append(None)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -729,22 +954,74 @@ def _snap_to_cluster(t: float, clusters: list[float]) -> float:
     return max(candidates) if candidates else t
 
 
-def qso_windows(qsos: list[Qso], segs: list[Segment], offset_h: int,
-                total: float) -> list[tuple[float, float]]:
-    """Return the (start, end) video-time window shown for each QSO's panel,
-    snapped onto the actual WAV segment/burst boundaries (see cluster_starts)
-    rather than the EDI log's minute-precision timestamp, so the panel
-    switches exactly when the real over begins."""
+def qso_windows(qsos: list[Qso], segs: list[Segment], offset_h: int, total: float,
+                qso_times: list[datetime | None] | None = None) -> list[tuple[float, float]]:
+    """Return the (start, end) video-time window shown for each QSO's panel.
+
+    Only the *start* needs a heuristic at all: there's no way to know from
+    the EDI or the input log exactly when a real over began, so it's
+    snapped onto the actual WAV segment/burst boundary (see cluster_starts)
+    nearest the QSO's own approximate time. The *end* doesn't need
+    guessing wherever qso_times (from match_qso_times) has an exact
+    submit time for that QSO -- that moment (the operator hitting Enter)
+    is exact ground truth for when the QSO was done, so the panel simply
+    clears there instead of lingering until the next QSO's own panel
+    starts (the old behaviour, still used as a fallback when qso_times
+    isn't available for a given QSO -- no better information exists then).
+
+    qso_times also still feeds the *start* side, same as before: as the
+    anchor into _snap_to_cluster in place of the EDI's minute-precision
+    q.dt, which removes the minute-level slop that could otherwise point
+    the snap at the wrong neighbouring burst.
+
+    Two (or more) QSOs worked with no real listening gap between them --
+    e.g. the same station on SSB then CW then FM in one continuous
+    exchange -- are one burst as far as cluster_starts is concerned, since
+    there's no audio structure to tell their overs apart at all. A QSO
+    that snaps to the *same* cluster as the previous QSO instead starts
+    exactly where the previous QSO's own window ended (its real, known
+    finish) -- not audio-structure-precise either, but real, and
+    critically leaves no overlap and no gap between the two."""
     clusters = cluster_starts(segs)
-    starts = [_snap_to_cluster(audio_time_for(q.dt + timedelta(hours=offset_h), segs), clusters)
-             for q in qsos]
+    starts: list[float] = []
+    finishes: list[float | None] = []
+    prev_cluster: float | None = None
+    for i, q in enumerate(qsos):
+        precise = qso_times[i] if qso_times else None
+        anchor = precise if precise is not None else q.dt
+        anchor_t = audio_time_for(anchor + timedelta(hours=offset_h), segs)
+        snapped = _snap_to_cluster(anchor_t, clusters)
+        if precise is not None and snapped == prev_cluster and finishes[i - 1] is not None:
+            starts.append(finishes[i - 1])
+        else:
+            starts.append(snapped)
+        finishes.append(anchor_t if precise is not None else None)
+        prev_cluster = snapped
     for i in range(1, len(starts)):
         starts[i] = max(starts[i], starts[i - 1])   # keep panel order sane
     windows: list[tuple[float, float]] = []
     for i, start in enumerate(starts):
-        end = starts[i + 1] if i + 1 < len(starts) else total
+        fallback_end = starts[i + 1] if i + 1 < len(starts) else total
+        end = finishes[i] if finishes[i] is not None else fallback_end
         windows.append((max(0.0, start), max(start + 1.0, end)))
     return windows
+
+
+def running_score(qsos: list[Qso]) -> list[tuple[int, int]]:
+    """(qso_count, cumulative_points) after each qsos[i]. Matches
+    puskas_logger's own scoring convention (see its _band_summary and the
+    EDI's CQSOP): every QSO counts toward qso_count, including dups -- they
+    still get logged and shown, just worth nothing -- but only non-dup QSOs
+    contribute points."""
+    count = 0
+    pts = 0
+    out: list[tuple[int, int]] = []
+    for q in qsos:
+        count += 1
+        if not q.dup:
+            pts += q.pts
+        out.append((count, pts))
+    return out
 
 
 STATE_TX_HEX = '0000FF'  # ASS \c is &HbbggrrH -- this is pure red
@@ -764,9 +1041,18 @@ def _fmt_rig_info(freq_hz: int | None, mode: str | None, az: float | None) -> st
     return "  ".join(parts)
 
 
+def _mode_at(t: float, state_events: list[tuple[float, float, SegState]]) -> str | None:
+    for start, end, st in state_events:
+        if start <= t < end:
+            return st.mode
+    return None
+
+
 def build_ass(segs: list[Segment], qsos: list[Qso], mycall: str, mywwl: str,
               contest: str, offset_h: int, W: int, H: int,
-              seg_states: list[SegState] | None = None) -> str:
+              state_events: list[tuple[float, float, SegState]] | None = None,
+              input_events: list[tuple[float, float, str]] | None = None,
+              qso_times: list[datetime | None] | None = None) -> str:
     sx = W / 1920  # scale factor from the 1080p reference layout
     fs_big = int(58 * sx)
     fs_panel = int(46 * sx)
@@ -788,6 +1074,7 @@ Style: PanelDup,DejaVu Sans Mono,{fs_panel},&H007070FF,&H000000FF,&H00000000,&HC
 Style: Header,DejaVu Sans Mono,{fs_hdr},&H0000FFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,2,8,60,60,40,1
 Style: Clock,DejaVu Sans Mono,{fs_clk},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,3,4,0,9,60,60,40,1
 Style: State,DejaVu Sans Mono,{fs_hdr},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,2,7,60,60,40,1
+Style: Input,DejaVu Sans Mono,{fs_panel},&H0000FF00,&H000000FF,&H00000000,&HC8202018,-1,0,0,0,100,100,0,0,3,6,0,2,60,60,40,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -800,16 +1087,41 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             f"{style},,0,0,0,,{text}")
 
     total = segs[-1].audio_t + _eff(segs[-1]) if segs else 0.0
+    windows = qso_windows(qsos, segs, offset_h, total, qso_times)
+    scores = running_score(qsos)
 
-    # --- static header (callsign / contest) ---
-    ev(0, total, 'Header', f"{_esc(mycall)}  {_esc(mywwl)}   {_esc(contest)}")
+    # --- header (callsign / contest / running score) -- static text plus a
+    # running "NQ Mpts". Updates when a QSO *finishes*, not when its panel
+    # first appears: points are for a completed contact, not one still
+    # being worked. "Finishes" means the QSO's own qso_times entry (exact,
+    # from the input log) when known -- that's windows[i][1], see
+    # qso_windows. Without one for a given QSO there's no real finish time
+    # to use at all, and windows[i][1] there is just "next QSO's start" (or
+    # `total` for the last QSO, leaving no room to show its own score) --
+    # so that QSO's trigger falls back to its panel's own start instead,
+    # the same as before finish-tracking existed.
+    header_base = f"{_esc(mycall)}  {_esc(mywwl)}   {_esc(contest)}"
+    if not qsos:
+        ev(0, total, 'Header', header_base)
+    else:
+        triggers = [windows[i][1] if (qso_times and qso_times[i] is not None) else windows[i][0]
+                   for i in range(len(qsos))]
+        if triggers[0] > 0:
+            ev(0, triggers[0], 'Header', header_base)
+        for i in range(len(qsos)):
+            start = triggers[i]
+            end = triggers[i + 1] if i + 1 < len(triggers) else total
+            if end <= start:
+                continue
+            count, pts = scores[i]
+            ev(start, end, 'Header', f"{header_base}   {count}Q {pts}pts")
 
-    # --- rig/rotator state (top-left): one event per WAV segment, since
-    # segment boundaries are split exactly on the real PTT transitions --
-    # far better time precision than the 1 Hz telemetry the state itself
-    # comes from. No event at all when ptt is unknown for that segment.
-    if seg_states is not None:
-        for s, st in zip(segs, seg_states):
+    # --- rig/rotator state (top-left): timed per build_state_events, which
+    # sub-divides within a WAV segment wherever telemetry itself shows the
+    # state actually changing (see its docstring). No event at all when ptt
+    # is unknown for that stretch.
+    if state_events is not None:
+        for start, end, st in state_events:
             if st.ptt is None:
                 continue
             hexcol = STATE_TX_HEX if st.ptt else STATE_RX_HEX
@@ -818,15 +1130,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             info = _fmt_rig_info(st.freq_hz, st.mode, st.az)
             if info:
                 text += f"\\N{{\\c&HFFFFFF&}}{_esc(info)}"
-            ev(s.audio_t, s.audio_t + _eff(s), 'State', text)
+            ev(start, end, 'State', text)
 
     # --- decode ticker: rolling window, flushed at the start of every fresh
     # burst of on-air activity (see cluster_starts) -- not at a QSO's EDI
     # timestamp, which is only minute-precision and would flush mid-over.
+    # Segments telemetry confirms were *not* CW are skipped outright: the
+    # decoder runs blind on every segment (there's no way to know the mode
+    # in advance) and gate_events rejects most non-CW noise, but a strong
+    # tone in voice audio can occasionally still slip through trusted --
+    # telemetry's own mode is ground truth where we have it.
     stream: list[tuple[float, str, bool]] = []   # (t, ch, flush_before)
     prev_was_gap = True
     for s in segs:
-        if not s.events:
+        mode = _mode_at(s.audio_t, state_events) if state_events is not None else None
+        if not s.events or (mode is not None and mode != 'CW'):
             prev_was_gap = s.dur > MAX_OVER_S
             continue
         is_burst_start = prev_was_gap
@@ -855,7 +1173,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                utc.strftime('%Y-%m-%d %H:%M:%SZ'))
 
     # --- QSO panels ---
-    windows = qso_windows(qsos, segs, offset_h, total)
     for i, q in enumerate(qsos):
         start, end = windows[i]
         tag = '  \\N{\\c&H7070FF&}*** DUPE (0 pts) ***' if q.dup else ''
@@ -865,6 +1182,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                f"\\NTX {_esc(q.rst_s)} {_esc(q.nr_s)}"
                f"    RX {_esc(q.rst_r)} {_esc(q.nr_r)}{tag}")
         ev(start, end, style, txt, layer=1)
+
+    # --- typewriter: what the operator was typing into the logger, bottom
+    # center -- bright green like the logger's own TX line, since both mark
+    # the operator's own action rather than something heard on the air.
+    for start, end, text in (input_events or []):
+        ev(start, end, 'Input', f"► {_esc(text)}")
 
     return ''.join(x if x.endswith('\n') else x + '\n' for x in lines)
 
@@ -1003,7 +1326,9 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('recdir', help='directory of timestamped WAV segments')
-    ap.add_argument('edi', help='EDI log for the same round')
+    ap.add_argument('edi', nargs='+',
+                    help='EDI log(s) for the same session -- pass more than one '
+                         'to merge multiple bands worked in one recording')
     ap.add_argument('-o', '--out', default='contest_video.mp4')
     ap.add_argument('--pitch', type=float, default=600.0, help='CW tone Hz')
     ap.add_argument('--res', choices=RESOLUTIONS, default='1080p')
@@ -1013,14 +1338,69 @@ def main() -> None:
     ap.add_argument('--keep-ass', action='store_true',
                     help='keep intermediate .ass/.wav for inspection')
     ap.add_argument('--telemetry',
-                    help='puskas_logger *-telemetry.jsonl for an RX/TX + QRG/mode/bearing overlay')
+                    help='puskas_logger *-telemetry.jsonl -- optional: the RX/TX + QRG/mode '
+                         'badge already comes from the WAV files\' own IC-9700 metadata; this '
+                         'only adds bearing (ROT) and refines QRG/mode within long segments '
+                         'where the operator QSY\'d with nothing to split the WAV on')
+    ap.add_argument('--duration', type=float,
+                    help='trim to the first DURATION seconds of real session time '
+                         '(chronological preview; also skips CW-decoding past the '
+                         'cutoff, so a short preview is much faster to build)')
+    ap.add_argument('--webcam',
+                    help='picture-in-picture selfie/webcam clip, synced automatically '
+                         'from its own filename timestamp (e.g. VID_20260706_180003.mp4)')
+    ap.add_argument('--input-log',
+                    help="puskas_logger *-input.jsonl for a 'typewriter' overlay of what "
+                         "was typed into the logger -- optional, older recordings won't "
+                         "have one")
+    ap.add_argument('--seed-input-log',
+                    help="write a hand-editable 'qso' event skeleton to this path, one line "
+                         "per QSO in the EDI(s) with a placeholder timestamp, then exit "
+                         "without rendering -- for a recording made before --input-log "
+                         "existed: edit each 't' against the audio, then pass the result "
+                         "back in as --input-log for exact QSO-panel timing with no "
+                         "cluster-snapping heuristics involved")
     args = ap.parse_args()
+
+    if args.seed_input_log:
+        _, _, qsos_all = merge_edi(args.edi)
+        with open(args.seed_input_log, 'w') as fh:
+            for q in qsos_all:
+                fh.write(json.dumps({
+                    't': q.dt.strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z',
+                    'event': 'qso',
+                    'call': q.call,
+                    'nr_s': q.nr_s,
+                    'loc': q.loc,
+                    'dup': q.dup,
+                }) + '\n')
+        print(f"wrote {len(qsos_all)} seed 'qso' events to {args.seed_input_log}")
+        print("each 't' is just the EDI's own minute, seconds zeroed -- edit it to the "
+              "QSO's real time from the audio, then pass "
+              f"--input-log {args.seed_input_log} when rendering")
+        return
 
     W, H = RESOLUTIONS[args.res]
     segs = scan_segments(args.recdir)
     if not segs:
         sys.exit(f"no timestamped WAVs found in {args.recdir}")
     print(f"{len(segs)} segments, {segs[-1].audio_t + segs[-1].dur:.0f}s audio")
+
+    mycall, mywwl, qsos_all = merge_edi(args.edi)
+    offset_h = derive_utc_offset(segs, qsos_all)
+    print(f"{mycall} {mywwl}: {len(qsos_all)} QSOs, UTC+{offset_h} local")
+
+    webcam_start = None
+    if args.webcam:
+        cam_wall = parse_webcam_wall(args.webcam)
+        cam_dur = _ffprobe_duration(args.webcam)
+        webcam_start = sync_webcam_start(cam_wall, cam_dur, qsos_all, segs, offset_h)
+        print(f"  webcam: synced to start at {webcam_start:.0f}s in the output")
+
+    if args.duration:
+        segs = trim_to_duration(segs, args.duration)
+        print(f"  duration: preview cut to first {args.duration:.0f}s "
+              f"({len(segs)} segments)")
 
     print("decoding CW ...")
     for s in segs:
@@ -1035,26 +1415,44 @@ def main() -> None:
         total = segs[-1].audio_t + _eff(segs[-1])
         print(f"  skip-gaps: {total:.0f}s video (was {segs[-1].audio_t + segs[-1].dur:.0f}s)")
 
-    mycall, mywwl, qsos = parse_edi(args.edi)
-    offset_h = derive_utc_offset(segs, qsos)
-    print(f"{mycall} {mywwl}: {len(qsos)} QSOs, UTC+{offset_h} local")
+    total = segs[-1].audio_t + _eff(segs[-1])
+    qsos = [q for q in qsos_all
+            if audio_time_for(q.dt + timedelta(hours=offset_h), segs) < total]
+    if len(qsos) < len(qsos_all):
+        print(f"  {len(qsos)}/{len(qsos_all)} QSOs fall within the {total:.0f}s cut")
 
-    seg_states = None
-    if args.telemetry:
-        telemetry = load_telemetry(args.telemetry)
-        seg_states = align_telemetry_to_segments(segs, telemetry, offset_h)
-        known = sum(1 for st in seg_states if st.ptt is not None)
-        print(f"  RX/TX: {known}/{len(segs)} segments labelled from {args.telemetry}")
+    if webcam_start is not None and webcam_start >= total:
+        print("  webcam starts after the cut ends -- dropping the PiP overlay")
+        webcam_start = None
+
+    read_wav_metadata(segs)
+    known_wav = sum(1 for s in segs if s.ptt is not None)
+    print(f"  WAV metadata: {known_wav}/{len(segs)} segments have IC-9700 rig tags")
+
+    telemetry = load_telemetry(args.telemetry) if args.telemetry else []
+    state_events = build_state_events(segs, telemetry, offset_h)
+    known = sum(1 for _, _, st in state_events if st.ptt is not None)
+    suffix = f" ({args.telemetry} refines freq/mode within long segments)" if args.telemetry else ""
+    print(f"  RX/TX: {known} state changes{suffix}")
+
+    input_events = None
+    qso_times = None
+    if args.input_log:
+        input_log = load_input_log(args.input_log)
+        input_events = build_input_events(input_log, segs, offset_h, total)
+        print(f"  input log: {len(input_events)} typed states from {args.input_log}")
+        qso_times = match_qso_times(qsos, input_log)
+        matched = sum(1 for t in qso_times if t is not None)
+        print(f"  {matched}/{len(qsos)} QSOs got an exact submit time from the input log")
 
     ass_text = build_ass(segs, qsos, mycall, mywwl, args.contest,
-                         offset_h, W, H, seg_states)
+                         offset_h, W, H, state_events, input_events, qso_times)
     ass_path = os.path.splitext(args.out)[0] + '.ass'
     with open(ass_path, 'w') as fh:
         fh.write(ass_text)
 
     stem = os.path.splitext(args.out)[0]
-    total = segs[-1].audio_t + _eff(segs[-1])
-    windows = qso_windows(qsos, segs, offset_h, total)
+    windows = qso_windows(qsos, segs, offset_h, total, qso_times)
     with open(stem + '.chapters.txt', 'w') as fh:
         fh.write(build_chapters(qsos, windows))
     with open(stem + '.srt', 'w') as fh:
@@ -1065,7 +1463,9 @@ def main() -> None:
     print("concatenating audio ...")
     concat_audio(segs, wav)
     print("rendering (this takes a while) ...")
-    render(wav, ass_path, args.out, W, H)
+    render(wav, ass_path, args.out, W, H,
+          webcam=args.webcam if webcam_start is not None else None,
+          webcam_start=webcam_start or 0.0)
 
     if not args.keep_ass:
         os.remove(wav)
