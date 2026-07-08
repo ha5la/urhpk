@@ -401,6 +401,25 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
   the session (as in that first real case) can never end the shared
   ffmpeg filtergraph early and silently truncate the main waterfall/audio —
   a real risk class with multi-input filtergraphs, not a hypothetical.
+  **The PiP's own video is explicitly resampled to `RENDER_FPS` before
+  scaling** (`fps={RENDER_FPS}` in the `[1:v]` filter chain) — for a real
+  reported bug: sync was correct at the start of a video but the audio
+  read as over a second late by the end. A phone recording's video stream
+  can claim a constant frame rate (`ffprobe`: `r_frame_rate` 30/1) while
+  its own per-frame timestamps are genuinely variable — confirmed directly
+  against the real webcam file by reading every packet's own `pts_time`:
+  not one big pause but 3,444 scattered micro frame-drops across the ~2h
+  recording (typical thermal/buffer pressure on a long phone capture),
+  summing to exactly 0.753s of real elapsed time its raw frame count alone
+  doesn't account for (218,052 frames at a flat 30fps only spans 7268.4s;
+  the container's real, PTS-accurate duration is 7269.12s). Without an
+  explicit `fps=` filter, the PiP branch was effectively laid out by frame
+  count rather than by each frame's own true timestamp, so it silently ran
+  very slightly fast relative to the audio-driven main timeline the whole
+  way through. `fps=` resamples using the decoder's true per-frame PTS as
+  its reference, duplicating frames onto a clean, constant `RENDER_FPS`
+  grid that absorbs every one of those scattered drops — eliminating the
+  drift instead of just reducing it.
 - **Ticker clears in gaps, doesn't linger**: a ticker event's display end is capped
   to `TICKER_HOLD_S` (3 s) after its last character, even if the next real
   character is minutes away across a listening gap. Without this cap the last

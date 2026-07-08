@@ -387,6 +387,32 @@ class TestGate:
         assert _dominance('TTTTTTTT') == 1.0
 
 
+class TestRenderWebcamSync:
+    def test_pip_branch_resamples_to_render_fps(self, monkeypatch, tmp_path):
+        # Regression test for a real reported bug: sync was correct at the
+        # start of a rendered video but the audio read as over a second
+        # late by the end. Root cause, confirmed against the real webcam
+        # file's own packet timestamps: a phone recording can claim a
+        # constant frame rate while its actual per-frame timestamps are
+        # genuinely variable (thousands of scattered micro frame-drops
+        # over a long capture) -- without resampling explicitly to
+        # RENDER_FPS using the decoder's true PTS, the PiP branch runs
+        # very slightly fast relative to the audio-driven main timeline.
+        # render() shells out to ffmpeg, so this checks the constructed
+        # command rather than actually invoking it.
+        captured = {}
+
+        def fake_run(cmd, check=True):
+            captured['cmd'] = cmd
+
+        monkeypatch.setattr(cv.subprocess, 'run', fake_run)
+        cv.render(str(tmp_path / 'a.wav'), str(tmp_path / 'a.ass'),
+                 str(tmp_path / 'out.mp4'), 1920, 1080,
+                 webcam=str(tmp_path / 'cam.mp4'), webcam_start=10.0)
+        fchain = captured['cmd'][captured['cmd'].index('-filter_complex') + 1]
+        assert f'[1:v]fps={cv.RENDER_FPS}' in fchain
+
+
 class TestLongSegmentCwRecovery:
     """decode_long_segment recovers CW content from a segment too long to
     decode as a whole (see MAX_OVER_S) -- e.g. two other stations

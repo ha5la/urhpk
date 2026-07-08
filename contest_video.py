@@ -1405,6 +1405,9 @@ def _ffprobe_duration(path: str) -> float:
 
 PIP_WIDTH_FRAC = 0.20   # webcam PiP width as a fraction of the frame width
 PIP_MARGIN_FRAC = 0.02  # gap from the frame edge, same fraction basis
+RENDER_FPS = 30          # output frame rate; the webcam PiP is resampled to
+                         # this too (see render) so both branches share one
+                         # real-time clock
 
 
 def render(wav: str, ass: str, out: str, W: int, H: int,
@@ -1416,7 +1419,7 @@ def render(wav: str, ass: str, out: str, W: int, H: int,
     fchain = (
         f"[0:a]showspectrum=s={W}x{H}:mode=combined:slide=scroll:overlap=0.8:"
         f"color=intensity:scale=cbrt:fscale=log:saturation=1.6,"
-        f"lutyuv=y=val*0.42,format=yuv420p,fps=30[bg];"
+        f"lutyuv=y=val*0.42,format=yuv420p,fps={RENDER_FPS}[bg];"
         f"[bg]subtitles='{ass_esc}':fontsdir=/usr/share/fonts[v0]"
     )
     cmd = ['ffmpeg', '-y', '-hide_banner', '-stats', '-loglevel', 'warning',
@@ -1430,11 +1433,33 @@ def render(wav: str, ass: str, out: str, W: int, H: int,
         # shared filtergraph early and truncate the main waterfall/audio.
         # hflip un-mirrors a phone front-camera recording, which records raw
         # (not mirrored like the on-screen viewfinder the operator saw).
+        #
+        # fps=RENDER_FPS on this branch matters even though the source
+        # already claims 30fps: a real phone recording verified against
+        # this (ffprobe: r_frame_rate 30/1, but avg_frame_rate ~29.997,
+        # derived from its actual per-frame timestamps) is genuinely
+        # variable-rate under a constant-looking label -- not one big
+        # pause but 3,444 scattered micro frame-drops across the ~2h
+        # recording (checked directly via each packet's own pts_time;
+        # typical of thermal/buffer pressure on a long phone capture),
+        # summing to exactly 0.753s of extra real time the frame count
+        # alone doesn't account for. Left unfiltered, this is a real
+        # reported symptom (in sync at the start of the video, over a
+        # second off by the end): the PiP was silently running very
+        # slightly fast relative to the audio-driven main timeline the
+        # whole way through, since something upstream of this filter
+        # apparently laid its frames out by count rather than by their
+        # own true timestamps. The fps filter resamples using the
+        # decoder's true per-frame PTS as its reference, duplicating
+        # frames onto a clean 30fps grid that absorbs every one of those
+        # scattered drops and actually matches real elapsed time --
+        # eliminating the drift instead of just reducing it.
         pip_w = round(W * PIP_WIDTH_FRAC)
         margin = round(W * PIP_MARGIN_FRAC)
         cmd += ['-itsoffset', f'{webcam_start:.3f}', '-i', webcam]
         fchain += (
-            f";[1:v]scale={pip_w}:-2,hflip,tpad=stop_mode=clone:stop_duration=99999[pip]"
+            f";[1:v]fps={RENDER_FPS},scale={pip_w}:-2,hflip,"
+            f"tpad=stop_mode=clone:stop_duration=99999[pip]"
             f";[v0][pip]overlay=x=main_w-w-{margin}:y=main_h-h-{margin}:"
             f"enable='gte(t,{webcam_start:.3f})'[v]"
         )
