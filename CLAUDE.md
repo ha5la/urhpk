@@ -20,6 +20,13 @@ Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
   that genuinely cannot be tested (visual UX, hardware interactions).
 - **Tests must always pass**: never commit with a failing test. The test suite is the
   safety net for refactoring and simplification.
+- **Commit each finished topic before starting the next**: don't let unrelated changes
+  from different features pile up in one working tree — it makes a clean commit split
+  expensive later. One session let three unrelated `contest_video.py` topics (webcam PiP,
+  CW decoder tuning, WAV-metadata rig-state redesign) plus a `puskas_logger.py` macro edit
+  accumulate uncommitted; splitting them afterward required reconstructing each topic's
+  slice by hand, function-by-function, against a full end-state backup, since there was no
+  intermediate git history left to split from.
 - **Prove a regression test catches the bug — red before green**: write the test
   against the still-buggy code and watch it actually fail, *then* write the fix and
   watch the test pass. Don't just reason that a test "should" fail on the old code —
