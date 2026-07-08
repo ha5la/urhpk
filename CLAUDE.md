@@ -360,6 +360,16 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
   list the way normal segments work would show them as one continuous,
   un-flushed burst, which is why they're kept separate from `s.events` and
   passed to `build_ass` as `long_cw_spans` instead.
+  This same change independently fixed a second real bug, found watching
+  an actual rendered video: a fresh CW QSO's ticker still showed a CW QSO
+  decoded over four minutes earlier. Between the two, the operator worked
+  several SSB/FM contacts, each individually short (`dur <= MAX_OVER_S`) --
+  so no *single* segment in between ever looked like a "genuine gap" to
+  the old per-segment `prev_was_gap` bookkeeping, which only checked
+  whether the one immediately-preceding segment was long, regardless of
+  how much real time had actually passed across several short ones
+  combined. Keying the flush decision on the real time gap since the last
+  *included* chunk fixes this the same way, with no special-casing needed.
 - **UTC offset is derived**, not hardcoded: EDI times are UTC, WAV filenames are
   local; `derive_utc_offset` rounds the span-midpoint difference to whole hours,
   so DST is handled automatically.

@@ -783,6 +783,50 @@ class TestAss:
                     f"QSO 1 leftover leaked into segment c's ticker: {text!r}"
         assert seen_x, "segment c's characters never reached the ticker"
 
+    def test_ticker_does_not_leak_across_many_short_non_cw_segments(self, tmp_path):
+        # Regression test for a real bug found watching an actual rendered
+        # video: at 16:42:04Z a fresh CW QSO started, but the ticker still
+        # showed the tail end of a CW QSO decoded over four minutes
+        # earlier. Between the two CW QSOs the operator worked several
+        # SSB/FM contacts, each individually short (dur <= MAX_OVER_S) --
+        # so no *single* segment in between ever looked like a "genuine
+        # gap" to the old flush logic, which only checked whether the one
+        # immediately-preceding segment was long. Real elapsed time across
+        # all of them combined was well over four minutes. The flush
+        # decision must be based on the real time gap since the last
+        # *included* (CW) chunk, not on any one segment in between.
+        # Verified red before green: the old per-segment `prev_was_gap`
+        # logic (git 68d57c1) produces the final transcript 'AB XY' on
+        # this exact data -- 'A'/'B' never flushed away before 'X'/'Y'.
+        edi = tmp_path / 'log.edi'
+        edi.write_text("PCall=HA5LA\nPWWLo=JN97MM\n[QSORecords;0]\n")
+        mycall, mywwl, qsos = parse_edi(str(edi))
+        segs = [
+            Segment('a', datetime(2026, 7, 4, 16, 37, 44), 10.0, 0.0,
+                    events=[CharEvent(1.0, 'A'), CharEvent(2.0, 'B')]),  # CW QSO 1 tail
+        ]
+        t = 10.0
+        for i in range(20):  # ~2.5 minutes of short FM/SSB overs, none > MAX_OVER_S
+            segs.append(Segment(f'b{i}', datetime(2026, 7, 4, 16, 37, 54), 8.0, t))
+            t += 8.0
+        segs.append(Segment('c', datetime(2026, 7, 4, 16, 42, 0), 5.0, t,
+                            events=[CharEvent(0.01, 'X'), CharEvent(0.6, 'Y')]))  # CW QSO 2
+        state_events = [
+            (0.0, 10.0, SegState(mode='CW')),
+            (10.0, t, SegState(mode='FM')),
+            (t, t + 5.0, SegState(mode='CW')),
+        ]
+        ass = build_ass(segs, qsos, mycall, mywwl, 'TEST', 0, 1920, 1080, state_events)
+        texts = self._ticker_texts(ass)
+        seen_x = False
+        for text in texts:
+            if 'X' in text:
+                seen_x = True
+            if seen_x:
+                assert 'A' not in text and 'B' not in text, \
+                    f"CW QSO 1 leftover leaked across the short-segment stretch: {text!r}"
+        assert seen_x, "CW QSO 2's characters never reached the ticker"
+
     def test_cluster_starts_marks_first_segment_and_after_long_gap_only(self):
         segs = [
             Segment('a', datetime(2026, 7, 4, 13, 0, 0), 5.0, 0.0,
