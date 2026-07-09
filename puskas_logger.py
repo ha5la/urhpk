@@ -88,6 +88,11 @@ _BEARING_ARROWS = "↑↗→↘↓↙←↖"
 def _bearing_arrow(degrees: int) -> str:
     return _BEARING_ARROWS[int((degrees + 22.5) / 45) % 8]
 
+def _format_open_combos(by_band: dict[str, list[str]]) -> str:
+    """Compact 'BAND:MODE,MODE' listing for the rprompt, e.g.
+    '70CM:CW,FM 23CM:SSB,CW,FM' -- see LogBook.open_combos."""
+    return ' '.join(f"{b}:{','.join(ms)}" for b, ms in by_band.items())
+
 # ──────────────────────────────────────────────────────────────
 # Locator cache
 # ──────────────────────────────────────────────────────────────
@@ -423,6 +428,23 @@ class LogBook:
 
     def is_dup(self, call: str, band: str, mode: str) -> bool:
         return (call, band, mode) in self.worked
+
+    def open_combos(self, call: str) -> dict[str, list[str]]:
+        """Band -> list of modes not yet worked with `call` this round, for
+        bands that have at least one open mode.
+
+        Empty if `call` hasn't been worked in *any* band/mode yet -- every
+        one of the 9 combos is trivially open on a brand-new callsign,
+        which isn't useful information to show. Only meaningful once
+        there's at least one worked combo to compare the rest against."""
+        if not any((call, b, m) in self.worked for b in _BANDS for m in _MODES):
+            return {}
+        out: dict[str, list[str]] = {}
+        for b in _BANDS:
+            missing = [m for m in _MODES if (call, b, m) not in self.worked]
+            if missing:
+                out[b] = missing
+        return out
 
     def add(self, qso: QSO) -> bool:
         """Append QSO; returns True if duplicate."""
@@ -1005,10 +1027,12 @@ def run(lb: LogBook, tname: str):
             bear = lb.bearing(locs[0])
             if dist:
                 geo = f"  {locs[0]}  {dist} km  {bear}° {_bearing_arrow(bear)}"
+        open_str = _format_open_combos(lb.open_combos(call))
+        tail = f"  <ansiyellow>{open_str}</ansiyellow>" if open_str else ""
         if band and mode and lb.is_dup(call, band, mode):
-            return HTML(f"<ansired><b>  DUP  </b></ansired><ansigreen>{geo}  </ansigreen>")
-        if geo:
-            return HTML(f"<ansigreen>{geo}  </ansigreen>")
+            return HTML(f"<ansired><b>  DUP  </b></ansired><ansigreen>{geo}  </ansigreen>{tail}")
+        if geo or tail:
+            return HTML(f"<ansigreen>{geo}  </ansigreen>{tail}")
         return ""
 
     def _get_input_style() -> Style:
