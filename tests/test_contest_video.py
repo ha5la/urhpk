@@ -21,7 +21,9 @@ from contest_video import (
     TelemetrySample,
     _dominance,
     _eff,
+    _find_offset_correction,
     _quality,
+    _rms_envelope,
     _srt_time,
     _utc_at,
     _wrap,
@@ -47,6 +49,7 @@ from contest_video import (
     parse_webcam_wall,
     qso_windows,
     read_wav_metadata,
+    refine_webcam_start,
     remap_audio_t,
     running_score,
     sync_webcam_start,
@@ -410,7 +413,33 @@ class TestRenderWebcamSync:
                  str(tmp_path / 'out.mp4'), 1920, 1080,
                  webcam=str(tmp_path / 'cam.mp4'), webcam_start=10.0)
         fchain = captured['cmd'][captured['cmd'].index('-filter_complex') + 1]
-        assert f'[1:v]fps={cv.RENDER_FPS}' in fchain
+        pip_chain = fchain.split('[1:v]')[1].split('[pip]')[0]
+        assert f'fps={cv.RENDER_FPS}' in pip_chain
+
+    def test_pip_branch_stretches_timeline_by_webcam_rate(self, monkeypatch, tmp_path):
+        # Regression test for a real reported bug, separate from the frame-
+        # drop one above: the phone and the radio recorder are independent
+        # devices whose clocks don't tick at exactly the same *rate* -- a
+        # linear drift that grew smoothly to several seconds over a ~2 hour
+        # session, which a constant -itsoffset shift cannot correct (see
+        # refine_webcam_start). setpts=PTS/(1-webcam_rate) stretches or
+        # compresses the PiP's own timeline to compensate; it must run
+        # *before* fps resamples onto a clean grid, so the resampling
+        # itself uses the corrected timeline.
+        captured = {}
+
+        def fake_run(cmd, check=True):
+            captured['cmd'] = cmd
+
+        monkeypatch.setattr(cv.subprocess, 'run', fake_run)
+        cv.render(str(tmp_path / 'a.wav'), str(tmp_path / 'a.ass'),
+                 str(tmp_path / 'out.mp4'), 1920, 1080,
+                 webcam=str(tmp_path / 'cam.mp4'), webcam_start=10.0,
+                 webcam_rate=0.0005)
+        fchain = captured['cmd'][captured['cmd'].index('-filter_complex') + 1]
+        pip_chain = fchain.split('[1:v]')[1].split('[pip]')[0]
+        assert pip_chain.startswith('setpts=PTS/0.9995')
+        assert pip_chain.index('setpts=') < pip_chain.index(f'fps={cv.RENDER_FPS}')
 
 
 class TestLongSegmentCwRecovery:
@@ -623,6 +652,141 @@ class TestWebcamSync:
         start = sync_webcam_start(cam_wall, cam_dur=30.0, qsos=qsos,
                                   segs=segs, offset_h=2)
         assert start == 0.0
+
+
+def _burst_signal(sr: int, total_dur: float, burst_starts: float | list[float],
+                  burst_dur: float = 0.15, amp: float = 1000.0, seed: int = 0) -> np.ndarray:
+    """A mostly-silent signal with noise bursts at `burst_starts` -- a
+    stand-in for a short spoken utterance's amplitude envelope (several
+    bursts approximate the rhythm of syllables), for testing the webcam
+    audio drift-correction cross-correlation without needing a real
+    recording. Two signals built with the same seed and burst pattern have
+    identical envelope shape, so cross-correlating them finds an exact,
+    unambiguous match at whatever offset they were placed -- a single
+    burst is deliberately *not* used for anything beyond the most basic
+    envelope check, since one isolated spike against silence resembles any
+    other isolated spike regardless of content, unlike a multi-burst
+    rhythm pattern (see test_find_offset_correction_low_confidence_on_
+    unrelated_audio, which relies on this to tell genuinely different
+    speech rhythms apart)."""
+    if isinstance(burst_starts, (int, float)):
+        burst_starts = [burst_starts]
+    n = int(total_dur * sr)
+    x = np.zeros(n)
+    rng = np.random.default_rng(seed)
+    for b in burst_starts:
+        i0 = int(b * sr)
+        i1 = min(n, i0 + int(burst_dur * sr))
+        if i0 < n:
+            x[i0:i1] = rng.normal(0, amp, i1 - i0)
+    return x
+
+
+def _silence_signal(sr: int, dur: float) -> np.ndarray:
+    """Pure silence -- a stand-in for a webcam window with no matching
+    speech at all (e.g. corresponding to an RX segment, or a stretch where
+    the operator wasn't talking), for testing that _find_offset_correction
+    reports zero confidence rather than latching onto a spurious partial
+    match. Deliberately not random noise: noise has a nonzero chance of
+    producing an accidental partial correlation peak against a bursty
+    (speech-like) signal purely by chance, especially when searching many
+    candidate offsets -- flaky in a way pure silence (zero variance, so
+    the normalized correlation's denominator is exactly zero) cannot be."""
+    return np.zeros(int(dur * sr))
+
+
+class TestWebcamDriftCorrection:
+    """The phone and the radio recorder are independent devices whose
+    clocks don't tick at exactly the same rate -- refine_webcam_start finds
+    this from audio cross-correlation against the operator's own TX audio
+    (see its docstring for the real case this was found from: a webcam PiP
+    that looked correctly synced at the start of a session but was several
+    seconds off by the end, confirmed by ear to be the same words reaching
+    the phone's own mic and the radio mic at different points on the
+    output timeline)."""
+
+    def test_rms_envelope_captures_a_burst(self):
+        sr = 1000
+        x = _burst_signal(sr, 2.0, burst_starts=1.0, burst_dur=0.2, amp=500.0)
+        env = _rms_envelope(x, sr, win_s=0.05)
+        loud_idx = int(np.argmax(env))
+        # burst spans [1.0, 1.2)s -> windows [20, 24) at 0.05s/window
+        assert 20 <= loud_idx < 24
+
+    def test_find_offset_correction_recovers_a_known_shift(self):
+        sr = 16000
+        padding_s = 5.0
+        radio_bursts = [1.0, 1.4, 1.9, 2.3]  # a rhythm, like a few syllables
+        true_correction = 2.0
+        radio = _burst_signal(sr, 3.0, radio_bursts, seed=1)
+        cam_bursts = [padding_s - true_correction + b for b in radio_bursts]
+        cam = _burst_signal(sr, 3.0 + 2 * padding_s, cam_bursts, seed=1)
+        correction, confidence = _find_offset_correction(radio, sr, cam, sr, padding_s)
+        assert abs(correction - true_correction) < 0.1
+        assert confidence > 0.3
+
+    def test_find_offset_correction_low_confidence_on_unrelated_audio(self):
+        sr = 16000
+        padding_s = 5.0
+        radio = _burst_signal(sr, 3.0, [1.0, 1.4, 1.9, 2.3], seed=1)
+        # no matching speech at all -- e.g. the webcam window for an RX
+        # segment, where the operator wasn't talking
+        cam = _silence_signal(sr, 3.0 + 2 * padding_s)
+        _, confidence = _find_offset_correction(radio, sr, cam, sr, padding_s)
+        assert confidence == 0.0
+
+    def test_refine_webcam_start_fits_linear_drift(self, monkeypatch):
+        # Regression test built directly from a real case: sampling
+        # confident anchors across a ~2-hour session found the needed
+        # correction growing smoothly from ~0s near the start to ~+3.2s
+        # near the end -- a linear drift a single constant offset cannot
+        # express. This synthesizes that same shape (known intercept and
+        # rate) with synthetic audio, so the test is deterministic.
+        sr = 16000
+        webcam_start_coarse = 100.0
+        padding_s = 8.0
+        radio_dur = 3.0
+        radio_bursts = [1.0, 1.4, 1.9, 2.3]
+        true_intercept = 2.0
+        true_rate = 0.0005
+
+        audio_ts = [100.0, 1000.0, 2000.0, 3000.0, 4000.0, 5000.0]
+        segs = [Segment(f'seg{i}.wav', datetime(2026, 7, 4, 13, 0, 0), radio_dur, t,
+                        ptt=True)
+                for i, t in enumerate(audio_ts)]
+
+        def fake_read_wav_range(path, t0, t1):
+            return _burst_signal(sr, radio_dur, radio_bursts, seed=1), sr
+
+        def fake_read_webcam_audio_range(webcam_path, src_start, dur, sr=16000):
+            seg_audio_t = src_start + webcam_start_coarse + padding_s
+            true_correction = true_intercept + true_rate * seg_audio_t
+            cam_bursts = [padding_s - true_correction + b for b in radio_bursts]
+            return _burst_signal(sr, dur, cam_bursts, seed=1), sr
+
+        monkeypatch.setattr(cv, '_read_wav_range', fake_read_wav_range)
+        monkeypatch.setattr(cv, '_read_webcam_audio_range', fake_read_webcam_audio_range)
+
+        refined, rate, n = refine_webcam_start('fake_cam.mp4', segs, webcam_start_coarse,
+                                               max_anchors=20, padding_s=padding_s)
+        assert n == len(segs)
+        assert abs(rate - true_rate) < 0.0001
+        assert abs((refined - webcam_start_coarse) - true_intercept) < 0.2
+
+    def test_refine_webcam_start_unchanged_with_no_confident_anchors(self, monkeypatch):
+        segs = [Segment('a.wav', datetime(2026, 7, 4, 13, 0, 0), 3.0, 100.0, ptt=True)]
+
+        def fake_read_wav_range(path, t0, t1):
+            return _burst_signal(16000, 3.0, [1.0, 1.4, 1.9, 2.3], seed=1), 16000
+
+        def fake_read_webcam_audio_range(webcam_path, src_start, dur, sr=16000):
+            return _silence_signal(sr, dur), sr  # no matching speech at all
+
+        monkeypatch.setattr(cv, '_read_wav_range', fake_read_wav_range)
+        monkeypatch.setattr(cv, '_read_webcam_audio_range', fake_read_webcam_audio_range)
+
+        refined, rate, n = refine_webcam_start('fake_cam.mp4', segs, 100.0)
+        assert (refined, rate, n) == (100.0, 0.0, 0)
 
 
 class TestSkipGaps:

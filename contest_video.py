@@ -708,6 +708,143 @@ def sync_webcam_start(cam_wall: datetime, cam_dur: float, qsos: list[Qso],
     return audio_time_for(cam_utc_start + timedelta(hours=offset_h), segs)
 
 
+def _read_webcam_audio_range(path: str, t0: float, dur: float, sr: int = 16000
+                             ) -> tuple[np.ndarray, int]:
+    """Read `dur` seconds of audio starting at `t0` from a video file's own
+    audio track, resampled to mono `sr` -- for cross-correlating against the
+    radio's own WAV audio (see refine_webcam_start). Returns an empty array
+    if `t0` is negative or the file has no audio track."""
+    if t0 < 0 or dur <= 0:
+        return np.array([]), sr
+    try:
+        out = subprocess.run(
+            ['ffmpeg', '-v', 'error', '-ss', f'{t0:.3f}', '-t', f'{dur:.3f}',
+             '-i', path, '-vn', '-ac', '1', '-ar', str(sr), '-f', 's16le', '-'],
+            check=True, capture_output=True).stdout
+    except subprocess.CalledProcessError:
+        return np.array([]), sr
+    return np.frombuffer(out, dtype=np.int16).astype(float), sr
+
+
+def _rms_envelope(x: np.ndarray, sr: int, win_s: float = 0.05) -> np.ndarray:
+    """RMS amplitude in consecutive win_s windows -- a coarse speech-rhythm
+    signature, robust to the very different frequency/timbre characteristics
+    of two different microphones/paths recording the same speech (see
+    refine_webcam_start), unlike correlating raw waveform samples directly."""
+    win = max(1, int(sr * win_s))
+    n = len(x) // win
+    if n == 0:
+        return np.array([])
+    return np.sqrt(np.mean(x[:n * win].reshape(n, win) ** 2, axis=1))
+
+
+def _find_offset_correction(radio_audio: np.ndarray, radio_sr: int,
+                            webcam_audio: np.ndarray, webcam_sr: int,
+                            padding_s: float, env_win_s: float = 0.05
+                            ) -> tuple[float, float]:
+    """Cross-correlate the envelope of `radio_audio` (one known TX segment)
+    against a `webcam_audio` window that starts `padding_s` earlier than the
+    coarse webcam_start would predict, spanning padding_s extra on each end.
+
+    Returns (correction, confidence): `correction` is the number of seconds
+    to add to the coarse webcam_start so this segment's audio aligns with
+    its match in webcam_audio (0.0 if nothing usable). `confidence` is the
+    peak's normalized correlation (roughly 0..1; higher is more trustworthy,
+    see refine_webcam_start's min_confidence)."""
+    r_env = _rms_envelope(radio_audio, radio_sr, env_win_s)
+    w_env = _rms_envelope(webcam_audio, webcam_sr, env_win_s)
+    if len(r_env) < 3 or len(w_env) < len(r_env):
+        return 0.0, 0.0
+    r_env = r_env - r_env.mean()
+    w_env = w_env - w_env.mean()
+    r_norm = float(np.linalg.norm(r_env))
+    if r_norm == 0:
+        return 0.0, 0.0
+    corr = np.correlate(w_env, r_env, mode='valid')
+    best_idx = int(np.argmax(corr))
+    w_local_norm = float(np.linalg.norm(w_env[best_idx:best_idx + len(r_env)]))
+    confidence = corr[best_idx] / (r_norm * w_local_norm) if w_local_norm > 0 else 0.0
+    correction = padding_s - best_idx * env_win_s
+    return correction, float(confidence)
+
+
+def refine_webcam_start(webcam_path: str, segs: list[Segment], webcam_start: float,
+                        max_anchors: int = 20, padding_s: float = 8.0,
+                        min_confidence: float = 0.3) -> tuple[float, float, int]:
+    """Refine the coarse (whole-hour) webcam_start via audio cross-
+    correlation against the operator's own TX audio, fitting a *linear
+    drift* model rather than a single constant correction.
+
+    sync_webcam_start/derive_utc_offset only correct whole-hour clock
+    *offset* differences (timezone/DST) between the two *independent*
+    recording devices (phone, radio recorder) -- by design, since that's
+    all whole-hour rounding can express. But two independent consumer
+    clocks (phone system clock, IC-9700 recorder clock) also don't tick at
+    exactly the same *rate* -- a small, real crystal-oscillator mismatch
+    that produces a correction growing roughly linearly with elapsed time,
+    not a constant. Found from a real reported case, confirmed by ear (the
+    operator's own voice reaches the phone's own mic and the radio's mic at
+    the same real-world instant, but drifted apart across the *output*
+    timeline the further into the session): sampling confident anchors
+    across a real ~2-hour session showed the correction growing smoothly
+    from ~0s near the start to ~+3.2s near the end -- not a frame-rate or
+    rendering bug (that was checked and fixed separately; see
+    decode_long_segment's neighbour docstrings), and not something a single
+    constant offset (the first version of this function) can correct.
+
+    Anchors are `s.ptt` (TX) segments at least 1.5s long, sampled evenly
+    across the *whole* candidate list (not just the first `max_anchors`,
+    which -- found from the same real case -- clustered in the first few
+    minutes and produced a rate estimate with almost no time range to
+    constrain it). The phone's mic only picks up the operator's *own*
+    voice, not what's coming through a headset from the other station, so
+    only TX (not RX) segments have anything in the webcam audio to match
+    against. Each anchor's own radio audio (read straight from its WAV
+    file) is cross-correlated against a padded window of webcam audio via
+    _find_offset_correction; anchors below min_confidence are dropped as
+    unreliable (real data: false correlation peaks on noisy/short segments
+    scored confidence 0.08-0.29, genuine matches scored 0.34-0.77 -- a
+    clean gap at 0.3).
+
+    A per-anchor `(audio_t, correction)` pair is then fit with a degree-1
+    least-squares line (np.polyfit): the intercept becomes the corrected
+    webcam_start (matching the original constant-offset meaning at
+    audio_t=0), and the slope is returned as a *rate* -- see render()'s
+    setpts usage for how this rate is applied as a timeline stretch, since
+    a linear drift can't be corrected by -itsoffset (a constant shift)
+    alone.
+
+    Returns (corrected_webcam_start, rate, n_confident_anchors). With fewer
+    than 2 confident anchors, rate is 0.0 (not enough points to fit a
+    line) and webcam_start is nudged by the single anchor's own correction
+    if exactly one was confident, or left unchanged if none were."""
+    candidates = [s for s in segs if s.ptt and s.dur >= 1.5]
+    step = max(1, len(candidates) // max_anchors)
+    sample = candidates[::step]
+    audio_ts: list[float] = []
+    corrections: list[float] = []
+    for seg in sample:
+        radio_audio, radio_sr = _read_wav_range(seg.path, 0.0, seg.dur)
+        if len(radio_audio) == 0:
+            continue
+        src_start = seg.audio_t - webcam_start - padding_s
+        cam_audio, cam_sr = _read_webcam_audio_range(
+            webcam_path, src_start, seg.dur + 2 * padding_s)
+        if len(cam_audio) == 0:
+            continue
+        correction, confidence = _find_offset_correction(
+            radio_audio, radio_sr, cam_audio, cam_sr, padding_s)
+        if confidence >= min_confidence:
+            audio_ts.append(seg.audio_t)
+            corrections.append(correction)
+    if not corrections:
+        return webcam_start, 0.0, 0
+    if len(corrections) == 1:
+        return webcam_start + corrections[0], 0.0, 1
+    rate, intercept = np.polyfit(audio_ts, corrections, 1)
+    return webcam_start + float(intercept), float(rate), len(corrections)
+
+
 # ---------------------------------------------------------------------------
 # Rig/rotator state. ptt/freq_hz/mode at a segment's own start come from the
 # WAV file's own embedded IC-9700 metadata (read_wav_metadata) -- ground
@@ -1411,7 +1548,8 @@ RENDER_FPS = 30          # output frame rate; the webcam PiP is resampled to
 
 
 def render(wav: str, ass: str, out: str, W: int, H: int,
-          webcam: str | None = None, webcam_start: float = 0.0) -> None:
+          webcam: str | None = None, webcam_start: float = 0.0,
+          webcam_rate: float = 0.0) -> None:
     ass_esc = ass.replace('\\', '\\\\').replace(':', '\\:').replace("'", "\\'")
     # Full-screen scrolling waterfall, dimmed to ~half luma so it reads as an
     # ambient background and the text stays crisp on top. overlap=0.8 makes it
@@ -1454,12 +1592,26 @@ def render(wav: str, ass: str, out: str, W: int, H: int,
         # frames onto a clean 30fps grid that absorbs every one of those
         # scattered drops and actually matches real elapsed time --
         # eliminating the drift instead of just reducing it.
+        #
+        # setpts=PTS/(1-webcam_rate), applied first (before fps resamples
+        # onto a clean grid, so that resampling itself uses the corrected
+        # timeline): the phone and the radio recorder are two independent
+        # devices whose clocks don't tick at exactly the same *rate* --
+        # see refine_webcam_start, which fits this rate from real audio
+        # cross-correlation. A rate mismatch is a linear drift, which
+        # -itsoffset (a constant shift) cannot correct on its own; scaling
+        # every presentation timestamp by 1/(1-rate) stretches or
+        # compresses the PiP's own timeline just enough to compensate,
+        # while -itsoffset still handles the constant (intercept) part.
+        # webcam_rate defaults to 0.0 (identity scaling) when no rate was
+        # determined (e.g. --webcam-offset was used instead, or
+        # cross-correlation found no confident match).
         pip_w = round(W * PIP_WIDTH_FRAC)
         margin = round(W * PIP_MARGIN_FRAC)
         cmd += ['-itsoffset', f'{webcam_start:.3f}', '-i', webcam]
         fchain += (
-            f";[1:v]fps={RENDER_FPS},scale={pip_w}:-2,hflip,"
-            f"tpad=stop_mode=clone:stop_duration=99999[pip]"
+            f";[1:v]setpts=PTS/{1 - webcam_rate:.8f},fps={RENDER_FPS},"
+            f"scale={pip_w}:-2,hflip,tpad=stop_mode=clone:stop_duration=99999[pip]"
             f";[v0][pip]overlay=x=main_w-w-{margin}:y=main_h-h-{margin}:"
             f"enable='gte(t,{webcam_start:.3f})'[v]"
         )
@@ -1500,7 +1652,14 @@ def main() -> None:
                          'cutoff, so a short preview is much faster to build)')
     ap.add_argument('--webcam',
                     help='picture-in-picture selfie/webcam clip, synced automatically '
-                         'from its own filename timestamp (e.g. VID_20260706_180003.mp4)')
+                         'from its own filename timestamp (e.g. VID_20260706_180003.mp4), '
+                         'then refined via audio cross-correlation against the operator\'s '
+                         'own TX audio (see --webcam-offset to override)')
+    ap.add_argument('--webcam-offset', type=float,
+                    help='manual fine-tune correction (seconds, may be negative) added to '
+                         'the coarse whole-hour webcam sync -- bypasses the automatic audio '
+                         'cross-correlation entirely; use this if it finds no confident '
+                         'match (e.g. the webcam clip has no audio track), or to override it')
     ap.add_argument('--input-log',
                     help="puskas_logger *-input.jsonl for a 'typewriter' overlay of what "
                          "was typed into the logger -- optional, older recordings won't "
@@ -1543,20 +1702,49 @@ def main() -> None:
     print(f"{mycall} {mywwl}: {len(qsos_all)} QSOs, UTC+{offset_h} local")
 
     webcam_start = None
+    webcam_rate = 0.0
     if args.webcam:
         cam_wall = parse_webcam_wall(args.webcam)
         cam_dur = _ffprobe_duration(args.webcam)
         webcam_start = sync_webcam_start(cam_wall, cam_dur, qsos_all, segs, offset_h)
-        print(f"  webcam: synced to start at {webcam_start:.0f}s in the output")
+        print(f"  webcam: synced to start at {webcam_start:.0f}s in the output (coarse, "
+              f"whole-hour only -- see refine_webcam_start below)")
+
+    # read_wav_metadata runs before --duration trims segs (unlike the CW
+    # decode loop further down, which *should* skip past the cutoff) so the
+    # webcam fine-tune below can search for TX anchors across the *full*
+    # session, same reasoning as sync_webcam_start using qsos_all above --
+    # a short preview otherwise has too few candidates to find a confident
+    # match.
+    read_wav_metadata(segs)
+    known_wav = sum(1 for s in segs if s.ptt is not None)
+    print(f"  WAV metadata: {known_wav}/{len(segs)} segments have IC-9700 rig tags")
+
+    if args.webcam and webcam_start is not None:
+        if args.webcam_offset is not None:
+            webcam_start += args.webcam_offset
+            print(f"  webcam: manual offset {args.webcam_offset:+.2f}s applied -> "
+                  f"starts at {webcam_start:.2f}s (no drift-rate correction -- "
+                  f"pass no --webcam-offset to use automatic cross-correlation instead)")
+        else:
+            refined, rate, n = refine_webcam_start(args.webcam, segs, webcam_start)
+            if n:
+                print(f"  webcam: audio cross-correlation refined start by "
+                      f"{refined - webcam_start:+.2f}s and found a "
+                      f"{rate * 3600:+.3f}s/hour clock-drift rate using {n} anchor(s) "
+                      f"-> starts at {refined:.2f}s")
+                webcam_start = refined
+                webcam_rate = rate
+            else:
+                print("  webcam: audio cross-correlation found no confident match "
+                      "(no audio track, or no TX segments long enough) -- using "
+                      "coarse whole-hour sync only; pass --webcam-offset to "
+                      "fine-tune manually")
 
     if args.duration:
         segs = trim_to_duration(segs, args.duration)
         print(f"  duration: preview cut to first {args.duration:.0f}s "
               f"({len(segs)} segments)")
-
-    read_wav_metadata(segs)
-    known_wav = sum(1 for s in segs if s.ptt is not None)
-    print(f"  WAV metadata: {known_wav}/{len(segs)} segments have IC-9700 rig tags")
 
     telemetry = load_telemetry(args.telemetry) if args.telemetry else []
     state_events = build_state_events(segs, telemetry, offset_h)
@@ -1640,7 +1828,7 @@ def main() -> None:
     print("rendering (this takes a while) ...")
     render(wav, ass_path, args.out, W, H,
           webcam=args.webcam if webcam_start is not None else None,
-          webcam_start=webcam_start or 0.0)
+          webcam_start=webcam_start or 0.0, webcam_rate=webcam_rate)
 
     if not args.keep_ass:
         os.remove(wav)

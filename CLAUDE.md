@@ -430,6 +430,57 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
   its reference, duplicating frames onto a clean, constant `RENDER_FPS`
   grid that absorbs every one of those scattered drops — eliminating the
   drift instead of just reducing it.
+  **This alone did not fix a second, separate reported drift** ("video
+  ahead of audio" by 1:48 into a ~2h session, confirmed by ear and
+  independently by uploading to YouTube): the phone and the radio recorder
+  are two *independent* devices, and their clocks simply don't tick at
+  exactly the same *rate* — a small, real crystal-oscillator mismatch,
+  unrelated to the frame-drop issue above (that one was already verified
+  fixed via a labeled-frame re-composite test showing sub-3ms accuracy a
+  full hour in). `sync_webcam_start`/`derive_utc_offset` only ever correct
+  a whole-hour *offset* (timezone/DST, by design — see below); any
+  sub-hour clock *rate* skew between the two devices was passing straight
+  through uncorrected the whole time, invisible to every test that only
+  checked "does the render faithfully apply whatever webcam_start it was
+  given" rather than "is webcam_start itself correct". Diagnosed by ear:
+  the webcam has its own audio track (unused in the final output — see
+  below — but still on disk), and the operator's own voice reaches both
+  the phone's mic and the radio's mic at the same real-world instant.
+  Extracting the speech onset from both (a simple RMS envelope threshold)
+  and comparing against the assumed `webcam_start` showed a **growing**
+  gap: sampling confident anchors across the real session found the needed
+  correction climbing smoothly from ~0s near the start to ~+3.2s near the
+  end — a linear drift, not a constant one, and not something a single
+  offset (however well chosen) can correct for the whole video at once.
+  `refine_webcam_start` fits this directly: for several of the operator's
+  own TX segments (`s.ptt`, at least 1.5s, sampled evenly across the
+  *whole* session so the fit has real time range to constrain the rate —
+  an earlier version that only took the first few anchors clustered them
+  in the first few minutes and got a near-meaningless rate estimate) it
+  reads that segment's own radio audio straight from its WAV file, and
+  cross-correlates it (`_find_offset_correction`, via `_rms_envelope` — a
+  coarse amplitude-rhythm signature, robust to the very different
+  frequency/timbre of two different microphones/paths capturing the same
+  speech, unlike correlating raw waveform samples directly) against a
+  padded window of the webcam's own audio extracted around where the
+  coarse sync predicts it should be. Only anchors above `min_confidence`
+  (0.3 — real data showed a clean gap between spurious matches at
+  0.08-0.29 and genuine ones at 0.34-0.77) are kept, and a degree-1
+  least-squares fit (`np.polyfit`) across their `(audio_t, correction)`
+  pairs gives both the corrected intercept (folded into `webcam_start`,
+  same meaning as before) and the rate. Applying a linear rate needs more
+  than `-itsoffset` (a constant shift): `render()` applies
+  `setpts=PTS/(1-webcam_rate)` on the PiP branch, *before* the `fps=`
+  resampling above (so the resampling itself operates on the
+  already-corrected timeline) — stretching or compressing the PiP's own
+  presentation timestamps just enough to compensate. Verified against the
+  real recording: at the exact reported drift point, the coarse-only
+  mapping was off by 2.73s; the rate-corrected mapping was off by 0.07s.
+  **`--webcam-offset SECONDS` is a manual fallback**, added in the same
+  pass: a fixed correction added to the coarse `webcam_start`, bypassing
+  cross-correlation entirely (no rate compensation) — for a webcam clip
+  with no audio track, or wherever cross-correlation can't find a
+  confident match.
 - **Ticker clears in gaps, doesn't linger**: a ticker event's display end is capped
   to `TICKER_HOLD_S` (3 s) after its last character, even if the next real
   character is minutes away across a listening gap. Without this cap the last
