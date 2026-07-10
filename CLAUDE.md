@@ -740,6 +740,32 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
   the last QSO, leaving no room at all to display that QSO's own score
   before the clip ends).
 
+## Uploading a rendered video to YouTube
+`contest_video.py` only renders the mp4 + `.chapters.txt` + `.srt` — it does not upload.
+Uploading is a deliberate separate manual step, run after reviewing the render, using
+[`youtubeuploader`](https://github.com/porjo/youtubeuploader) (a Go binary, installed at
+`~/.local/bin/youtubeuploader`):
+
+```
+youtubeuploader \
+  -filename out.mp4 \
+  -title "Puskás URH Kupa 2026-07 — HA5LA" \
+  -description "$(cat out.mp4.chapters.txt)" \
+  -caption out.mp4.srt \
+  -secrets ~/.config/youtubeuploader/client_secrets.json \
+  -cache ~/.config/youtubeuploader/request.token
+```
+- **OAuth credentials are intentionally global, not project-specific** —
+  `~/.config/youtubeuploader/` holds one client secret + cached token shared across every
+  project on this machine that uploads to this YouTube channel, not just `urhpk`.
+- Video lands **private** by default (both the flag default and Google's own forced-private
+  restriction on new/unverified API projects) — this is the review gate: check it on YouTube,
+  then flip to Public/Unlisted by hand in YouTube Studio. Nothing in this repo auto-publishes.
+- The OAuth consent screen is left in "Testing" mode (no Google verification review needed
+  for personal single-channel use) — the tradeoff is the refresh token expires after 7 days,
+  requiring a re-click through the browser consent screen. Irrelevant in practice since
+  contests are monthly.
+
 ## puskas_logger.py – UX requirements (non-negotiable)
 
 These requirements must be preserved across all future changes:
