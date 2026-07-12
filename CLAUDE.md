@@ -879,29 +879,55 @@ replayed frame-accurately or synced to the audio at all.
 These requirements must be preserved across all future changes:
 
 - **Dynamic prompt**: the prompt prefix is `{band} {mode}  RX ► ` (e.g.
-  `2M SSB  RX ► `), computed by a callable so it updates every `refresh_interval`
-  second. It always reflects the current rig state (or manual override), giving the
-  operator live context for what band/mode will be used if Enter is pressed now.
-  It mirrors the `TX ►` line printed above it.
+  `2M SSB  RX ► `), computed by a callable so it updates whenever the toolbar
+  redraws (see "Toolbar redraws only on change" below). It always reflects the
+  current rig state (or manual override), giving the operator live context for
+  what band/mode will be used if Enter is pressed now. It mirrors the `TX ►`
+  line printed above it.
 - **TX line is reprinted on band/mode change**: the TX line (`TX ► MYCALL  RST  NR
   LOCATOR`) is a static `print()` rendered once per loop iteration, not part of the
   prompt_toolkit UI. RST depends on mode and NR depends on band, so both go stale if
   the rig changes while the prompt is waiting. Fix: `_toolbar()` detects band/mode
-  changes and calls `get_app().exit(result=_REDRAW)` — safe because `_toolbar()` runs
-  on the event-loop thread every `refresh_interval`. This exits `session.prompt()`,
-  re-prints the TX line with fresh values, and re-enters the prompt within one second.
+  changes and calls `get_app().exit(result=_REDRAW)` — safe because `_toolbar()` only
+  ever runs on the event-loop thread (see below). This exits `session.prompt()`,
+  re-prints the TX line with fresh values, and re-enters the prompt within about a
+  second (bounded by `_toolbar_watcher`'s 10Hz poll of `current_rig()`).
   **Do not move RST or NR into the prompt prefix** — they are TX fields; mixing them
   into `RX ►` was tried and rejected as confusing.
 - **Live rig status**: QRG and contest-clock update every second in the bottom toolbar.
   A band/mode change on the radio must be visible immediately in the prompt — never require
   Enter to see the updated state.
+- **Toolbar redraws only on change, not on a fixed timer**: `session.prompt()` used to
+  pass `refresh_interval=0.1` (10Hz), which called `_toolbar()` — and therefore redrew
+  the screen — unconditionally 10x/s, even though almost every tick produced
+  byte-for-byte identical output (the clock only changes once a second; rig/rotator/
+  webcam state changes far less often). Under `--cast` (asciinema recording of this
+  session, see `contest_video.py`) every redraw is a recorded terminal-output event,
+  so this meant ~10 recorded events/s for the whole contest, nearly all redundant.
+  `_toolbar_signature()` is a pure (no side effects) tuple of everything `_toolbar()`
+  reads; `_toolbar_watcher(app)` polls it at the same 10Hz cadence (so a real
+  second-boundary is still caught within ~100ms — why 10Hz was chosen over 1Hz in the
+  first place) but only calls `app.invalidate()` when the signature actually differs
+  from the last poll, cutting typical redraw frequency to roughly once a second.
+  `app` here is `session.app`, captured directly once (right after constructing
+  `session`) rather than fetched via `get_app()` inside the watcher thread — verified
+  experimentally that `get_app()` from a plain `threading.Thread` sees a fresh,
+  isolated contextvars context and returns a `DummyApplication` whose `invalidate()`
+  is a silent no-op, so the redraw would simply never happen. Holding the real
+  `Application` object directly sidesteps this: `Application.invalidate()` is
+  documented as thread-safe (`loop.call_soon_threadsafe` internally) and works
+  correctly called this way, confirmed with a standalone `PromptSession` test before
+  wiring it into the real code. `_toolbar_watcher` never mutates state and never calls
+  `_toolbar()` itself, so the band/mode-change `_REDRAW` logic above still only ever
+  executes on the event-loop thread, inside the real `_toolbar()` call that a
+  triggered redraw causes.
 - **Dup warning before Enter**: as soon as the callsign token is recognisable, the entire
   input line background turns red (`DynamicStyle({'': 'bg:ansired fg:white'})`) and the
   right prompt shows a red `DUP` label followed by the geo info (distance + bearing + arrow)
   if known. The operator must not need to press Enter to discover a duplicate. The dup check
   must re-evaluate when the band changes on the radio — `RIGCTLD_POLL_S = 1` keeps cached
-  rig state fresh so the style (redrawn every second via `refresh_interval`) always reflects
-  the current band. The dup style is suppressed during edit mode
+  rig state fresh so the style (redrawn on the next change-triggered toolbar redraw, see
+  above) always reflects the current band. The dup style is suppressed during edit mode
   (`_state['edit_idx'] is not None`) to avoid false positives.
 - **Band always visible in log**: every QSO row must show its band. RST columns are
   **left-aligned** in 3 chars (`:<3`) so `↑` and `↓` attach directly to the first digit

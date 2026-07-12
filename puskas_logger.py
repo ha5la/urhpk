@@ -1048,6 +1048,66 @@ def run(lb: LogBook, tname: str):
         parts.append((time_style, f" {t}Z "))
         return FormattedText(parts)
 
+    def _toolbar_signature() -> tuple:
+        """Pure (no side effects) summary of everything _toolbar() renders --
+        used by _toolbar_watcher to decide whether a redraw is actually
+        needed. Deliberately does not call _toolbar() itself: its band/mode
+        REDRAW-triggering logic must only ever run on the event-loop thread
+        (see the comment there), never from this background thread."""
+        band, mode, qrg, online = current_rig()
+        now = datetime.now(timezone.utc)
+        rot_az, rot_online = current_rot()
+
+        mismatch = False
+        if _state['edit_idx'] is not None and band:
+            real_idx = len(lb.qsos) - 1 - _state['edit_idx']
+            if 0 <= real_idx < len(lb.qsos):
+                q = lb.qsos[real_idx]
+                mismatch = band != q.band or mode != q.mode
+
+        with _clock_sync_lock:
+            sync_active = time.monotonic() < _clock_sync_notice["until"]
+            sync_msg = _clock_sync_notice["msg"] if sync_active else None
+
+        webcam_msg, webcam_until = _state['webcam_notice']
+        webcam_active = time.monotonic() < webcam_until
+
+        return (
+            band, mode, qrg, online, mismatch,
+            time.monotonic() < _state['warn_until'],
+            round(rot_az, 1) if rot_online else None, rot_online,
+            _webcam_proc is not None,
+            sync_active, sync_msg,
+            webcam_active, webcam_msg if webcam_active else None,
+            now.strftime("%H:%M:%S"), _is_contest_time(now),
+        )
+
+    def _toolbar_watcher(app) -> None:
+        """Replaces prompt_toolkit's own refresh_interval polling: that
+        called _toolbar() (and therefore redrew the screen) unconditionally
+        every 100ms, 10x/s, even though almost every one of those ticks
+        produces byte-for-byte identical output (the clock only changes
+        once a second; rig/rotator/webcam state changes far less often than
+        that). Each redraw still emits terminal escape codes (at minimum a
+        cursor-repositioning sequence) even when no visible cell changes --
+        under asciinema this means 10 recorded output events per second for
+        the whole contest, most of them redundant. Polling at the same 10Hz
+        cadence (so a real second-boundary is still caught within ~100ms,
+        preserving why 10Hz was chosen over 1Hz in the first place) but only
+        calling invalidate() when the signature actually differs cuts this
+        down to roughly one redraw per second in the common case. `app` is
+        `session.app`, captured directly rather than via get_app() -- a
+        plain background thread runs in its own fresh contextvars Context,
+        so get_app() from here would see no running Application at all and
+        return a DummyApplication whose invalidate() is a silent no-op."""
+        last = None
+        while True:
+            sig = _toolbar_signature()
+            if sig != last:
+                last = sig
+                app.invalidate()
+            time.sleep(0.1)
+
     def _qso_to_input(q: QSO) -> str:
         parts = [q.call, q.rst_r, f"{q.nr_r:03d}"]
         if q.loc:
@@ -1280,6 +1340,7 @@ def run(lb: LogBook, tname: str):
         enable_history_search=False,
     )
     session.default_buffer.on_text_changed += _on_buffer_changed
+    threading.Thread(target=_toolbar_watcher, args=(session.app,), daemon=True).start()
 
     try:
         _offline_setup()
@@ -1317,7 +1378,6 @@ def run(lb: LogBook, tname: str):
             result = session.prompt(_prompt_msg, bottom_toolbar=_toolbar,
                                     rprompt=_rprompt,
                                     style=DynamicStyle(_get_input_style),
-                                    refresh_interval=0.1,
                                     default=default,
                                     pre_run=lambda: setattr(get_app(), 'ttimeoutlen', 0.05))
         except KeyboardInterrupt:
