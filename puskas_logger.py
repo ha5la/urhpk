@@ -1404,10 +1404,10 @@ def main():
     t = threading.Thread(target=_rig_thread, daemon=True)
     t.start()
     threading.Thread(target=_rot_thread, daemon=True).start()
-    _telem_path = Path(f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{my_call}-telemetry.jsonl")
+    _telem_path = Path(f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{lb.my_call}-telemetry.jsonl")
     threading.Thread(target=_telemetry_thread, args=(_telem_path,), daemon=True).start()
     print(f"Telemetry: {_telem_path}")
-    _input_log_path = Path(f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{my_call}-input.jsonl")
+    _input_log_path = Path(f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{lb.my_call}-input.jsonl")
     _input_log_open(_input_log_path)
     print(f"Input log: {_input_log_path}")
 
