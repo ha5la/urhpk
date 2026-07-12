@@ -234,13 +234,15 @@ uv run puskas_visualizer.py [CALLSIGN LOCATOR]
 ## contest_video.py – Annotated CW contest video
 
 Turns a CW contest recording plus its EDI log into a YouTube-ready MP4 with a
-scrolling audio waterfall, a live CW-decode ticker, and a panel showing the
-current QSO. Built for reuse across future contests recorded the same way.
+scrolling audio waterfall, a live CW-decode ticker, an RX/TX + rig badge, and
+optionally a picture-in-picture of the logger's own terminal session (see
+`--cast` below) and/or a webcam. Built for reuse across future contests
+recorded the same way.
 
 ```
 uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
 ```
-- Dependencies: `numpy` (uv script header) + `ffmpeg`/`ffprobe` on PATH
+- Dependencies: `numpy`, `pyte`, `pillow` (uv script header) + `ffmpeg`/`ffprobe` on PATH
 - **Input**: a directory of WAV segments named `YYYYMMDD_HHMMSS...wav` (local
   time), split on RX/TX switches, plus the EDI log for the same round. The
   recorder splits continuously, so segments are contiguous — the audio timeline
@@ -388,10 +390,13 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
 - **UTC offset is derived**, not hardcoded: EDI times are UTC, WAV filenames are
   local; `derive_utc_offset` rounds the span-midpoint difference to whole hours,
   so DST is handled automatically.
-- **Rendering is one ffmpeg pass**: everything (ticker, QSO panels, header) is an
-  ASS subtitle file burned over an `showspectrum` waterfall (dimmed to ~0.42 luma
-  so text stays readable). No frame-by-frame rendering. The waterfall fills the
-  frame within the first ~80 s, then stays full.
+- **Rendering is one ffmpeg pass**: the RX/TX badge and CW ticker (the only two
+  overlays `build_ass` still produces — see "Terminal-session PiP" below for why
+  the rest were removed) are one ASS subtitle file burned over an `showspectrum`
+  waterfall (dimmed to ~0.42 luma so text stays readable). No frame-by-frame
+  rendering. The waterfall fills the frame within the first ~80 s, then stays
+  full. The terminal-session and webcam PiPs (also below) are composited in the
+  same `filter_complex` graph, in the same ffmpeg invocation.
 - The video keeps the recording's full length.
 - **`--duration SECONDS` for a chronological preview cut**: trims to the first
   `SECONDS` of real session time — a straight, uncut trim (not a curated
@@ -401,8 +406,8 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
   full session and discarding most of the result — the main cost of this
   pipeline is CW decoding, so a 10-minute preview of a 2-hour session decodes
   roughly 12x less audio. QSOs past the cutoff are filtered out of the merged
-  list before `build_ass`/chapters/SRT so nothing shows a QSO panel with no
-  time left to display it in.
+  list before chapters/SRT are built so nothing gets a chapter/caption with no
+  time left in the clip to show it in.
 - **`--webcam PATH` for a picture-in-picture selfie/webcam overlay**, bottom-
   right corner, muted (radio audio is the only soundtrack — the cam mic would
   just add room noise/echo of the operator's own on-air voice), mirrored with
@@ -496,6 +501,101 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
   cross-correlation entirely (no rate compensation) — for a webcam clip
   with no audio track, or wherever cross-correlation can't find a
   confident match.
+- **`--cast PATH` for a terminal-session picture-in-picture**, replacing what
+  used to be separate QSO panels, a running-score header, a UTC clock, and a
+  typewriter overlay of what was typed. `PATH` is an asciinema (cast v2)
+  recording of the tmux session running irssi + `puskas_logger.py` during the
+  contest (see "Recording the logger session" below for how to make one) — the
+  logger's own screen already shows the callsign/band/mode/QSO list/timestamp
+  live, so reconstructing any of that as a separate overlay was pure
+  duplication once this became possible. The only thing the terminal session
+  *can't* show is RX/TX: `puskas_logger` has no way to know the rig's real PTT
+  state until the WAV recordings are downloaded from the SD card after the
+  contest and their IC-9700 metadata is read back — that's what the badge
+  (above) is still for.
+  - **Rendering the cast is its own pipeline stage** (`render_cast_video`),
+    producing a standalone intermediate mp4 before the main `render()` call,
+    in the same spirit as `concat_audio`'s intermediate wav — not rendered
+    frame-by-frame inline with the main waterfall/ASS pass, since replaying
+    terminal escape codes into pixels is a different kind of work entirely.
+    It uses `pyte.Screen`/`pyte.ByteStream` to replay the cast's terminal
+    escape codes into a `pyte` screen buffer, and Pillow (`ImageFont`/
+    `ImageDraw`) to draw each character cell onto a canvas which is piped
+    straight into `ffmpeg` as raw video frames (`-f rawvideo -pix_fmt rgb24`)
+    — no intermediate PNG files per frame.
+  - **Only redraw rows pyte marks dirty, not the whole canvas every
+    frame**: a first implementation redrew every row on every tick and took
+    123.8s to render a 76.9s clip (0.62x realtime — impractical for a full
+    contest-length session, which would have taken hours). `pyte.Screen`
+    already tracks exactly which rows changed since the last time it was
+    read (`screen.dirty`); redrawing only those onto a canvas that persists
+    across frames (rather than rebuilding from scratch) cut this to 25.6s
+    for the same clip (~3x realtime, ~40min for a full 2h session) — a 5x
+    speedup, verified on the same input before/after the change.
+  - **Line height must come from the font's own metrics, not a rule of
+    thumb**: `lh = int(CAST_FONT_SIZE * 1.2)` (a common monospace
+    line-height approximation) undershot DejaVu Sans Mono 13pt's real
+    `ascent + descent` (17px vs. the approximation's 15px) by enough that
+    descenders (e.g. underscores) got clipped by the *next* row's own
+    background-clearing rectangle on redraw — found from the user directly
+    reporting "some characters are off, seems to be some buffer garbage" in
+    a rendered preview. Root-caused by comparing the direct pre-encode
+    canvas against the same frame decoded back out of the rendered mp4
+    (ruling out video compression as the cause), then checking
+    `font.getmetrics()` against the row height actually in use. Fixed with
+    `lh = ascent + descent`; verified via a before/after pixel-diff of the
+    exact same frame (39 differing pixels with the old formula, 0 with the
+    fixed one) before writing the permanent regression test
+    (`test_draw_cast_row_descender_survives_the_row_belows_own_redraw`).
+  - **A second, separate artifact the user spotted in the same preview
+    ("some buffer garbage") turned out not to be a rendering bug at
+    all**: traced directly to the raw cast bytes, which show the recorded
+    application (the logger's own status line) using absolute cursor
+    positioning (`\x1b[N;97H`) with no erase-to-end-of-line escape code —
+    so when a redraw is shorter than what was previously drawn at that
+    screen position, the old characters are genuinely still there,
+    unerased, in the real terminal session exactly as recorded. Confirmed
+    this is not specific to this renderer: any correct terminal emulator
+    replaying the identical bytes would show the same stale characters.
+    Left as-is (a genuine, minor, cosmetic artifact in the *source*
+    recording, not the video pipeline) rather than "fixed" by erasing
+    lines the real session never erased — that would render something
+    that didn't actually happen on screen. Worth revisiting in
+    `puskas_logger.py` itself later per the "no visual glitches" principle,
+    since it's the logger's own redraw path that omits the erase.
+  - **Layout**: `CAST_PIP_WIDTH_FRAC`/`CAST_PIP_X_FRAC`/`CAST_PIP_Y_FRAC`
+    position the cast as a large PiP — the dominant visual element, not a
+    small inset, since the terminal session is most of what there is to
+    watch — occupying most of the frame below the RX/TX badge (top-left)
+    and above the CW ticker (bottom-center), with the small webcam PiP (if
+    used) in the bottom-right corner, clear of the cast box horizontally
+    regardless of its vertical extent. The fractions are sized against
+    `render_cast_video`'s *real* output aspect ratio (~1.69 for a 191x52
+    DejaVu Sans Mono 13pt terminal — a first mockup used ~1.91, since it
+    was rendered before the descender-clipping line-height fix above
+    shortened rows; using the stale aspect left too little room below the
+    box and would have visually covered the ticker text). Verified
+    end-to-end (not just the two unit-tested bugs above) with a full
+    synthetic render — a silent WAV session plus `hello.cast` — checking an
+    actual decoded frame from the output mp4 to confirm the PiP box clears
+    both the badge above and the ticker's reserved space below at both
+    1080p and 720p.
+  - **Sync is exact, unlike the webcam**: an asciinema cast file's header
+    `timestamp` field is a Unix epoch — real, absolute UTC with no
+    filename-parsing or whole-hour-rounding ambiguity the way
+    `parse_webcam_wall` has for a phone clip (see `sync_webcam_start`
+    above). `parse_cast_header` reads it directly; `main()` computes the
+    cast's start position in the output timeline with a single
+    `audio_time_for(cast_wall + timedelta(hours=offset_h), segs)` call — no
+    `refine_webcam_start`-style cross-correlation needed, since there's no
+    second physical clock to drift against. For the same reason,
+    `render()`'s cast branch has no `setpts` rate-correction term: the cast
+    mp4 is `render_cast_video`'s own synthetic, constant-framerate output,
+    not an independent recording device, so only a plain `fps=RENDER_FPS`
+    resample onto the shared clock is needed (the `-itsoffset` position is
+    already exact). `tpad=stop_mode=clone` still applies, for the same
+    reason as the webcam branch: a cast shorter than the full session can't
+    be allowed to end the shared filtergraph early.
 - **Ticker clears in gaps, doesn't linger**: a ticker event's display end is capped
   to `TICKER_HOLD_S` (3 s) after its last character, even if the next real
   character is minutes away across a listening gap. Without this cap the last
@@ -656,25 +756,20 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
   an SRT cue, just no separate chapter marker. SRT cues are capped to
   `CAPTION_DUR_S` (8 s) each so they read as short captions rather than
   persisting on screen until the next QSO.
-- **`--input-log PATH` for a live "typewriter" overlay**, and for exact QSO-panel
-  timing when available. `PATH` is a `puskas_logger *-input.jsonl` file
-  (see below) — optional, so older recordings without one still render
-  normally, falling back to the EDI-minute + cluster-snap timing described
-  above. `load_input_log` parses two event kinds sharing the file, into one
-  `InputLogEvent` list (`kind` is `'text'` or `'qso'`):
-  - **`'text'` events → the typewriter overlay**, bottom-center, styled
-    bright green like the logger's own TX line since both mark the
-    operator's own action rather than something heard on the air. Unlike
-    the CW ticker or QSO panels, this needs no burst-snapping heuristic at
-    all: every record is the operator's own keystroke, already exact
-    ground truth, so `build_input_events` just maps each timestamp straight
-    through `audio_time_for` and shows that state verbatim until the next
-    keystroke changes it (`'qso'` events are ignored here — they don't
-    change what's on screen). Empty-text states (buffer cleared by
-    Enter/Ctrl+U/Escape) are dropped rather than rendered, so nothing shows
-    while the input line is genuinely idle — same "no visual glitches"
-    principle as the logger's own UI.
-  - **`'qso'` events → exact QSO-panel timing.** `match_qso_times` pairs
+- **`--input-log PATH` for exact chapter/caption timing**, when available.
+  `PATH` is a `puskas_logger *-input.jsonl` file (see below) — optional, so
+  older recordings without one still render normally, falling back to the
+  EDI-minute + cluster-snap timing described above. `load_input_log` parses
+  two event kinds sharing the file, into one `InputLogEvent` list (`kind` is
+  `'text'` or `'qso'`); only `'qso'` events are used by `contest_video.py`
+  itself now — the `'text'` keystroke stream used to drive an on-screen
+  typewriter overlay, but that overlay was removed once the terminal-session
+  PIP (see below) started showing the actual logger UI live, keystrokes and
+  all, making a reconstructed text overlay redundant. `load_input_log` still
+  parses both kinds (rather than dropping `'text'` events at load time)
+  because the file format is shared with nothing else that would need
+  changing, and a future overlay could still want them.
+  - **`'qso'` events → exact QSO/chapter/caption timing.** `match_qso_times` pairs
     each `Qso` (from the EDI, minute-precision) to its `'qso'` event by
     **call, in chronological order within that call** — not by exact
     minute, even though `puskas_logger` derives both `q.dt` and the event's
@@ -699,19 +794,19 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
     EDI `q.dt` per-QSO wherever unmatched (no input log, an older
     recording, or a `--duration` cut that excludes the matching event).
   - **Only a QSO's *start* is ever a heuristic — its end doesn't need to
-    be.** `qso_windows` used to close a QSO's panel exactly when the
-    *next* QSO's panel opened (or at `total` for the last QSO) — but
+    be.** `qso_windows` used to close a QSO's window exactly when the
+    *next* QSO's window opened (or at `total` for the last QSO) — but
     `qso_times` gives an exact, real end for a QSO wherever known: the
-    moment the operator hit Enter. Reported directly from watching a
-    rendered preview: a QSO's panel was staying up long after that QSO was
-    actually done, and the running score (below) was crediting points the
-    instant a panel *appeared* rather than once the contact was actually
-    complete. Now `windows[i][1]` is `qso_times[i]` (mapped to video time)
-    wherever available, so the panel clears the moment the QSO is actually
-    finished, leaving a real gap with nothing shown if the next QSO's own
-    over hasn't started yet. Falls back to the old "next QSO's start" (or
-    `total` for the last QSO) wherever `qso_times[i]` is `None` for that
-    particular QSO — no better information exists then.
+    moment the operator hit Enter. `windows[i][1]` is `qso_times[i]`
+    (mapped to video time) wherever available, so the chapter/caption
+    boundary lands the moment the QSO is actually finished, rather than
+    running until the next QSO's own over starts. Falls back to the old
+    "next QSO's start" (or `total` for the last QSO) wherever
+    `qso_times[i]` is `None` for that particular QSO — no better
+    information exists then. (This used to also gate a QSO panel's on-screen
+    lifetime and a running score in the header — see git history before the
+    terminal-session PIP replaced both; `qso_windows`' timing itself is
+    unchanged, only what consumes it.)
   - **Two (or more) QSOs sharing one burst is a second, separate timing bug
     `qso_times` exposed**: the same station worked on multiple modes
     back-to-back with no real listening gap between them (e.g. SSB, then
@@ -719,41 +814,24 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
     *one* burst as far as `cluster_starts` is concerned — there's no audio
     structure to tell the individual overs apart at all. Snapping every one
     of those QSOs' anchors onto that single shared cluster start collapsed
-    all their panels onto the same instant; the pre-existing
-    minimum-1-second window then papered over the collision by showing two
-    panels on screen simultaneously for that one second, and the earlier
-    QSO's panel vanished before its own real submit time. `qso_windows` now
-    tracks the previously resolved cluster: when a QSO's anchor resolves
-    (via `_snap_to_cluster`) to the *same* cluster as the previous QSO **and**
-    an exact `qso_times` entry is available, it starts exactly where the
-    *previous* QSO's own window ended (its real, known finish) instead of
-    the shared cluster start — not audio-structure-precise either, but
-    real, and leaves no overlap and no gap between the two. Without
-    `qso_times` for that QSO, falls back to the original squeeze behaviour.
+    all their windows onto the same instant, which showed up as overlapping
+    chapters/captions. `qso_windows` now tracks the previously resolved
+    cluster: when a QSO's anchor resolves (via `_snap_to_cluster`) to the
+    *same* cluster as the previous QSO **and** an exact `qso_times` entry is
+    available, it starts exactly where the *previous* QSO's own window ended
+    (its real, known finish) instead of the shared cluster start — not
+    audio-structure-precise either, but real, and leaves no overlap and no
+    gap between the two. Without `qso_times` for that QSO, falls back to the
+    original squeeze behaviour.
   - **`--seed-input-log OUT.jsonl`**: writes one `'qso'` event per QSO from
     the EDI(s) (`t` is just `q.dt` with seconds zeroed) and exits without
     rendering — for a recording made before this feature existed, so there's
     no automatically-generated `*-input.jsonl` to fall back on. Edit each
     `t` against the audio, then pass the result back in as `--input-log` for
-    exact QSO-panel timing with no cluster-snapping guesswork involved for
-    those QSOs. This is what `match_qso_times`'s call+order (not
+    exact chapter/caption timing with no cluster-snapping guesswork involved
+    for those QSOs. This is what `match_qso_times`'s call+order (not
     call+minute) matching exists for — a seed's timestamps are expected to
     move freely across minute boundaries once hand-edited.
-- **Running score in the header**: `running_score(qsos)` returns
-  `(qso_count, cumulative_points)` after each QSO — every QSO counts
-  toward `qso_count` including dups (still logged, just worth nothing,
-  matching `puskas_logger`'s own `_band_summary` and the EDI's `CQSOP`),
-  only non-dup QSOs add to points. `build_ass`'s header shows
-  `{mycall} {mywwl} {contest}   NQ Mpts` once there's a first QSO to show
-  a score for, updating in step with each QSO's own *finish* — see the
-  `qso_windows` bullet above — not when its panel first appears, for the
-  same reason as the panel-clearing fix: crediting points for a contact
-  the instant its over starts, before it's actually complete, is wrong.
-  Where a QSO's finish isn't known exactly (no `qso_times` entry for it),
-  its score trigger falls back to its own panel's *start* instead — using
-  `windows[i][1]` there would just be "next QSO's start" (or `total` for
-  the last QSO, leaving no room at all to display that QSO's own score
-  before the clip ends).
 
 ## Uploading a rendered video to YouTube
 `contest_video.py` only renders the mp4 + `.chapters.txt` + `.srt` — it does not upload.
@@ -780,6 +858,21 @@ youtubeuploader \
   for personal single-channel use) — the tradeoff is the refresh token expires after 7 days,
   requiring a re-click through the browser consent screen. Irrelevant in practice since
   contests are monthly.
+
+## Recording the logger session (for contest_video.py --cast)
+
+Record the logger's own tmux pane with [asciinema](https://asciinema.org/)
+(`asciinema rec YYMMDD-CALL.cast`, started before and stopped after the
+`puskas_logger.py` session) — not the irssi pane, and not a screen-capture
+tool like `recordmydesktop`. The console UI is plain text, so a graphical
+screen recording would just be lossy video of something that's already
+exactly representable as text; `asciinema`'s cast v2 format is a timestamped
+stream of terminal output plus a header carrying the exact real-world UTC
+start time (see `parse_cast_header`), which is exactly what
+`render_cast_video` needs to replay it losslessly and sync it into the
+video's timeline. Plain `script(1)` capture was considered and rejected for
+the same reason recordmydesktop was: no per-event timestamps, so it can't be
+replayed frame-accurately or synced to the audio at all.
 
 ## puskas_logger.py – UX requirements (non-negotiable)
 

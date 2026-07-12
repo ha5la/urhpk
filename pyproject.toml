@@ -11,6 +11,8 @@ dev-dependencies = [
     "prompt_toolkit>=3.0",
     "numpy>=1.26",
     "ruff>=0.9",
+    "pyte>=0.8",
+    "pillow>=10.0",
 ]
 
 [tool.ruff]

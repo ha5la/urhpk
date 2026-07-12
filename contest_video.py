@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["numpy"]
+# dependencies = ["numpy", "pyte", "pillow"]
 # ///
 """Produce an annotated CW contest video from a recording + EDI log.
 
@@ -10,10 +10,14 @@ YouTube-ready MP4 with:
 
   * a scrolling audio spectrogram (SDR-style waterfall) as background
   * a live CW decode ticker, synced to the audio
-  * a panel showing the current QSO from the log
+  * an RX/TX + QRG/mode/bearing badge, from the WAV files' own rig metadata
+  * optionally, a large picture-in-picture of the logger/irssi terminal
+    session (--cast, an asciinema recording) and a small webcam PiP
 
-Everything is emitted as one ASS subtitle file and burned in a single ffmpeg
-pass -- no frame-by-frame rendering.
+The ticker and badge are burned in via one ASS subtitle file in a single
+ffmpeg pass; the terminal-session PiP is rendered separately (see
+render_cast_video) and composited alongside the webcam PiP in that same pass
+-- no frame-by-frame rendering of the main video.
 
 Usage:
     uv run contest_video.py RECORDING_DIR EDI_FILE [-o OUT.mp4]
@@ -36,9 +40,11 @@ import subprocess
 import sys
 import wave
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
+import pyte
+from PIL import Image, ImageDraw, ImageFont
 
 # ---------------------------------------------------------------------------
 # CW decoding
@@ -657,15 +663,6 @@ def audio_time_for(wall: datetime, segs: list[Segment]) -> float:
     return segs[-1].audio_t + _eff(segs[-1])
 
 
-def _utc_at(t: float, segs: list[Segment], offset_h: int) -> datetime | None:
-    """Return the UTC time corresponding to video position `t`."""
-    for s in segs:
-        if s.audio_t <= t < s.audio_t + _eff(s):
-            local = s.wall + timedelta(seconds=(t - s.audio_t))
-            return local - timedelta(hours=offset_h)
-    return None
-
-
 def derive_utc_offset(segs: list[Segment], qsos: list[Qso]) -> int:
     """Integer-hour offset such that qso_utc + offset ~= wav local time."""
     if not qsos:
@@ -846,6 +843,160 @@ def refine_webcam_start(webcam_path: str, segs: list[Segment], webcam_start: flo
 
 
 # ---------------------------------------------------------------------------
+# Terminal session capture (asciinema .cast, e.g. an irssi+logger tmux
+# session recorded with `asciinema rec`). Rendered as a real video PIP
+# (pyte replays the cast into a virtual terminal; each frame is rasterized
+# with PIL) rather than as ASS text, since the cast can contain many more
+# state changes per second than are worth a separate subtitle event (the
+# toolbar clock alone ticks ~10x/second the whole session), and a fixed,
+# modest frame rate reads perfectly well for text.
+#
+# Sync is exact and needs no cross-correlation at all, unlike the webcam:
+# asciinema's own cast v2 format embeds a Unix-epoch "timestamp" in its
+# header, recorded by the same machine's clock that (if the logger is also
+# running there) already drives every other precise timestamp in the
+# pipeline -- see puskas_logger.py's webcam capture for the same reasoning.
+# ---------------------------------------------------------------------------
+
+CAST_FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
+CAST_FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"
+CAST_FONT_SIZE = 13
+CAST_FPS = 10.0  # text doesn't need video frame rates to read cleanly
+CAST_BG = (10, 10, 10)
+CAST_PALETTE = {
+    "default": (220, 220, 220), "black": (0, 0, 0), "red": (205, 49, 49),
+    "green": (13, 188, 121), "brown": (229, 229, 16), "blue": (36, 114, 200),
+    "magenta": (188, 63, 188), "cyan": (17, 168, 205), "white": (229, 229, 229),
+    "brightblack": (102, 102, 102), "brightred": (241, 76, 76), "brightgreen": (35, 209, 139),
+    "brightbrown": (245, 245, 67), "brightblue": (59, 142, 234), "brightmagenta": (214, 112, 214),
+    "brightcyan": (41, 184, 219), "brightwhite": (255, 255, 255),
+}
+
+
+def parse_cast_header(path: str) -> tuple[datetime, int, int]:
+    """(start_utc, width, height) from an asciinema cast v2 file's header
+    line. The embedded Unix-epoch `timestamp` is exact, real-world UTC --
+    no local-timezone ambiguity the way a filename-embedded wall-clock
+    string has (see parse_webcam_wall), so no derive_utc_offset-style
+    whole-hour rounding is needed here at all."""
+    with open(path) as f:
+        header = json.loads(f.readline())
+    start_utc = datetime.fromtimestamp(header["timestamp"], tz=timezone.utc).replace(tzinfo=None)
+    return start_utc, header["width"], header["height"]
+
+
+def _cast_color(name: str | None, default: tuple[int, int, int]) -> tuple[int, int, int]:
+    if name is None or name == "default":
+        return default
+    return CAST_PALETTE.get(name, default)
+
+
+def _draw_cast_row(draw: ImageDraw.ImageDraw, line: dict, row: int, W: int,
+                   font: ImageFont.FreeTypeFont, font_b: ImageFont.FreeTypeFont,
+                   cw: float, lh: int) -> None:
+    """Redraw one terminal row onto `draw`'s canvas -- erasing the row
+    first (a plain background rectangle) is essential, not an optimization:
+    without it, a cell that goes from non-blank to blank (e.g. a shorter
+    string overwriting a longer one) would leave stale pixels behind,
+    since we only ever redraw rows pyte marks dirty, never the whole
+    canvas from scratch after the first frame."""
+    y = row * lh
+    draw.rectangle([0, y, int(cw * W) + 4, y + lh], fill=CAST_BG)
+    for col in range(W):
+        ch = line[col]
+        if ch.data == ' ' and ch.bg in (None, 'default') and not ch.reverse:
+            continue
+        fg = _cast_color(ch.fg, CAST_PALETTE["default"])
+        bg = _cast_color(ch.bg, CAST_BG)
+        if ch.reverse:
+            fg, bg = bg, fg
+        x = int(col * cw)
+        if bg != CAST_BG:
+            draw.rectangle([x, y, x + cw, y + lh], fill=bg)
+        f = font_b if ch.bold else font
+        draw.text((x, y), ch.data, font=f, fill=fg)
+
+
+def render_cast_video(cast_path: str, out_path: str, fps: float = CAST_FPS) -> None:
+    """Replay an asciinema cast into a standalone mp4 (its own timeline
+    starting at t=0, matching the cast's own start) -- an intermediate
+    file in the same spirit as concat_audio's wav, so the main render()
+    just treats it as one more PIP video input alongside the webcam.
+
+    Frames are piped as raw RGB24 straight into an ffmpeg encode, not
+    written to disk as a PNG sequence first -- a multi-hour session at
+    even a modest fps would otherwise mean tens of thousands of files.
+
+    The canvas persists across frames and only pyte's own `screen.dirty`
+    rows are redrawn each tick, not the whole screen -- a real terminal
+    is mostly static between two samples 100ms apart (one QSO row, or
+    just the toolbar clock, changes at a time), and redrawing every one
+    of a wide terminal's cells every frame regardless measured at under
+    1x realtime throughput, worse than the encode itself for a multi-hour
+    session."""
+    with open(cast_path) as f:
+        header = json.loads(f.readline())
+        events = [json.loads(line) for line in f]
+    W, H = header["width"], header["height"]
+    duration = events[-1][0] if events else 0.0
+
+    font = ImageFont.truetype(CAST_FONT_PATH, CAST_FONT_SIZE)
+    font_b = ImageFont.truetype(CAST_FONT_BOLD, CAST_FONT_SIZE)
+    cw = font.getlength("M")
+    # A fixed 1.2x-of-size guess (15px at CAST_FONT_SIZE=13) undershot this
+    # font's real metrics (ascent+descent=17px) -- descenders like '_' or
+    # 'g' rendered fine on their *own* row but got clipped the next time
+    # the row *below* was erased-and-redrawn (see _draw_cast_row, which
+    # only ever clears exactly one row's own rectangle), since 2px of
+    # every glyph's descender was actually spilling into that next row's
+    # territory. Real reported case: a static irssi banner's underscores
+    # visibly disappeared partway through a render, despite the row itself
+    # never changing again -- confirmed by comparing the pre-encode canvas
+    # directly (not a video-compression artifact) against the exact same
+    # pyte state rendered without the per-row erase rectangle at all.
+    ascent, descent = font.getmetrics()
+    lh = ascent + descent
+    # even dimensions: libx264/yuv420p chroma subsampling requires it
+    px_w, px_h = int(cw * W) + 4, lh * H + 4
+    px_w += px_w % 2
+    px_h += px_h % 2
+
+    screen = pyte.Screen(W, H)
+    stream = pyte.ByteStream(screen)
+    canvas = Image.new("RGB", (px_w, px_h), CAST_BG)
+    draw = ImageDraw.Draw(canvas)
+    for row in range(H):
+        _draw_cast_row(draw, screen.buffer[row], row, W, font, font_b, cw, lh)
+    screen.dirty.clear()
+
+    cmd = ['ffmpeg', '-y', '-hide_banner', '-loglevel', 'warning',
+          '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', f'{px_w}x{px_h}',
+          '-r', f'{fps}', '-i', '-',
+          '-c:v', 'libx264', '-preset', 'fast', '-crf', '20',
+          '-pix_fmt', 'yuv420p', out_path]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    try:
+        ei = 0
+        n = len(events)
+        t = 0.0
+        dt = 1.0 / fps
+        while t <= duration:
+            while ei < n and events[ei][0] <= t:
+                ts, kind, data = events[ei]
+                if kind == "o":
+                    stream.feed(data.encode())
+                ei += 1
+            for row in screen.dirty:
+                _draw_cast_row(draw, screen.buffer[row], row, W, font, font_b, cw, lh)
+            screen.dirty.clear()
+            proc.stdin.write(canvas.tobytes())
+            t += dt
+    finally:
+        proc.stdin.close()
+        proc.wait()
+
+
+# ---------------------------------------------------------------------------
 # Rig/rotator state. ptt/freq_hz/mode at a segment's own start come from the
 # WAV file's own embedded IC-9700 metadata (read_wav_metadata) -- ground
 # truth straight from the rig, with none of a 1 Hz poll's lag. Telemetry
@@ -1017,33 +1168,6 @@ def build_state_events(segs: list[Segment], telemetry: list[TelemetrySample],
                 az=_median([t.az for t in samples if t.az is not None]),
             )))
     return events
-
-
-def build_input_events(input_log: list[InputLogEvent], segs: list[Segment],
-                       offset_h: int, total: float) -> list[tuple[float, float, str]]:
-    """(start, end, text) windows for the typewriter overlay -- one per
-    recorded input-box state, shown verbatim from the moment it was typed
-    until the next keystroke changes it. Only 'text' events matter here (a
-    'qso' event doesn't change what's on screen). Unlike the CW ticker or
-    the QSO panels, this needs no burst-snapping heuristic at all: every
-    record's timestamp is the operator's own keystroke, already exact
-    ground truth. Empty-text windows (buffer cleared by Enter/Escape) are
-    dropped rather than rendered, so nothing shows while the input line is
-    genuinely idle."""
-    keystrokes = [e for e in input_log if e.kind == 'text']
-    if not keystrokes:
-        return []
-    times = [audio_time_for(e.t + timedelta(hours=offset_h), segs) for e in keystrokes]
-    windows: list[tuple[float, float, str]] = []
-    for i, e in enumerate(keystrokes):
-        if not e.text:
-            continue
-        start = times[i]
-        end = times[i + 1] if i + 1 < len(times) else total
-        if end <= start:
-            continue
-        windows.append((start, end, e.text))
-    return windows
 
 
 def match_qso_times(qsos: list[Qso], input_log: list[InputLogEvent]) -> list[datetime | None]:
@@ -1254,23 +1378,6 @@ def qso_windows(qsos: list[Qso], segs: list[Segment], offset_h: int, total: floa
     return windows
 
 
-def running_score(qsos: list[Qso]) -> list[tuple[int, int]]:
-    """(qso_count, cumulative_points) after each qsos[i]. Matches
-    puskas_logger's own scoring convention (see its _band_summary and the
-    EDI's CQSOP): every QSO counts toward qso_count, including dups -- they
-    still get logged and shown, just worth nothing -- but only non-dup QSOs
-    contribute points."""
-    count = 0
-    pts = 0
-    out: list[tuple[int, int]] = []
-    for q in qsos:
-        count += 1
-        if not q.dup:
-            pts += q.pts
-        out.append((count, pts))
-    return out
-
-
 STATE_TX_HEX = '0000FF'  # ASS \c is &HbbggrrH -- this is pure red
 STATE_RX_HEX = '00FF00'  # pure green
 
@@ -1295,17 +1402,21 @@ def _mode_at(t: float, state_events: list[tuple[float, float, SegState]]) -> str
     return None
 
 
-def build_ass(segs: list[Segment], qsos: list[Qso], mycall: str, mywwl: str,
-              contest: str, offset_h: int, W: int, H: int,
+def build_ass(segs: list[Segment], W: int, H: int,
               state_events: list[tuple[float, float, SegState]] | None = None,
-              input_events: list[tuple[float, float, str]] | None = None,
-              qso_times: list[datetime | None] | None = None,
               long_cw_spans: list[tuple[float, float, list[CharEvent]]] | None = None) -> str:
+    """The RX/TX badge and CW ticker are the only overlays left here --
+    everything else the video used to render itself (timestamp, QSO
+    panels, running score, band/mode/callsign text, what was typed) is
+    now visible directly in the terminal-session PIP (see render_cast_video),
+    which shows the actual logger UI rather than a reconstruction of it.
+    RX/TX status is the one thing that PIP *can't* show: puskas_logger has
+    no idea what the rig's PTT state was at any given instant until the WAV
+    recordings are downloaded from the SD card and their IC-9700 metadata
+    read back offline, well after the session ends."""
     sx = W / 1920  # scale factor from the 1080p reference layout
-    fs_big = int(58 * sx)
-    fs_panel = int(46 * sx)
+    fs_ticker = int(40 * sx)
     fs_hdr = int(40 * sx)
-    fs_clk = int(34 * sx)
 
     head = f"""[Script Info]
 ScriptType: v4.00+
@@ -1316,13 +1427,8 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Ticker,DejaVu Sans Mono,{fs_big},&H00FFFF66,&H000000FF,&H00000000,&H8C100C08,-1,0,0,0,100,100,0,0,3,10,0,5,60,60,0,1
-Style: Panel,DejaVu Sans Mono,{fs_panel},&H00FFFFFF,&H000000FF,&H00000000,&HC8202018,-1,0,0,0,100,100,0,0,3,6,0,1,60,60,80,1
-Style: PanelDup,DejaVu Sans Mono,{fs_panel},&H007070FF,&H000000FF,&H00000000,&HC8101040,-1,0,0,0,100,100,0,0,3,6,0,1,60,60,80,1
-Style: Header,DejaVu Sans Mono,{fs_hdr},&H0000FFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,2,8,60,60,40,1
-Style: Clock,DejaVu Sans Mono,{fs_clk},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,3,4,0,9,60,60,40,1
+Style: Ticker,DejaVu Sans Mono,{fs_ticker},&H00FFFF66,&H000000FF,&H00000000,&H8C100C08,-1,0,0,0,100,100,0,0,3,10,0,2,60,60,20,1
 Style: State,DejaVu Sans Mono,{fs_hdr},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,2,7,60,60,40,1
-Style: Input,DejaVu Sans Mono,{fs_panel},&H0000FF00,&H000000FF,&H00000000,&HC8202018,-1,0,0,0,100,100,0,0,3,6,0,2,60,60,40,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -1335,34 +1441,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             f"{style},,0,0,0,,{text}")
 
     total = segs[-1].audio_t + _eff(segs[-1]) if segs else 0.0
-    windows = qso_windows(qsos, segs, offset_h, total, qso_times)
-    scores = running_score(qsos)
-
-    # --- header (callsign / contest / running score) -- static text plus a
-    # running "NQ Mpts". Updates when a QSO *finishes*, not when its panel
-    # first appears: points are for a completed contact, not one still
-    # being worked. "Finishes" means the QSO's own qso_times entry (exact,
-    # from the input log) when known -- that's windows[i][1], see
-    # qso_windows. Without one for a given QSO there's no real finish time
-    # to use at all, and windows[i][1] there is just "next QSO's start" (or
-    # `total` for the last QSO, leaving no room to show its own score) --
-    # so that QSO's trigger falls back to its panel's own start instead,
-    # the same as before finish-tracking existed.
-    header_base = f"{_esc(mycall)}  {_esc(mywwl)}   {_esc(contest)}"
-    if not qsos:
-        ev(0, total, 'Header', header_base)
-    else:
-        triggers = [windows[i][1] if (qso_times and qso_times[i] is not None) else windows[i][0]
-                   for i in range(len(qsos))]
-        if triggers[0] > 0:
-            ev(0, triggers[0], 'Header', header_base)
-        for i in range(len(qsos)):
-            start = triggers[i]
-            end = triggers[i + 1] if i + 1 < len(triggers) else total
-            if end <= start:
-                continue
-            count, pts = scores[i]
-            ev(start, end, 'Header', f"{header_base}   {count}Q {pts}pts")
 
     # --- rig/rotator state (top-left): timed per build_state_events, which
     # sub-divides within a WAV segment wherever telemetry itself shows the
@@ -1428,30 +1506,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         if end <= t:
             continue
         ev(t, end, 'Ticker', _wrap(vis, CPL, 2))
-
-    # --- UTC clock: one event per second, top-right corner ---
-    for sec in range(int(total) + 1):
-        utc = _utc_at(float(sec), segs, offset_h)
-        if utc:
-            ev(float(sec), float(sec) + 1.0, 'Clock',
-               utc.strftime('%Y-%m-%d %H:%M:%SZ'))
-
-    # --- QSO panels ---
-    for i, q in enumerate(qsos):
-        start, end = windows[i]
-        tag = '  \\N{\\c&H7070FF&}*** DUPE (0 pts) ***' if q.dup else ''
-        style = 'PanelDup' if q.dup else 'Panel'
-        txt = (f"QSO {i + 1}/{len(qsos)}   {q.dt.strftime('%H:%MZ')}"
-               f"\\N{_esc(q.call)}   {_esc(q.loc)}   {q.pts} km"
-               f"\\NTX {_esc(q.rst_s)} {_esc(q.nr_s)}"
-               f"    RX {_esc(q.rst_r)} {_esc(q.nr_r)}{tag}")
-        ev(start, end, style, txt, layer=1)
-
-    # --- typewriter: what the operator was typing into the logger, bottom
-    # center -- bright green like the logger's own TX line, since both mark
-    # the operator's own action rather than something heard on the air.
-    for start, end, text in (input_events or []):
-        ev(start, end, 'Input', f"► {_esc(text)}")
 
     return ''.join(x if x.endswith('\n') else x + '\n' for x in lines)
 
@@ -1542,6 +1596,20 @@ def _ffprobe_duration(path: str) -> float:
 
 PIP_WIDTH_FRAC = 0.20   # webcam PiP width as a fraction of the frame width
 PIP_MARGIN_FRAC = 0.02  # gap from the frame edge, same fraction basis
+CAST_PIP_WIDTH_FRAC = 0.73   # terminal-session PiP is the dominant visual
+                              # element, not a small inset -- the logger UI
+                              # itself is most of what there is to watch.
+                              # Sized against render_cast_video's *real*
+                              # output aspect ratio (~1.69 for a 191x52
+                              # DejaVu Sans Mono 13pt terminal, i.e. taller
+                              # than the first mockup assumed -- that mockup
+                              # was rendered before the descender-clipping
+                              # line-height fix, at the shorter pre-fix
+                              # aspect of ~1.91) so the box leaves genuine
+                              # room below for the CW ticker rather than
+                              # visually covering it.
+CAST_PIP_X_FRAC = 0.0104
+CAST_PIP_Y_FRAC = 0.11        # clears the RX/TX badge above it
 RENDER_FPS = 30          # output frame rate; the webcam PiP is resampled to
                          # this too (see render) so both branches share one
                          # real-time clock
@@ -1549,7 +1617,8 @@ RENDER_FPS = 30          # output frame rate; the webcam PiP is resampled to
 
 def render(wav: str, ass: str, out: str, W: int, H: int,
           webcam: str | None = None, webcam_start: float = 0.0,
-          webcam_rate: float = 0.0) -> None:
+          webcam_rate: float = 0.0,
+          cast: str | None = None, cast_start: float = 0.0) -> None:
     ass_esc = ass.replace('\\', '\\\\').replace(':', '\\:').replace("'", "\\'")
     # Full-screen scrolling waterfall, dimmed to ~half luma so it reads as an
     # ambient background and the text stays crisp on top. overlap=0.8 makes it
@@ -1562,6 +1631,27 @@ def render(wav: str, ass: str, out: str, W: int, H: int,
     )
     cmd = ['ffmpeg', '-y', '-hide_banner', '-stats', '-loglevel', 'warning',
            '-i', wav]
+    cur = 'v0'
+    if cast:
+        # cast is our own render_cast_video output -- a synthetic, constant-
+        # framerate file we just encoded, not an independent physical device
+        # with its own clock, so (unlike the webcam) there's no drift-rate
+        # to correct: fps=RENDER_FPS is a plain resample onto the shared
+        # clock, and itsoffset positions its own t=0 (the moment the logger
+        # session started) at cast_start in the output timeline. tpad clones
+        # its last frame so a cast shorter than the session can't truncate
+        # the shared filtergraph, same reasoning as the webcam branch below.
+        cast_w = round(W * CAST_PIP_WIDTH_FRAC)
+        cast_x = round(W * CAST_PIP_X_FRAC)
+        cast_y = round(H * CAST_PIP_Y_FRAC)
+        cmd += ['-itsoffset', f'{cast_start:.3f}', '-i', cast]
+        fchain += (
+            f";[1:v]scale={cast_w}:-2,fps={RENDER_FPS},"
+            f"tpad=stop_mode=clone:stop_duration=99999[castpip]"
+            f";[{cur}][castpip]overlay=x={cast_x}:y={cast_y}:"
+            f"enable='gte(t,{cast_start:.3f})'[v1]"
+        )
+        cur = 'v1'
     if webcam:
         # itsoffset delays the whole cam stream's presentation timestamps so
         # its own frame 0 lands at webcam_start in the output timeline --
@@ -1608,15 +1698,17 @@ def render(wav: str, ass: str, out: str, W: int, H: int,
         # cross-correlation found no confident match).
         pip_w = round(W * PIP_WIDTH_FRAC)
         margin = round(W * PIP_MARGIN_FRAC)
+        webcam_idx = 2 if cast else 1
         cmd += ['-itsoffset', f'{webcam_start:.3f}', '-i', webcam]
         fchain += (
-            f";[1:v]setpts=PTS/{1 - webcam_rate:.8f},fps={RENDER_FPS},"
+            f";[{webcam_idx}:v]setpts=PTS/{1 - webcam_rate:.8f},fps={RENDER_FPS},"
             f"scale={pip_w}:-2,hflip,tpad=stop_mode=clone:stop_duration=99999[pip]"
-            f";[v0][pip]overlay=x=main_w-w-{margin}:y=main_h-h-{margin}:"
+            f";[{cur}][pip]overlay=x=main_w-w-{margin}:y=main_h-h-{margin}:"
             f"enable='gte(t,{webcam_start:.3f})'[v]"
         )
-    else:
-        fchain = fchain.replace('[v0]', '[v]')
+        cur = 'v'
+    if cur != 'v':
+        fchain += f";[{cur}]null[v]"
     cmd += ['-filter_complex', fchain,
            '-map', '[v]', '-map', '0:a',
            '-c:v', 'libx264', '-preset', 'fast', '-crf', '21',
@@ -1650,6 +1742,11 @@ def main() -> None:
                     help='trim to the first DURATION seconds of real session time '
                          '(chronological preview; also skips CW-decoding past the '
                          'cutoff, so a short preview is much faster to build)')
+    ap.add_argument('--cast',
+                    help='asciinema cast (v2) recording of the logger/irssi terminal '
+                         'session, shown as a large picture-in-picture -- synced from '
+                         'the cast header\'s own Unix-epoch timestamp, exact real-world '
+                         'UTC with no whole-hour rounding needed')
     ap.add_argument('--webcam',
                     help='picture-in-picture selfie/webcam clip, synced automatically '
                          'from its own filename timestamp (e.g. VID_20260706_180003.mp4), '
@@ -1661,15 +1758,15 @@ def main() -> None:
                          'cross-correlation entirely; use this if it finds no confident '
                          'match (e.g. the webcam clip has no audio track), or to override it')
     ap.add_argument('--input-log',
-                    help="puskas_logger *-input.jsonl for a 'typewriter' overlay of what "
-                         "was typed into the logger -- optional, older recordings won't "
-                         "have one")
+                    help="puskas_logger *-input.jsonl for exact QSO-panel/chapter/caption "
+                         "timing (its 'qso' events) instead of the EDI's minute-precision "
+                         "clock -- optional, older recordings won't have one")
     ap.add_argument('--seed-input-log',
                     help="write a hand-editable 'qso' event skeleton to this path, one line "
                          "per QSO in the EDI(s) with a placeholder timestamp, then exit "
                          "without rendering -- for a recording made before --input-log "
                          "existed: edit each 't' against the audio, then pass the result "
-                         "back in as --input-log for exact QSO-panel timing with no "
+                         "back in as --input-log for exact chapter/caption timing with no "
                          "cluster-snapping heuristics involved")
     args = ap.parse_args()
 
@@ -1700,6 +1797,14 @@ def main() -> None:
     mycall, mywwl, qsos_all = merge_edi(args.edi)
     offset_h = derive_utc_offset(segs, qsos_all)
     print(f"{mycall} {mywwl}: {len(qsos_all)} QSOs, UTC+{offset_h} local")
+
+    cast_start = None
+    if args.cast:
+        cast_wall, cast_cols, cast_rows = parse_cast_header(args.cast)
+        cast_start = audio_time_for(cast_wall + timedelta(hours=offset_h), segs)
+        print(f"  cast: {cast_cols}x{cast_rows} terminal, synced to start at "
+              f"{cast_start:.0f}s in the output (exact -- Unix-epoch timestamp, "
+              f"no whole-hour rounding needed)")
 
     webcam_start = None
     webcam_rate = 0.0
@@ -1792,24 +1897,26 @@ def main() -> None:
         print("  webcam starts after the cut ends -- dropping the PiP overlay")
         webcam_start = None
 
+    if cast_start is not None and cast_start >= total:
+        print("  cast starts after the cut ends -- dropping the PiP overlay")
+        cast_start = None
+
     # Resolved to absolute video-timeline time only now, using each
     # segment's final audio_t (post-remap, if --skip-gaps was used).
     long_cw_spans = [(seg.audio_t + t0, seg.audio_t + t1, events)
                      for seg, t0, t1, events in long_cw_raw]
 
-    input_events = None
+    # Only feeds qso_windows()'s exact chapter/caption timing now -- the
+    # typewriter overlay this also used to drive is gone, since the
+    # terminal-session PIP already shows exactly what was typed, live.
     qso_times = None
     if args.input_log:
         input_log = load_input_log(args.input_log)
-        input_events = build_input_events(input_log, segs, offset_h, total)
-        print(f"  input log: {len(input_events)} typed states from {args.input_log}")
         qso_times = match_qso_times(qsos, input_log)
         matched = sum(1 for t in qso_times if t is not None)
         print(f"  {matched}/{len(qsos)} QSOs got an exact submit time from the input log")
 
-    ass_text = build_ass(segs, qsos, mycall, mywwl, args.contest,
-                         offset_h, W, H, state_events, input_events, qso_times,
-                         long_cw_spans=long_cw_spans)
+    ass_text = build_ass(segs, W, H, state_events, long_cw_spans=long_cw_spans)
     ass_path = os.path.splitext(args.out)[0] + '.ass'
     with open(ass_path, 'w') as fh:
         fh.write(ass_text)
@@ -1825,14 +1932,24 @@ def main() -> None:
     wav = os.path.splitext(args.out)[0] + '.concat.wav'
     print("concatenating audio ...")
     concat_audio(segs, wav)
+
+    cast_video = None
+    if args.cast and cast_start is not None:
+        cast_video = stem + '.cast.mp4'
+        print("rendering terminal-session PiP ...")
+        render_cast_video(args.cast, cast_video)
+
     print("rendering (this takes a while) ...")
     render(wav, ass_path, args.out, W, H,
           webcam=args.webcam if webcam_start is not None else None,
-          webcam_start=webcam_start or 0.0, webcam_rate=webcam_rate)
+          webcam_start=webcam_start or 0.0, webcam_rate=webcam_rate,
+          cast=cast_video, cast_start=cast_start or 0.0)
 
     if not args.keep_ass:
         os.remove(wav)
         os.remove(ass_path)
+        if cast_video:
+            os.remove(cast_video)
     print(f"wrote {args.out}")
 
 

@@ -2,15 +2,19 @@
 
 No ffmpeg is invoked; the decoder is exercised against a synthesized CW WAV so
 the test is fully reproducible (fixed WPM, pitch, sample rate)."""
+import json
 import struct
 import wave
 from datetime import datetime
 
 import numpy as np
+import pyte
+from PIL import ImageDraw, ImageFont
 
 import contest_video as cv
 from contest_video import (
     CAPTION_DUR_S,
+    CAST_BG,
     GAP_KEEP_S,
     MAX_OVER_S,
     CharEvent,
@@ -19,19 +23,19 @@ from contest_video import (
     Segment,
     SegState,
     TelemetrySample,
+    _cast_color,
     _dominance,
+    _draw_cast_row,
     _eff,
     _find_offset_correction,
     _quality,
     _rms_envelope,
     _srt_time,
-    _utc_at,
     _wrap,
     _yt_time,
     audio_time_for,
     build_ass,
     build_chapters,
-    build_input_events,
     build_srt,
     build_state_events,
     cluster_starts,
@@ -44,6 +48,7 @@ from contest_video import (
     load_telemetry,
     match_qso_times,
     merge_edi,
+    parse_cast_header,
     parse_edi,
     parse_wav_title,
     parse_webcam_wall,
@@ -51,7 +56,6 @@ from contest_video import (
     read_wav_metadata,
     refine_webcam_start,
     remap_audio_t,
-    running_score,
     sync_webcam_start,
     trim_to_duration,
 )
@@ -524,21 +528,17 @@ class TestLongSegmentCwRecovery:
         remap_audio_t([other])
         assert other.eff_dur == GAP_KEEP_S
 
-    def test_ticker_treats_disjoint_long_cw_spans_as_separate_bursts(self, tmp_path):
+    def test_ticker_treats_disjoint_long_cw_spans_as_separate_bursts(self):
         # Two CW exchanges recovered from within the *same* long segment,
         # ~150s apart -- more than a genuine gap (MAX_OVER_S) -- must not
         # be shown as one continuous, un-flushed transcript: they're
         # unrelated exchanges we happened to follow one after the other.
-        edi = tmp_path / 'log.edi'
-        edi.write_text("PCall=HA5LA\nPWWLo=JN97MM\n[QSORecords;0]\n")
-        mycall, mywwl, qsos = parse_edi(str(edi))
         long_seg = Segment('a', datetime(2026, 7, 4, 13, 0, 0), 300.0, 0.0)
         long_cw_spans = [
             (30.0, 85.0, [CharEvent(0.0, 'A'), CharEvent(1.0, 'B')]),
             (203.0, 260.0, [CharEvent(0.0, 'X'), CharEvent(1.0, 'Y')]),
         ]
-        ass = build_ass([long_seg], qsos, mycall, mywwl, 'TEST', 0, 1920, 1080,
-                        long_cw_spans=long_cw_spans)
+        ass = build_ass([long_seg], 1920, 1080, long_cw_spans=long_cw_spans)
         texts = [line.rsplit(',', 1)[-1] for line in ass.splitlines()
                 if line.startswith('Dialogue:') and ',Ticker,' in line]
         seen_x = False
@@ -789,6 +789,82 @@ class TestWebcamDriftCorrection:
         assert (refined, rate, n) == (100.0, 0.0, 0)
 
 
+def _write_cast(path, width, height, ts, events):
+    """A minimal asciinema cast v2 file for testing, without needing a
+    real `asciinema rec` session. `events` is [(t, text)] output events."""
+    with open(path, 'w') as f:
+        f.write(json.dumps({"version": 2, "width": width, "height": height,
+                            "timestamp": ts}) + "\n")
+        for t, text in events:
+            f.write(json.dumps([t, "o", text]) + "\n")
+
+
+class TestTerminalCast:
+    """Rendering an asciinema .cast (e.g. an irssi+logger tmux session) as
+    a video PIP -- see render_cast_video's docstring for why this is text
+    rasterized via pyte+PIL rather than a GIF/agg conversion, and why sync
+    needs no cross-correlation at all (the cast's own header embeds an
+    exact Unix-epoch start time, from the same machine's clock)."""
+
+    def test_parse_cast_header_reads_exact_utc_start(self, tmp_path):
+        p = tmp_path / 'session.cast'
+        # 1783890785 is 2026-07-12 21:13:05 UTC (real value from a real
+        # asciinema recording, cross-checked against `date -d @1783890785`)
+        _write_cast(str(p), 191, 52, 1783890785, [])
+        start, w, h = parse_cast_header(str(p))
+        assert start == datetime(2026, 7, 12, 21, 13, 5)
+        assert (w, h) == (191, 52)
+
+    def test_cast_color_falls_back_to_default_for_unknown_name(self):
+        default = (1, 2, 3)
+        assert _cast_color(None, default) == default
+        assert _cast_color('default', default) == default
+        assert _cast_color('nonexistent-color-name', default) == default
+
+    def test_cast_color_looks_up_known_names(self):
+        assert _cast_color('red', (0, 0, 0)) == cv.CAST_PALETTE['red']
+
+    def test_draw_cast_row_descender_survives_the_row_belows_own_redraw(self):
+        # Regression test for a real bug: a naive 1.2x-of-font-size line
+        # height (15px at CAST_FONT_SIZE=13) undershot DejaVu Sans Mono's
+        # real metrics (ascent+descent=17px). _draw_cast_row erases and
+        # redraws exactly one row's own rectangle at a time (see its
+        # docstring), so a descender glyph like '_' that spilled past a
+        # too-short row height got clipped the next time the row *below*
+        # was independently redrawn -- even though the row with the
+        # underscore never changed. Found from a real rendered frame: a
+        # static irssi banner's underscores were visibly missing partway
+        # through a render.  Verified red before green: this exact
+        # comparison showed 39 differing pixels with the old int(size*1.2)
+        # formula and 0 with font.getmetrics()-based line height.
+        font = ImageFont.truetype(cv.CAST_FONT_PATH, cv.CAST_FONT_SIZE)
+        font_b = ImageFont.truetype(cv.CAST_FONT_BOLD, cv.CAST_FONT_SIZE)
+        cw = font.getlength("M")
+        ascent, descent = font.getmetrics()
+        lh = ascent + descent
+        W, H = 5, 2
+
+        screen = pyte.Screen(W, H)
+        stream = pyte.ByteStream(screen)
+        stream.feed(b"_____")
+
+        px_w, px_h = int(cw * W) + 4, lh * H + 4
+        crop_h = min(px_h, lh + 5)  # a margin below row 0's own rectangle
+
+        canvas_alone = cv.Image.new("RGB", (px_w, px_h), CAST_BG)
+        _draw_cast_row(ImageDraw.Draw(canvas_alone), screen.buffer[0], 0, W,
+                       font, font_b, cw, lh)
+        row0_alone = np.array(canvas_alone.crop((0, 0, px_w, crop_h)))
+
+        canvas_after = cv.Image.new("RGB", (px_w, px_h), CAST_BG)
+        draw_after = ImageDraw.Draw(canvas_after)
+        _draw_cast_row(draw_after, screen.buffer[0], 0, W, font, font_b, cw, lh)
+        _draw_cast_row(draw_after, screen.buffer[1], 1, W, font, font_b, cw, lh)
+        row0_after_row1_redraw = np.array(canvas_after.crop((0, 0, px_w, crop_h)))
+
+        assert np.array_equal(row0_alone, row0_after_row1_redraw)
+
+
 class TestSkipGaps:
     def _segs_with_gap(self):
         # short over (15 s, has events) then long gap (500 s, no events)
@@ -861,51 +937,18 @@ class TestTimeline:
         assert derive_utc_offset(segs, qsos) == 2
 
 
-class TestUtcAt:
-    def _segs(self):
-        return [
-            Segment('a', datetime(2026, 7, 4, 11, 0, 0), 60.0, 0.0),
-            Segment('b', datetime(2026, 7, 4, 11, 1, 0), 60.0, 60.0),
-        ]
-
-    def test_maps_video_time_to_utc(self):
-        segs = self._segs()
-        utc = _utc_at(30.0, segs, offset_h=2)
-        assert utc == datetime(2026, 7, 4, 9, 0, 30)
-
-    def test_returns_none_past_end(self):
-        segs = self._segs()
-        assert _utc_at(9999.0, segs, offset_h=2) is None
-
-    def test_clock_in_ass(self, tmp_path):
-        edi = tmp_path / 'log.edi'
-        edi.write_text("PCall=HA5LA\nPWWLo=JN97MM\n[QSORecords;0]\n")
-        mycall, mywwl, qsos = parse_edi(str(edi))
-        segs = [Segment('a', datetime(2026, 7, 4, 11, 0, 0), 10.0, 0.0)]
-        ass = build_ass(segs, qsos, mycall, mywwl, 'TEST', 2, 1920, 1080)
-        assert '2026-07-04 09:00:00Z' in ass
-        assert 'Style: Clock' in ass
-
-
 class TestAss:
     def test_wrap_keeps_last_lines(self):
         wrapped = _wrap('AAAA BBBB CCCC DDDD EEEE', cpl=9, keep=2)
         assert wrapped.count('\\N') == 1          # exactly two lines
         assert wrapped.endswith('EEEE')
 
-    def test_build_ass_has_events_and_resolution(self, tmp_path):
-        edi = tmp_path / 'log.edi'
-        edi.write_text(
-            "PCall=HA5LA\nPWWLo=JN97MM\n[QSORecords;1]\n"
-            "260704;1100;HG7F;2;599;001;599;010;;JN97KR;26;;;;\n"
-        )
-        mycall, mywwl, qsos = parse_edi(str(edi))
+    def test_build_ass_has_events_and_resolution(self):
         segs = [Segment('a', datetime(2026, 7, 4, 13, 0, 0), 60.0, 0.0,
                         events=[CharEvent(1.0, 'H'), CharEvent(1.5, 'I')])]
-        ass = build_ass(segs, qsos, mycall, mywwl, 'TEST', 2, 1920, 1080)
+        ass = build_ass(segs, 1920, 1080)
         assert 'PlayResX: 1920' in ass
         assert 'Dialogue:' in ass
-        assert 'HG7F' in ass
 
     def _ticker_texts(self, ass: str) -> list[str]:
         texts = []
@@ -914,7 +957,7 @@ class TestAss:
                 texts.append(line.rsplit(',', 1)[-1])
         return texts
 
-    def test_ticker_does_not_leak_across_a_genuine_gap(self, tmp_path):
+    def test_ticker_does_not_leak_across_a_genuine_gap(self):
         # Regression test for a real bug: the ticker used to flush at a QSO's
         # EDI-log time (minute precision only) minus a fixed lead, which could
         # land seconds *into* the next real over -- so that over's opening
@@ -923,9 +966,6 @@ class TestAss:
         # at the first character of a real over that follows a genuine
         # listening gap (dur > MAX_OVER_S, no events), regardless of any QSO
         # timestamp.
-        edi = tmp_path / 'log.edi'
-        edi.write_text("PCall=HA5LA\nPWWLo=JN97MM\n[QSORecords;0]\n")
-        mycall, mywwl, qsos = parse_edi(str(edi))
         segs = [
             Segment('a', datetime(2026, 7, 4, 13, 0, 0), 10.0, 0.0,
                     events=[CharEvent(1.0, 'A'), CharEvent(2.0, 'B')]),          # QSO 1 tail
@@ -933,7 +973,7 @@ class TestAss:
             Segment('c', datetime(2026, 7, 4, 13, 7, 4), 5.0, 484.0,
                     events=[CharEvent(0.01, 'X'), CharEvent(0.6, 'Y')]),         # QSO 2 begins
         ]
-        ass = build_ass(segs, qsos, mycall, mywwl, 'TEST', 2, 1920, 1080)
+        ass = build_ass(segs, 1920, 1080)
         texts = self._ticker_texts(ass)
         # every ticker event from segment c onward must be free of QSO 1's
         # leftover characters -- once 'X' (segment c's first char) appears,
@@ -947,7 +987,7 @@ class TestAss:
                     f"QSO 1 leftover leaked into segment c's ticker: {text!r}"
         assert seen_x, "segment c's characters never reached the ticker"
 
-    def test_ticker_does_not_leak_across_many_short_non_cw_segments(self, tmp_path):
+    def test_ticker_does_not_leak_across_many_short_non_cw_segments(self):
         # Regression test for a real bug found watching an actual rendered
         # video: at 16:42:04Z a fresh CW QSO started, but the ticker still
         # showed the tail end of a CW QSO decoded over four minutes
@@ -962,9 +1002,6 @@ class TestAss:
         # Verified red before green: the old per-segment `prev_was_gap`
         # logic (git 68d57c1) produces the final transcript 'AB XY' on
         # this exact data -- 'A'/'B' never flushed away before 'X'/'Y'.
-        edi = tmp_path / 'log.edi'
-        edi.write_text("PCall=HA5LA\nPWWLo=JN97MM\n[QSORecords;0]\n")
-        mycall, mywwl, qsos = parse_edi(str(edi))
         segs = [
             Segment('a', datetime(2026, 7, 4, 16, 37, 44), 10.0, 0.0,
                     events=[CharEvent(1.0, 'A'), CharEvent(2.0, 'B')]),  # CW QSO 1 tail
@@ -980,7 +1017,7 @@ class TestAss:
             (10.0, t, SegState(mode='FM')),
             (t, t + 5.0, SegState(mode='CW')),
         ]
-        ass = build_ass(segs, qsos, mycall, mywwl, 'TEST', 0, 1920, 1080, state_events)
+        ass = build_ass(segs, 1920, 1080, state_events)
         texts = self._ticker_texts(ass)
         seen_x = False
         for text in texts:
@@ -1343,12 +1380,9 @@ class TestTelemetryAlignment:
         assert len(events) == 1
         assert events[0][2].freq_hz == 144174000
 
-    def test_build_ass_includes_state_badge_and_rig_info(self, tmp_path):
-        edi = tmp_path / 'log.edi'
-        edi.write_text("PCall=HA5LA\nPWWLo=JN97MM\n[QSORecords;0]\n")
-        mycall, mywwl, qsos = parse_edi(str(edi))
+    def test_build_ass_includes_state_badge_and_rig_info(self):
         segs = [Segment('a', datetime(2026, 7, 4, 13, 0, 0), 10.0, 0.0)]
-        ass = build_ass(segs, qsos, mycall, mywwl, 'TEST', 2, 1920, 1080,
+        ass = build_ass(segs, 1920, 1080,
                         state_events=[(0.0, 10.0, SegState(True, 144174000, 'CW', 135.0))])
         assert 'Style: State' in ass
         assert 'TX' in ass
@@ -1356,12 +1390,9 @@ class TestTelemetryAlignment:
         assert 'CW' in ass
         assert 'ROT 135' in ass
 
-    def test_build_ass_omits_badge_when_ptt_unknown(self, tmp_path):
-        edi = tmp_path / 'log.edi'
-        edi.write_text("PCall=HA5LA\nPWWLo=JN97MM\n[QSORecords;0]\n")
-        mycall, mywwl, qsos = parse_edi(str(edi))
+    def test_build_ass_omits_badge_when_ptt_unknown(self):
         segs = [Segment('a', datetime(2026, 7, 4, 13, 0, 0), 10.0, 0.0)]
-        ass = build_ass(segs, qsos, mycall, mywwl, 'TEST', 2, 1920, 1080,
+        ass = build_ass(segs, 1920, 1080,
                         state_events=[(0.0, 10.0, SegState())])
         assert ',State,' not in ass
 
@@ -1371,30 +1402,26 @@ class TestTelemetryAlignment:
         # them in the ticker if telemetry confirms the rig was on SSB/FM at
         # the time -- the decoder runs blind on every segment and a strong
         # tone in voice audio can occasionally still slip past gate_events.
-        edi_qsos: list[Qso] = []
         segs = [Segment('a', datetime(2026, 7, 4, 13, 0, 0), 5.0, 0.0,
                         events=[CharEvent(0.5, 'H'), CharEvent(0.6, 'I')])]
-        ass = build_ass(segs, edi_qsos, 'HA5LA', 'JN97MM', 'TEST', 0, 1920, 1080,
+        ass = build_ass(segs, 1920, 1080,
                         state_events=[(0.0, 5.0, SegState(False, 144300000, 'SSB', None))])
         assert 'Style: Ticker' in ass
         assert ',Ticker,' not in ass
 
     def test_ticker_shown_when_telemetry_says_cw(self):
-        edi_qsos: list[Qso] = []
         segs = [Segment('a', datetime(2026, 7, 4, 13, 0, 0), 5.0, 0.0,
                         events=[CharEvent(0.5, 'H'), CharEvent(0.6, 'I')])]
-        ass = build_ass(segs, edi_qsos, 'HA5LA', 'JN97MM', 'TEST', 0, 1920, 1080,
+        ass = build_ass(segs, 1920, 1080,
                         state_events=[(0.0, 5.0, SegState(False, 144174000, 'CW', None))])
         assert ',Ticker,' in ass
 
     def test_ticker_shown_when_mode_unknown(self):
         # No positive evidence it's *not* CW -- keep existing behaviour
         # (e.g. no --telemetry passed at all) rather than suppressing.
-        edi_qsos: list[Qso] = []
         segs = [Segment('a', datetime(2026, 7, 4, 13, 0, 0), 5.0, 0.0,
                         events=[CharEvent(0.5, 'H'), CharEvent(0.6, 'I')])]
-        ass = build_ass(segs, edi_qsos, 'HA5LA', 'JN97MM', 'TEST', 0, 1920, 1080,
-                        state_events=None)
+        ass = build_ass(segs, 1920, 1080, state_events=None)
         assert ',Ticker,' in ass
 
 
@@ -1406,7 +1433,7 @@ def _qso_ev(t, call, dup=False):
     return InputLogEvent(t, 'qso', call=call, dup=dup)
 
 
-class TestInputTypewriter:
+class TestInputLog:
     def test_load_input_log_parses_both_event_kinds(self, tmp_path):
         f = tmp_path / 'input.jsonl'
         f.write_text(
@@ -1427,62 +1454,6 @@ class TestInputTypewriter:
         f.write_text('{"t": "2026-07-04T11:00:02.000000Z", "text": "H"}\n')
         log = load_input_log(str(f))
         assert log == [InputLogEvent(datetime(2026, 7, 4, 11, 0, 2), 'text', text='H')]
-
-    def test_build_input_events_windows_between_keystrokes(self):
-        segs = [Segment('a', datetime(2026, 7, 4, 13, 0, 0), 60.0, 0.0)]
-        log = [
-            _text(datetime(2026, 7, 4, 11, 0, 2), 'H'),
-            _text(datetime(2026, 7, 4, 11, 0, 3), 'HA'),
-            _text(datetime(2026, 7, 4, 11, 0, 5), ''),   # buffer cleared
-        ]
-        windows = build_input_events(log, segs, offset_h=2, total=60.0)
-        # offset_h=2: UTC 11:00:02 -> wall 13:00:02 -> audio_t 2.0, etc.
-        assert windows == [(2.0, 3.0, 'H'), (3.0, 5.0, 'HA')]
-
-    def test_build_input_events_ignores_qso_events(self):
-        # A 'qso' event doesn't change what's on screen, so it must not
-        # split or shift a keystroke window.
-        segs = [Segment('a', datetime(2026, 7, 4, 13, 0, 0), 60.0, 0.0)]
-        log = [
-            _text(datetime(2026, 7, 4, 11, 0, 2), 'HA7NS 59 015'),
-            _qso_ev(datetime(2026, 7, 4, 11, 0, 4), 'HA7NS'),
-            _text(datetime(2026, 7, 4, 11, 0, 6), ''),
-        ]
-        windows = build_input_events(log, segs, offset_h=2, total=60.0)
-        assert windows == [(2.0, 6.0, 'HA7NS 59 015')]
-
-    def test_build_input_events_drops_empty_text(self):
-        segs = [Segment('a', datetime(2026, 7, 4, 13, 0, 0), 60.0, 0.0)]
-        log = [_text(datetime(2026, 7, 4, 11, 0, 2), '')]
-        assert build_input_events(log, segs, offset_h=2, total=60.0) == []
-
-    def test_build_input_events_empty_log(self):
-        segs = [Segment('a', datetime(2026, 7, 4, 13, 0, 0), 60.0, 0.0)]
-        assert build_input_events([], segs, offset_h=2, total=60.0) == []
-
-    def test_last_keystroke_extends_to_total(self):
-        segs = [Segment('a', datetime(2026, 7, 4, 13, 0, 0), 60.0, 0.0)]
-        log = [_text(datetime(2026, 7, 4, 11, 0, 2), 'HA7NS')]
-        windows = build_input_events(log, segs, offset_h=2, total=60.0)
-        assert windows == [(2.0, 60.0, 'HA7NS')]
-
-    def test_build_ass_renders_typewriter_line(self, tmp_path):
-        edi = tmp_path / 'log.edi'
-        edi.write_text("PCall=HA5LA\nPWWLo=JN97MM\n[QSORecords;0]\n")
-        mycall, mywwl, qsos = parse_edi(str(edi))
-        segs = [Segment('a', datetime(2026, 7, 4, 13, 0, 0), 10.0, 0.0)]
-        ass = build_ass(segs, qsos, mycall, mywwl, 'TEST', 2, 1920, 1080,
-                        input_events=[(0.0, 5.0, 'HA7NS 59')])
-        assert 'Style: Input' in ass
-        assert '► HA7NS 59' in ass
-
-    def test_build_ass_omits_input_style_without_events(self, tmp_path):
-        edi = tmp_path / 'log.edi'
-        edi.write_text("PCall=HA5LA\nPWWLo=JN97MM\n[QSORecords;0]\n")
-        mycall, mywwl, qsos = parse_edi(str(edi))
-        segs = [Segment('a', datetime(2026, 7, 4, 13, 0, 0), 10.0, 0.0)]
-        ass = build_ass(segs, qsos, mycall, mywwl, 'TEST', 2, 1920, 1080)
-        assert ',Input,' not in ass
 
 
 class TestMatchQsoTimes:
@@ -1622,73 +1593,3 @@ class TestQsoWindowsPreciseAnchor:
         assert e1 == s2
         assert e2 < 31.0
 
-
-class TestRunningScore:
-    def _qso(self, call, pts, dup=False):
-        return Qso(datetime(2026, 7, 6, 16, 1), call, '59', '1', '59', '2',
-                   'JN97MM', pts, dup)
-
-    def test_accumulates_count_and_points(self):
-        qsos = [self._qso('A', 100), self._qso('B', 50), self._qso('C', 25)]
-        assert running_score(qsos) == [(1, 100), (2, 150), (3, 175)]
-
-    def test_dup_counts_but_does_not_score(self):
-        qsos = [self._qso('A', 100), self._qso('A', 100, dup=True)]
-        assert running_score(qsos) == [(1, 100), (2, 100)]
-
-    def test_empty(self):
-        assert running_score([]) == []
-
-    def test_build_ass_header_shows_running_score(self, tmp_path):
-        edi = tmp_path / 'log.edi'
-        edi.write_text(
-            "PCall=HA5LA\nPWWLo=JN97MM\n[QSORecords;2]\n"
-            "260706;1601;HG7F;2;599;001;599;010;;JN97KR;100;;;;\n"
-            "260706;1605;HA3KHB;2;599;002;599;011;;JN86SR;50;;;;\n"
-        )
-        mycall, mywwl, qsos = parse_edi(str(edi))
-        segs = [
-            Segment('a', datetime(2026, 7, 6, 16, 1, 0), 240.0, 0.0,
-                    events=[CharEvent(1.0, 'H')]),
-            Segment('b', datetime(2026, 7, 6, 16, 5, 0), 60.0, 240.0,
-                    events=[CharEvent(1.0, 'H')]),
-        ]
-        ass = build_ass(segs, qsos, mycall, mywwl, 'TEST', 0, 1920, 1080)
-        header_lines = [line for line in ass.splitlines()
-                        if line.startswith('Dialogue:') and ',Header,' in line]
-        texts = [line.rsplit(',', 1)[-1] for line in header_lines]
-        assert any('1Q 100pts' in t for t in texts)
-        assert any('2Q 150pts' in t for t in texts)
-
-    def test_score_appears_at_the_qsos_finish_not_its_panel_start(self):
-        # Regression test for a real reported bug: points used to appear as
-        # soon as a QSO's panel started (i.e. as soon as the over began),
-        # crediting a contact before it was actually complete. With an
-        # exact qso_times finish available, the score must only update
-        # once that QSO is actually done.
-        segs = [Segment('a', datetime(2026, 7, 6, 16, 1, 0), 10.0, 0.0,
-                        events=[CharEvent(0.5, 'H')])]
-        q1 = Qso(datetime(2026, 7, 6, 16, 1), 'HG7F', '599', '1', '599', '10',
-                'JN97KR', 100, False)
-        qso_times = [datetime(2026, 7, 6, 16, 1, 5)]   # finishes 5s into its own panel
-        ass = build_ass(segs, [q1], 'HA5LA', 'JN97MM', 'TEST', 0, 1920, 1080,
-                        qso_times=qso_times)
-        header_lines = [line for line in ass.splitlines()
-                        if line.startswith('Dialogue:') and ',Header,' in line]
-        assert len(header_lines) == 2
-        before, after = header_lines
-        assert before.startswith('Dialogue: 0,0:00:00.00,0:00:05.00,')
-        assert '100pts' not in before
-        assert after.startswith('Dialogue: 0,0:00:05.00,')
-        assert '1Q 100pts' in after
-
-    def test_build_ass_header_has_no_score_before_first_qso_or_with_none(self, tmp_path):
-        edi = tmp_path / 'log.edi'
-        edi.write_text("PCall=HA5LA\nPWWLo=JN97MM\n[QSORecords;0]\n")
-        mycall, mywwl, qsos = parse_edi(str(edi))
-        segs = [Segment('a', datetime(2026, 7, 6, 16, 1, 0), 10.0, 0.0)]
-        ass = build_ass(segs, qsos, mycall, mywwl, 'TEST', 0, 1920, 1080)
-        header_lines = [line for line in ass.splitlines()
-                        if line.startswith('Dialogue:') and ',Header,' in line]
-        assert len(header_lines) == 1
-        assert 'pts' not in header_lines[0]
