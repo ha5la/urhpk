@@ -26,6 +26,7 @@ from puskas_logger import (
     _rot_lock,
     _telemetry_record,
     _update_loc_cache,
+    _webcam_capture_cmd,
     current_rot,
     haversine_km,
     initial_bearing,
@@ -935,6 +936,19 @@ class TestFormatOpenCombos:
     def test_multiple_bands_space_separated_in_order(self):
         assert _format_open_combos({"2M": ["CW"], "23CM": ["SSB", "CW", "FM"]}) == \
             "2M:CW 23CM:SSB,CW,FM"
+
+
+class TestWebcamCaptureCmd:
+    def test_includes_device_audio_source_and_output(self):
+        cmd = _webcam_capture_cmd("/dev/video2", "my_mic", "out.mp4")
+        assert "/dev/video2" in cmd
+        assert "my_mic" in cmd
+        assert cmd[-1] == "out.mp4"
+
+    def test_uses_v4l2_and_pulse(self):
+        cmd = _webcam_capture_cmd("/dev/video0", "default", "out.mp4")
+        assert "v4l2" in cmd
+        assert "pulse" in cmd
 
 
 # ──────────────────────────────────────────────────────────────

@@ -20,7 +20,9 @@ import math
 import netrc
 import os
 import re
+import signal
 import socket
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
@@ -51,6 +53,8 @@ SEEN_STATIONS  = PUSKAS_DIR / "puskas-seen-stations.json"
 ON4KST_SEEN    = PUSKAS_DIR / "on4kst-seen-stations.json"
 _BANDS         = ("2M", "70CM", "23CM")
 _MODES         = ("SSB", "CW", "FM")
+WEBCAM_DEVICE       = "/dev/video0"  # find with: v4l2-ctl --list-devices
+WEBCAM_AUDIO_SOURCE = "default"      # find with: pactl list short sources
 
 # ──────────────────────────────────────────────────────────────
 # Geo helpers
@@ -396,6 +400,64 @@ def _on_buffer_changed(buf) -> None:
         "event": "text",
         "text":  buf.text,
     })
+
+# ──────────────────────────────────────────────────────────────
+# Webcam capture (Alt+V toggles start/stop) -- unlike the phone recording
+# contest_video.py had to sync via audio cross-correlation (two independent,
+# unrelated clocks), this runs on the same machine as the logger: start/stop
+# is logged through the exact same _log_input_event/datetime.now(timezone.utc)
+# used for QSOs and keystrokes, so the recording's real start time is known
+# precisely with no separate device clock to reconcile at all.
+# ──────────────────────────────────────────────────────────────
+
+_webcam_proc = None
+_webcam_log_fh = None
+
+def _webcam_capture_cmd(device: str, audio_source: str, out_path: str) -> list[str]:
+    """The ffmpeg command to capture the local webcam + mic to `out_path`.
+    -preset ultrafast keeps this cheap enough to run alongside the logger
+    for a multi-hour session without competing for CPU with rigctld polling
+    or the UI itself."""
+    return ["ffmpeg", "-y", "-f", "v4l2", "-i", device,
+           "-f", "pulse", "-i", audio_source,
+           "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+           "-c:a", "aac", out_path]
+
+def _webcam_toggle(path_prefix: str) -> str | None:
+    """Start or stop webcam capture; returns a status message for the
+    toolbar/notice area, or None if nothing changed (e.g. ffmpeg missing)."""
+    global _webcam_proc, _webcam_log_fh
+    now = datetime.now(timezone.utc)
+    if _webcam_proc is None:
+        out_path = f"{path_prefix}-webcam.mp4"
+        try:
+            _webcam_log_fh = open(f"{path_prefix}-webcam.log", "a")
+            _webcam_proc = subprocess.Popen(
+                _webcam_capture_cmd(WEBCAM_DEVICE, WEBCAM_AUDIO_SOURCE, out_path),
+                stdin=subprocess.DEVNULL, stdout=_webcam_log_fh, stderr=subprocess.STDOUT)
+        except Exception as e:
+            _webcam_proc = None
+            return f"webcam start failed: {e}"
+        _log_input_event({"t": now.strftime("%Y-%m-%dT%H:%M:%S.%fZ"), "event": "webcam_start"})
+        return f"recording {out_path}"
+    else:
+        _webcam_proc.send_signal(signal.SIGINT)
+        try:
+            _webcam_proc.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            _webcam_proc.terminate()
+        _webcam_proc = None
+        if _webcam_log_fh:
+            _webcam_log_fh.close()
+            _webcam_log_fh = None
+        _log_input_event({"t": now.strftime("%Y-%m-%dT%H:%M:%S.%fZ"), "event": "webcam_stop"})
+        return "recording stopped"
+
+def _webcam_stop_if_running() -> None:
+    """Called on exit so a still-running capture is stopped cleanly (SIGINT,
+    not killed) rather than left orphaned or the mp4 left unfinalized."""
+    if _webcam_proc is not None:
+        _webcam_toggle("")  # path_prefix unused on the stop branch
 
 # ──────────────────────────────────────────────────────────────
 # Data model
@@ -853,6 +915,7 @@ def _handle_command(line: str, lb: LogBook, tname: str):
         print("  Alt+M                    — cycle mode (rig offline)")
         print("  Alt+R                    — point rotator at selected bearing")
         print("  Alt+T                    — sync radio clock to system UTC")
+        print("  Alt+V                    — start/stop webcam recording")
         print("  !help                    — this help")
         print("  Ctrl-D                   — save and exit")
 
@@ -921,8 +984,9 @@ def run(lb: LogBook, tname: str):
     # 0 = last QSO selected for edit, 1 = second-to-last, None = no edit in progress
     _state: dict = {
         'edit_idx': None, 'restore_text': '', 'warn_until': 0.0,
-        'prev_band': None, 'prev_mode': None,
+        'prev_band': None, 'prev_mode': None, 'webcam_notice': ('', 0.0),
     }
+    _webcam_path_prefix = f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{lb.my_call}"
 
     def _toolbar() -> FormattedText:
         band, mode, qrg, online = current_rig()
@@ -967,11 +1031,18 @@ def run(lb: LogBook, tname: str):
         rot_str = f"{rot_az:.0f}°" if rot_online else "---"
         parts.append(("", f"  ROT: {rot_str}  │  "))
 
+        if _webcam_proc is not None:
+            parts.append(("bg:ansired fg:white", "  ● REC  │  "))
+
         with _clock_sync_lock:
             sync_msg   = _clock_sync_notice["msg"]
             sync_until = _clock_sync_notice["until"]
         if time.monotonic() < sync_until:
             parts.append(("bg:ansigreen fg:black", f"  {sync_msg}  │  "))
+
+        webcam_msg, webcam_until = _state['webcam_notice']
+        if time.monotonic() < webcam_until:
+            parts.append(("bg:ansigreen fg:black", f"  {webcam_msg}  │  "))
 
         time_style = "bg:ansigreen fg:black" if _is_contest_time(now) else "bg:ansired fg:white"
         parts.append((time_style, f" {t}Z "))
@@ -1187,6 +1258,12 @@ def run(lb: LogBook, tname: str):
     def _on_alt_t(_event):
         _clock_sync()
 
+    @kb.add('escape', 'v')
+    def _on_alt_v(_event):
+        msg = _webcam_toggle(_webcam_path_prefix)
+        if msg:
+            _state['webcam_notice'] = (msg, time.monotonic() + 5.0)
+
     @kb.add('enter', filter=has_completions)
     def _on_enter_completion(event):
         buf = event.app.current_buffer
@@ -1332,6 +1409,7 @@ def run(lb: LogBook, tname: str):
         _cache_loc(call, loc)
         save_all(lb, tname)
 
+    _webcam_stop_if_running()
     print("\nSaving EDI files...")
     paths = save_all(lb, tname)
     if paths:
@@ -1410,6 +1488,7 @@ def main():
     _input_log_path = Path(f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{lb.my_call}-input.jsonl")
     _input_log_open(_input_log_path)
     print(f"Input log: {_input_log_path}")
+    print("Webcam:    Alt+V to start/stop recording")
 
     print()
     print("Input: CALL RST NR [LOC]   e.g.  HA7NS 59 015   or  HA7NS 59 015 JN97WM")
@@ -1422,6 +1501,7 @@ def main():
         run(lb, tname)
     except Exception as e:
         print(f"\n[ERROR] {e}")
+        _webcam_stop_if_running()
         save_all(lb, tname)
         raise
 

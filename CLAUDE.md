@@ -946,6 +946,8 @@ HA7NS 599 014 JN97WM   → CW with locator
 - Up/Down → navigate log in edit mode; window scrolls to keep focused row centred
 - Escape → exits edit mode (screen redraws immediately) and/or aborts CW transmission
 - Alt+R → point rotator at bearing of selected/typed station (no-op when rotctld offline)
+- Alt+V → start/stop webcam recording (see **Webcam capture** below); toolbar shows a red
+  `● REC` indicator the whole time it's running, plus a transient confirmation message
 
 **CW macros** (F1–F8, requires rigctld):
 | Key | Template |
@@ -1011,6 +1013,31 @@ rather than kept for redundancy.
   it's the fix for "weird QSO timing" in a preview, where the EDI's
   minute-only precision let `_snap_to_cluster` occasionally pick the wrong
   neighbouring burst.
+
+**Webcam capture** (`YYMMDD-CALL-webcam.mp4`, Alt+V to start/stop, off by default):
+- Replaces an earlier approach that recorded the operator with a phone propped up
+  separately, requiring `contest_video.py` to sync two *independent* device clocks
+  after the fact (see its own webcam-sync notes) -- error-prone even with audio
+  cross-correlation, since a phone's own clock has no relationship to the radio
+  recorder's. Capturing on the *same machine* that runs the logger removes that
+  problem at the source: start/stop goes through the same `_log_input_event`/
+  `datetime.now(timezone.utc)` already used for QSOs and keystrokes, so the
+  recording's real start time is known exactly, with no separate clock to
+  reconcile at all.
+- `_webcam_capture_cmd` builds the `ffmpeg -f v4l2 ... -f pulse ...` command (Linux
+  video4linux2 + PulseAudio); `WEBCAM_DEVICE`/`WEBCAM_AUDIO_SOURCE` constants at the
+  top of the file are the only things that need adjusting for a given machine (find
+  with `v4l2-ctl --list-devices` / `pactl list short sources`). `-preset ultrafast`
+  keeps the encode cheap enough to run alongside rigctld polling and the UI for a
+  multi-hour session without competing for CPU.
+- Stop sends `SIGINT` (not a hard kill) so ffmpeg finalizes the mp4 properly; a
+  5 s `wait()` with a `terminate()` fallback guards against ffmpeg hanging. Also
+  triggered automatically on exit (`_webcam_stop_if_running`, both the normal
+  Ctrl-D path and the crash-handler path in `main()`) so a still-running capture
+  is never left orphaned or its output file unfinalized.
+- Logs `"event": "webcam_start"` / `"webcam_stop"` to the same `*-input.jsonl` as
+  everything else (see **Input-box logging** above) rather than a separate file —
+  one more consumer of the same already-precise event log, not a new format.
 
 **Contest rules**:
 - Reads band/QRG/mode from rigctld; falls back to Alt+B/Alt+M (or `!band`/`!mode`) if rig offline
