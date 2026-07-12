@@ -135,6 +135,21 @@ which causes the taskbar entry to flash:
 | xterm | `XTerm*bellIsUrgent: true` in `~/.Xresources`, then `xrdb -merge ~/.Xresources` |
 | kitty | `enable_audio_bell yes` (WM handles the urgent hint automatically) |
 
+### Highlighting the irssi window itself on private message (tmux)
+
+The taskbar flash above only helps when looking away from the terminal — sked
+requests were noticed late even while the tmux session was on-screen, just on
+the logger window instead of irssi's. tmux can highlight the *window* itself
+in its own status bar the moment the same BEL (already sent for PMs/highlights,
+see above) arrives on a window that isn't currently focused:
+```
+set -g monitor-bell on
+set -g window-status-bell-style fg=black,bg=red
+```
+Reload: `tmux source ~/.tmux.conf`. Complements (doesn't replace) the
+taskbar-flash chain above — this one catches it even without ever leaving the
+tmux session.
+
 ## Raspberry Pi deployment
 The bridge runs permanently on a Raspberry Pi (Debian trixie, Python 3.13) with irssi
 in tmux. It is distributed as a `.deb` package built by GitHub Actions.
