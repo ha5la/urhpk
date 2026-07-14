@@ -1218,14 +1218,30 @@ class TestChaptersAndSrt:
         chapters = build_chapters(qsos, windows)
         assert chapters.count('QSO') == 1   # second is only 5s after the first
 
-    def test_build_srt_has_call_and_dupe_tag_and_capped_duration(self):
+    def test_build_srt_matches_chapter_label_and_caps_duration(self):
+        # The cue shows exactly the chapter label -- call + band/mode + dup
+        # tag -- and nothing else (no locator/distance/serials/reports).
         qsos = [Qso(datetime(2026, 7, 4, 11, 0, 0), 'HG7F',
-                    '599', '001', '599', '010', 'JN97KR', 0, True)]
+                    '599', '001', '599', '010', 'JN97KR', 26, True,
+                    band='2M', mode='CW')]
         windows = [(10.0, 70.0)]   # far longer than CAPTION_DUR_S
         srt = build_srt(qsos, windows)
         assert f"00:00:10,000 --> 00:00:{10 + int(CAPTION_DUR_S):02d},000" in srt
-        assert 'HG7F' in srt
-        assert 'DUPE' in srt
+        cue = srt.strip().splitlines()[-1]
+        assert cue == 'QSO 001 HG7F  2M CW (dup)'
+        # the dropped extras must not appear
+        assert 'JN97KR' not in srt and 'km' not in srt and 'RX' not in srt
+
+    def test_build_srt_cue_equals_chapter_body(self):
+        # Guards the shared _qso_label: an SRT cue is byte-identical to the
+        # chapter line's text (everything after the timestamp).
+        qsos = [Qso(datetime(2026, 7, 4, 11, 0, 0), 'HG7F',
+                    '599', '001', '599', '010', 'JN97KR', 26, False,
+                    band='70CM', mode='FM')]
+        windows = [(60.0, 120.0)]
+        chapter_body = build_chapters(qsos, windows).strip().splitlines()[-1].split(' ', 1)[1]
+        srt_cue = build_srt(qsos, windows).strip().splitlines()[-1]
+        assert srt_cue == chapter_body == 'QSO 001 HG7F  70CM FM'
 
 
 class TestWavMetadata:

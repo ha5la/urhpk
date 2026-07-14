@@ -1619,6 +1619,18 @@ def _yt_time(t: float) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
+def _qso_label(i: int, q: Qso) -> str:
+    """The one-line label shared by chapter markers and SRT cues, so the two
+    never drift: 'QSO 001 HA5MIG  2M SSB', band/mode omitted when unknown,
+    with a ' (dup)' suffix for duplicates. Deliberately just call + band/mode
+    -- locator, distance, serials and reports were dropped from the caption as
+    redundant noise (they're already on the logger's own on-screen PiP)."""
+    bm = " ".join(x for x in (q.band, q.mode) if x)
+    bm = f"  {bm}" if bm else ""
+    tag = " (dup)" if q.dup else ""
+    return f"QSO {i + 1:03d} {q.call}{bm}{tag}"
+
+
 def build_chapters(qsos: list[Qso], windows: list[tuple[float, float]]) -> str:
     """YouTube description chapter markers, one per QSO (plus the mandatory 0:00).
 
@@ -1632,10 +1644,7 @@ def build_chapters(qsos: list[Qso], windows: list[tuple[float, float]]) -> str:
         t = int(round(start))
         if t - last_t < MIN_CHAPTER_GAP_S:
             continue
-        tag = " (dup)" if q.dup else ""
-        bm = " ".join(x for x in (q.band, q.mode) if x)
-        bm = f"  {bm}" if bm else ""
-        lines.append(f"{_yt_time(t)} QSO {i + 1:03d} {q.call}{bm}{tag}")
+        lines.append(f"{_yt_time(t)} {_qso_label(i, q)}")
         last_t = t
     return '\n'.join(lines) + '\n'
 
@@ -1655,10 +1664,7 @@ def build_srt(qsos: list[Qso], windows: list[tuple[float, float]]) -> str:
     blocks = []
     for i, (q, (start, end)) in enumerate(zip(qsos, windows)):
         end = min(end, start + CAPTION_DUR_S)
-        tag = "  *** DUPE ***" if q.dup else ""
-        text = (f"QSO {i + 1}/{len(qsos)}  {q.dt.strftime('%H:%MZ')}\n"
-                f"{q.call}  {q.loc}  {q.pts} km\n"
-                f"TX {q.rst_s} {q.nr_s}   RX {q.rst_r} {q.nr_r}{tag}")
+        text = _qso_label(i, q)
         blocks.append(f"{i + 1}\n{_srt_time(start)} --> {_srt_time(end)}\n{text}\n")
     return '\n'.join(blocks)
 
