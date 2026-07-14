@@ -12,7 +12,7 @@ from puskas_logger import (
     _band_summary,
     _bearing_arrow,
     _edi_qso_count,
-    _format_open_combos,
+    _format_combos,
     _input_log_open,
     _is_contest_time,
     _is_dup_in_log,
@@ -170,37 +170,38 @@ class TestLogBook:
         for b, m in combos:
             assert self.lb.add(_qso(call="HA7NS", band=b, mode=m)) is False
 
-    def test_open_combos_empty_for_never_worked_call(self):
-        # every one of the 9 combos is trivially open on a brand-new
-        # callsign, which isn't useful information to show
-        assert self.lb.open_combos("HA7NS") == {}
+    def test_worked_combos_empty_for_never_worked_call(self):
+        # nothing worked yet -> nothing to warn about
+        assert self.lb.worked_combos("HA7NS") == {}
 
-    def test_open_combos_lists_missing_modes_by_band(self):
+    def test_worked_combos_lists_worked_modes_by_band(self):
         self.lb.add(_qso(call="HA7NS", band="2M", mode="SSB"))
+        self.lb.add(_qso(call="HA7NS", band="2M", mode="CW"))
         self.lb.add(_qso(call="HA7NS", band="70CM", mode="CW"))
-        assert self.lb.open_combos("HA7NS") == {
-            "2M": ["CW", "FM"],
-            "70CM": ["SSB", "FM"],
-            "23CM": ["SSB", "CW", "FM"],
+        assert self.lb.worked_combos("HA7NS") == {
+            "2M": ["SSB", "CW"],
+            "70CM": ["CW"],
         }
 
-    def test_open_combos_omits_fully_worked_bands(self):
-        for m in ("SSB", "CW", "FM"):
-            self.lb.add(_qso(call="HA7NS", band="2M", mode=m))
+    def test_worked_combos_omits_bands_with_nothing_worked(self):
         self.lb.add(_qso(call="HA7NS", band="70CM", mode="SSB"))
-        combos = self.lb.open_combos("HA7NS")
-        assert "2M" not in combos
-        assert combos["70CM"] == ["CW", "FM"]
+        combos = self.lb.worked_combos("HA7NS")
+        assert "2M" not in combos and "23CM" not in combos
+        assert combos["70CM"] == ["SSB"]
 
-    def test_open_combos_empty_once_all_nine_worked(self):
+    def test_worked_combos_lists_all_nine_once_all_worked(self):
         for b in ("2M", "70CM", "23CM"):
             for m in ("SSB", "CW", "FM"):
                 self.lb.add(_qso(call="HA7NS", band=b, mode=m))
-        assert self.lb.open_combos("HA7NS") == {}
+        assert self.lb.worked_combos("HA7NS") == {
+            "2M": ["SSB", "CW", "FM"],
+            "70CM": ["SSB", "CW", "FM"],
+            "23CM": ["SSB", "CW", "FM"],
+        }
 
-    def test_open_combos_is_per_callsign(self):
+    def test_worked_combos_is_per_callsign(self):
         self.lb.add(_qso(call="HA7NS", band="2M", mode="SSB"))
-        assert self.lb.open_combos("HA3KHB") == {}
+        assert self.lb.worked_combos("HA3KHB") == {}
 
     def test_undo_removes_last_qso(self):
         self.lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_s=1))
@@ -926,15 +927,15 @@ class TestBearingArrow:
         assert _bearing_arrow(302) == "↖"
 
 
-class TestFormatOpenCombos:
+class TestFormatCombos:
     def test_empty_dict_yields_empty_string(self):
-        assert _format_open_combos({}) == ""
+        assert _format_combos({}) == ""
 
     def test_single_band(self):
-        assert _format_open_combos({"70CM": ["CW", "FM"]}) == "70CM:CW,FM"
+        assert _format_combos({"70CM": ["CW", "FM"]}) == "70CM:CW,FM"
 
     def test_multiple_bands_space_separated_in_order(self):
-        assert _format_open_combos({"2M": ["CW"], "23CM": ["SSB", "CW", "FM"]}) == \
+        assert _format_combos({"2M": ["CW"], "23CM": ["SSB", "CW", "FM"]}) == \
             "2M:CW 23CM:SSB,CW,FM"
 
 

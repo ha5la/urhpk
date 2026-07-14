@@ -92,9 +92,9 @@ _BEARING_ARROWS = "↑↗→↘↓↙←↖"
 def _bearing_arrow(degrees: int) -> str:
     return _BEARING_ARROWS[int((degrees + 22.5) / 45) % 8]
 
-def _format_open_combos(by_band: dict[str, list[str]]) -> str:
+def _format_combos(by_band: dict[str, list[str]]) -> str:
     """Compact 'BAND:MODE,MODE' listing for the rprompt, e.g.
-    '70CM:CW,FM 23CM:SSB,CW,FM' -- see LogBook.open_combos."""
+    '2M:SSB,CW 70CM:CW' -- see LogBook.worked_combos."""
     return ' '.join(f"{b}:{','.join(ms)}" for b, ms in by_band.items())
 
 # ──────────────────────────────────────────────────────────────
@@ -499,21 +499,19 @@ class LogBook:
     def is_dup(self, call: str, band: str, mode: str) -> bool:
         return (call, band, mode) in self.worked
 
-    def open_combos(self, call: str) -> dict[str, list[str]]:
-        """Band -> list of modes not yet worked with `call` this round, for
-        bands that have at least one open mode.
+    def worked_combos(self, call: str) -> dict[str, list[str]]:
+        """Band -> list of modes already worked with `call` this round, for
+        bands that have at least one.
 
-        Empty if `call` hasn't been worked in *any* band/mode yet -- every
-        one of the 9 combos is trivially open on a brand-new callsign,
-        which isn't useful information to show. Only meaningful once
-        there's at least one worked combo to compare the rest against."""
-        if not any((call, b, m) in self.worked for b in _BANDS for m in _MODES):
-            return {}
+        Shown in red in the rprompt so the operator sees at a glance which
+        band/mode combos are already in the log (i.e. which would be dups).
+        Naturally empty for a brand-new callsign -- nothing worked yet -- so
+        nothing is shown until there's something to warn about."""
         out: dict[str, list[str]] = {}
         for b in _BANDS:
-            missing = [m for m in _MODES if (call, b, m) not in self.worked]
-            if missing:
-                out[b] = missing
+            worked = [m for m in _MODES if (call, b, m) in self.worked]
+            if worked:
+                out[b] = worked
         return out
 
     def add(self, qso: QSO) -> bool:
@@ -1166,8 +1164,8 @@ def run(lb: LogBook, tname: str):
             bear = lb.bearing(locs[0])
             if dist:
                 geo = f"  {locs[0]}  {dist} km  {bear}° {_bearing_arrow(bear)}"
-        open_str = _format_open_combos(lb.open_combos(call))
-        tail = f"  <ansiyellow>{open_str}</ansiyellow>" if open_str else ""
+        worked_str = _format_combos(lb.worked_combos(call))
+        tail = f"  <ansired>{worked_str}</ansired>" if worked_str else ""
         if band and mode and lb.is_dup(call, band, mode):
             return HTML(f"<ansired><b>  DUP  </b></ansired><ansigreen>{geo}  </ansigreen>{tail}")
         if geo or tail:

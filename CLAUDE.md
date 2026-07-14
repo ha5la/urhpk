@@ -1074,12 +1074,14 @@ HA7NS 599 014 JN97WM   → CW with locator
 - Right-prompt shows bearing and distance in green (e.g. `JN97WM  1234 km  225° ↙`) as soon
   as a known callsign is typed; when the callsign is a DUP both the red `DUP` label and the
   green geo info are shown together — geo is never suppressed
-- Right-prompt also shows, in yellow, the band/mode combos not yet worked with this
-  callsign this round (e.g. `70CM:CW,FM 23CM:SSB,CW,FM`), grouped by band —
-  `LogBook.open_combos(call)` checks all 9 (3 bands × 3 modes). Only shown once the
-  callsign has at least one worked combo already; every combo is trivially open on a
-  brand-new callsign, which isn't useful information. Coexists with the `DUP` label —
-  if the current band/mode is itself a dup, both show together, same as geo info.
+- Right-prompt also shows, in red, the band/mode combos already worked with this
+  callsign this round (e.g. `2M:SSB,CW 70CM:CW`), grouped by band —
+  `LogBook.worked_combos(call)` checks all 9 (3 bands × 3 modes). Red because these
+  are the combos that would be dups; naturally empty (and so hidden) for a brand-new
+  callsign with nothing worked yet. Coexists with the `DUP` label — if the current
+  band/mode is itself a dup, both show together, same as geo info. (This replaced an
+  earlier version that showed the *open* combos in yellow — the operator wanted to see
+  what's already in the log, not what's missing.)
 - Backspace stops at column 0 (does nothing on empty input); edit mode via Up arrow only
 - Up/Down → navigate log in edit mode; window scrolls to keep focused row centred
 - Escape → exits edit mode (screen redraws immediately) and/or aborts CW transmission
