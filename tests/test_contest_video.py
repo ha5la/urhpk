@@ -449,6 +449,31 @@ class TestRenderWebcamSync:
         assert pip_chain.startswith('setpts=PTS/0.9995')
         assert pip_chain.index('setpts=') < pip_chain.index(f'fps={cv.RENDER_FPS}')
 
+    def test_webcam_pip_is_not_mirrored(self, monkeypatch, tmp_path):
+        # The same-machine Alt+V capture records the laptop cam the right way
+        # round; the old phone-only hflip must be gone.
+        captured = {}
+        monkeypatch.setattr(cv.subprocess, 'run',
+                            lambda cmd, check=True: captured.update(cmd=cmd))
+        cv.render(str(tmp_path / 'a.wav'), str(tmp_path / 'a.ass'),
+                  str(tmp_path / 'out.mp4'), 1280, 720,
+                  webcam=str(tmp_path / 'cam.mp4'), webcam_start=10.0)
+        fchain = captured['cmd'][captured['cmd'].index('-filter_complex') + 1]
+        assert 'hflip' not in fchain
+
+    def test_cast_pip_is_slightly_transparent(self, monkeypatch, tmp_path):
+        # The cast box blends over the waterfall via a lowered alpha.
+        captured = {}
+        monkeypatch.setattr(cv.subprocess, 'run',
+                            lambda cmd, check=True: captured.update(cmd=cmd))
+        cv.render(str(tmp_path / 'a.wav'), str(tmp_path / 'a.ass'),
+                  str(tmp_path / 'out.mp4'), 1280, 720,
+                  cast=str(tmp_path / 'cast.mp4'), cast_start=5.0)
+        fchain = captured['cmd'][captured['cmd'].index('-filter_complex') + 1]
+        cast_chain = fchain.split('[1:v]')[1].split('[castpip]')[0]
+        assert f'colorchannelmixer=aa={cv.CAST_PIP_ALPHA}' in cast_chain
+        assert 0.0 < cv.CAST_PIP_ALPHA < 1.0   # actually transparent, not opaque
+
 
 class TestLongSegmentCwRecovery:
     """decode_long_segment recovers CW content from a segment too long to
@@ -1450,15 +1475,16 @@ class TestTelemetryAlignment:
         assert len(events) == 1
         assert events[0][2].freq_hz == 144174000
 
-    def test_build_ass_includes_state_badge_and_rig_info(self):
+    def test_build_ass_state_badge_is_just_rx_tx_no_rig_info(self):
+        # The QRG/mode/rotator second line was dropped as redundant with the
+        # terminal PiP's toolbar (and it overlapped the cast box at 720p).
         segs = [Segment('a', datetime(2026, 7, 4, 13, 0, 0), 10.0, 0.0)]
         ass = build_ass(segs, 1920, 1080,
                         state_events=[(0.0, 10.0, SegState(True, 144174000, 'CW', 135.0))])
         assert 'Style: State' in ass
         assert 'TX' in ass
-        assert '144.174 MHz' in ass
-        assert 'CW' in ass
-        assert 'ROT 135' in ass
+        assert '144.174 MHz' not in ass
+        assert 'ROT' not in ass
 
     def test_build_ass_omits_badge_when_ptt_unknown(self):
         segs = [Segment('a', datetime(2026, 7, 4, 13, 0, 0), 10.0, 0.0)]

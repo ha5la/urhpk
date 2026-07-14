@@ -11,7 +11,8 @@ YouTube-ready MP4 with:
 
   * a scrolling audio spectrogram (SDR-style waterfall) as background
   * a live CW decode ticker, synced to the audio
-  * an RX/TX + QRG/mode/bearing badge, from the WAV files' own rig metadata
+  * an RX/TX badge, from the WAV files' own rig metadata (the QRG/mode/rotator
+    line it used to carry is redundant with the terminal PiP's own toolbar)
   * optionally, a large picture-in-picture of the logger/irssi terminal
     session (--cast, an asciinema recording) and a small webcam PiP
 
@@ -1530,19 +1531,6 @@ STATE_TX_HEX = '0000FF'  # ASS \c is &HbbggrrH -- this is pure red
 STATE_RX_HEX = '00FF00'  # pure green
 
 
-def _fmt_rig_info(freq_hz: int | None, mode: str | None, az: float | None) -> str | None:
-    """QRG/mode/bearing line under the RX/TX badge; None if nothing is known."""
-    if freq_hz is None and mode is None and az is None:
-        return None
-    parts = []
-    if freq_hz is not None:
-        parts.append(f"{freq_hz / 1e6:.3f} MHz")
-    if mode is not None:
-        parts.append(mode)
-    parts.append(f"ROT {az:.0f}°" if az is not None else "ROT ---")
-    return "  ".join(parts)
-
-
 def _mode_at(t: float, state_events: list[tuple[float, float, SegState]]) -> str | None:
     for start, end, st in state_events:
         if start <= t < end:
@@ -1600,11 +1588,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 continue
             hexcol = STATE_TX_HEX if st.ptt else STATE_RX_HEX
             label = 'TX' if st.ptt else 'RX'
-            text = f"{{\\c&H{hexcol}&}}● {label}"
-            info = _fmt_rig_info(st.freq_hz, st.mode, st.az)
-            if info:
-                text += f"\\N{{\\c&HFFFFFF&}}{_esc(info)}"
-            ev(start, end, 'State', text)
+            # Just the RX/TX dot -- the QRG/mode/rotator line that used to sit
+            # under it was dropped as redundant: the same info is legible in the
+            # terminal-session PiP's own toolbar, and its second line overlapped
+            # the cast box at 720p.
+            ev(start, end, 'State', f"{{\\c&H{hexcol}&}}● {label}")
 
     # --- decode ticker: rolling window, flushed at the start of every fresh
     # burst of on-air activity -- not at a QSO's EDI timestamp, which is
@@ -1766,6 +1754,8 @@ CAST_PIP_WIDTH_FRAC = 0.73   # terminal-session PiP is the dominant visual
                               # visually covering it.
 CAST_PIP_X_FRAC = 0.0104
 CAST_PIP_Y_FRAC = 0.11        # clears the RX/TX badge above it
+CAST_PIP_ALPHA = 0.85         # slightly transparent so the waterfall shows
+                              # faintly through the terminal PiP; 1.0 = opaque
 RENDER_FPS = 30          # output frame rate; the webcam PiP is resampled to
                          # this too (see render) so both branches share one
                          # real-time clock
@@ -1801,8 +1791,12 @@ def render(wav: str, ass: str, out: str, W: int, H: int,
         cast_x = round(W * CAST_PIP_X_FRAC)
         cast_y = round(H * CAST_PIP_Y_FRAC)
         cmd += ['-itsoffset', f'{cast_start:.3f}', '-i', cast]
+        # format=yuva420p + colorchannelmixer=aa lowers the PiP's alpha so the
+        # overlay blends it over the waterfall (a little transparency, not a
+        # wash) -- overlay honours the top input's own alpha channel.
         fchain += (
             f";[1:v]scale={cast_w}:-2,fps={RENDER_FPS},"
+            f"format=yuva420p,colorchannelmixer=aa={CAST_PIP_ALPHA},"
             f"tpad=stop_mode=clone:stop_duration=99999[castpip]"
             f";[{cur}][castpip]overlay=x={cast_x}:y={cast_y}:"
             f"enable='gte(t,{cast_start:.3f})'[v1]"
@@ -1815,8 +1809,10 @@ def render(wav: str, ass: str, out: str, W: int, H: int,
         # recording. tpad clones the cam's last frame indefinitely so a clip
         # a little shorter than the session (as here) can never end the
         # shared filtergraph early and truncate the main waterfall/audio.
-        # hflip un-mirrors a phone front-camera recording, which records raw
-        # (not mirrored like the on-screen viewfinder the operator saw).
+        # The cam is *not* mirrored: the logger's own Alt+V capture records
+        # the laptop webcam already the right way round (an earlier phone
+        # front-camera capture recorded raw/un-mirrored and needed an hflip;
+        # the same-machine capture that replaced it does not).
         #
         # fps=RENDER_FPS on this branch matters even though the source
         # already claims 30fps: a real phone recording verified against
@@ -1858,7 +1854,7 @@ def render(wav: str, ass: str, out: str, W: int, H: int,
         cmd += ['-itsoffset', f'{webcam_start:.3f}', '-i', webcam]
         fchain += (
             f";[{webcam_idx}:v]setpts=PTS/{1 - webcam_rate:.8f},fps={RENDER_FPS},"
-            f"scale={pip_w}:-2,hflip,tpad=stop_mode=clone:stop_duration=99999[pip]"
+            f"scale={pip_w}:-2,tpad=stop_mode=clone:stop_duration=99999[pip]"
             f";[{cur}][pip]overlay=x=main_w-w-{margin}:y=main_h-h-{margin}:"
             f"enable='gte(t,{webcam_start:.3f})'[v]"
         )
