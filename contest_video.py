@@ -475,6 +475,8 @@ class Qso:
     loc: str
     pts: int
     dup: bool
+    band: str = ''      # from the EDI PBand header (2M/70CM/23CM); '' if unknown
+    mode: str = ''      # SSB/CW/FM, from the EDI per-QSO mode code; '' if unknown
 
 
 def scan_segments(recdir: str) -> list[Segment]:
@@ -609,8 +611,14 @@ def trim_to_duration(segs: list[Segment], max_dur: float) -> list[Segment]:
     return out
 
 
+# Reverse of puskas_logger's own EDI encodings (_BAND_FREQ / _MODE_CODE), so
+# a rendered chapter/caption can name the band+mode the logger recorded.
+_EDI_BAND = {"145 MHz": "2M", "435 MHz": "70CM", "1296 MHz": "23CM"}
+_EDI_MODE = {"1": "SSB", "2": "CW", "6": "FM"}
+
+
 def parse_edi(path: str) -> tuple[str, str, list[Qso]]:
-    mycall, mywwl = '', ''
+    mycall, mywwl, band = '', '', ''
     qsos: list[Qso] = []
     in_records = False
     for line in open(path, encoding='utf-8', errors='replace'):
@@ -619,6 +627,8 @@ def parse_edi(path: str) -> tuple[str, str, list[Qso]]:
             mycall = line.split('=', 1)[1].strip()
         elif line.startswith('PWWLo='):
             mywwl = line.split('=', 1)[1].strip()
+        elif line.startswith('PBand='):
+            band = _EDI_BAND.get(line.split('=', 1)[1].strip(), '')
         elif line.startswith('[QSORecords'):
             in_records = True
             continue
@@ -634,7 +644,9 @@ def parse_edi(path: str) -> tuple[str, str, list[Qso]]:
             except ValueError:
                 pts = 0
             dup = len(f) > 13 and f[13].strip().upper() == 'D'
-            qsos.append(Qso(dt, f[2], f[4], f[5], f[6], f[7], f[9], pts, dup))
+            mode = _EDI_MODE.get(f[3].strip(), '')
+            qsos.append(Qso(dt, f[2], f[4], f[5], f[6], f[7], f[9], pts, dup,
+                            band=band, mode=mode))
     return mycall, mywwl, qsos
 
 
@@ -1621,7 +1633,9 @@ def build_chapters(qsos: list[Qso], windows: list[tuple[float, float]]) -> str:
         if t - last_t < MIN_CHAPTER_GAP_S:
             continue
         tag = " (dup)" if q.dup else ""
-        lines.append(f"{_yt_time(t)} QSO {i + 1:03d} {q.call}{tag}")
+        bm = " ".join(x for x in (q.band, q.mode) if x)
+        bm = f"  {bm}" if bm else ""
+        lines.append(f"{_yt_time(t)} QSO {i + 1:03d} {q.call}{bm}{tag}")
         last_t = t
     return '\n'.join(lines) + '\n'
 

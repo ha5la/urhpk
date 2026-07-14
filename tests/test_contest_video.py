@@ -1191,6 +1191,22 @@ class TestChaptersAndSrt:
         assert lines[0] == '0:00 Start'
         assert 'HG7F' in chapters
 
+    def test_build_chapters_includes_band_and_mode(self, tmp_path):
+        # PBand header -> band label; per-QSO mode code (1=SSB, 2=CW, 6=FM)
+        # -> mode string. Both must appear in the chapter line.
+        edi = tmp_path / 'log.edi'
+        edi.write_text(
+            "PCall=HA5LA\nPWWLo=JN97MM\nPBand=435 MHz\n[QSORecords;1]\n"
+            "260704;1102;HG7F;6;59;001;59;010;;JN97KR;26;;;;\n"
+        )
+        _, _, qsos = parse_edi(str(edi))
+        assert (qsos[0].band, qsos[0].mode) == ('70CM', 'FM')
+        segs = [Segment('a', datetime(2026, 7, 4, 13, 0, 0), 1200.0, 0.0)]
+        windows = qso_windows(qsos, segs, offset_h=2, total=1200.0)
+        chapters = build_chapters(qsos, windows)
+        line = [ln for ln in chapters.splitlines() if 'HG7F' in ln][0]
+        assert line.endswith('QSO 001 HG7F  70CM FM')
+
     def test_build_chapters_drops_qsos_closer_than_min_gap(self):
         qsos = [
             Qso(datetime(2026, 7, 4, 11, 0, 0), 'HG7F',
