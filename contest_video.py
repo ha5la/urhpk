@@ -1072,6 +1072,39 @@ def load_input_log(path: str) -> list[InputLogEvent]:
     return out
 
 
+def webcam_start_wall(path: str) -> datetime | None:
+    """The UTC wall-clock start of an Alt+V logger-recorded webcam, read from
+    a puskas_logger `*-input.jsonl` log's `webcam_start` event (returns the
+    first one's `t`, or None if the file has no such event).
+
+    A logger-recorded webcam is captured on the *same machine* as the logger,
+    so start/stop go through the same `datetime.now(timezone.utc)` that already
+    stamps every QSO and keystroke -- the recording's real start time is known
+    exactly, with no separate device clock to reconcile. That makes its sync
+    exact, like the asciinema cast (see parse_cast_header) and unlike a phone
+    clip (parse_webcam_wall + sync_webcam_start + refine_webcam_start, which
+    exist only to recover a *different* device's whole-hour offset and fit its
+    clock-drift rate). None here means the input log predates the Alt+V webcam
+    feature -- fall back to the filename-timestamp phone path."""
+    try:
+        for line in open(path, encoding='utf-8'):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get('event') == 'webcam_start':
+                try:
+                    return datetime.strptime(rec['t'], '%Y-%m-%dT%H:%M:%S.%fZ')
+                except (KeyError, ValueError):
+                    return None
+    except OSError:
+        return None
+    return None
+
+
 def _median(values: list[float]) -> float | None:
     if not values:
         return None
@@ -1809,12 +1842,23 @@ def main() -> None:
 
     webcam_start = None
     webcam_rate = 0.0
+    webcam_exact = False
     if args.webcam:
-        cam_wall = parse_webcam_wall(args.webcam)
-        cam_dur = _ffprobe_duration(args.webcam)
-        webcam_start = sync_webcam_start(cam_wall, cam_dur, qsos_all, segs, offset_h)
-        print(f"  webcam: synced to start at {webcam_start:.0f}s in the output (coarse, "
-              f"whole-hour only -- see refine_webcam_start below)")
+        cam_wall = webcam_start_wall(args.input_log) if args.input_log else None
+        if cam_wall is not None:
+            # Logger-recorded (Alt+V) webcam: exact same-machine timestamp, no
+            # separate device clock to reconcile -- placed like the cast.
+            webcam_start = audio_time_for(cam_wall + timedelta(hours=offset_h), segs)
+            webcam_exact = True
+            print(f"  webcam: synced to start at {webcam_start:.0f}s in the output "
+                  f"(exact -- logged webcam_start event, same-machine clock, no "
+                  f"cross-correlation needed)")
+        else:
+            cam_wall = parse_webcam_wall(args.webcam)
+            cam_dur = _ffprobe_duration(args.webcam)
+            webcam_start = sync_webcam_start(cam_wall, cam_dur, qsos_all, segs, offset_h)
+            print(f"  webcam: synced to start at {webcam_start:.0f}s in the output (coarse, "
+                  f"whole-hour only -- see refine_webcam_start below)")
 
     # read_wav_metadata runs before --duration trims segs (unlike the CW
     # decode loop further down, which *should* skip past the cutoff) so the
@@ -1826,7 +1870,14 @@ def main() -> None:
     known_wav = sum(1 for s in segs if s.ptt is not None)
     print(f"  WAV metadata: {known_wav}/{len(segs)} segments have IC-9700 rig tags")
 
-    if args.webcam and webcam_start is not None:
+    if args.webcam and webcam_start is not None and webcam_exact:
+        # Exact placement already -- only a manual nudge can apply, and there
+        # is no separate device clock to have drifted, so no rate correction.
+        if args.webcam_offset is not None:
+            webcam_start += args.webcam_offset
+            print(f"  webcam: manual offset {args.webcam_offset:+.2f}s applied -> "
+                  f"starts at {webcam_start:.2f}s")
+    elif args.webcam and webcam_start is not None:
         if args.webcam_offset is not None:
             webcam_start += args.webcam_offset
             print(f"  webcam: manual offset {args.webcam_offset:+.2f}s applied -> "

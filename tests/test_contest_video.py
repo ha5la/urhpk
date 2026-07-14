@@ -58,6 +58,7 @@ from contest_video import (
     remap_audio_t,
     sync_webcam_start,
     trim_to_duration,
+    webcam_start_wall,
 )
 
 SR = 16000
@@ -1454,6 +1455,29 @@ class TestInputLog:
         f.write_text('{"t": "2026-07-04T11:00:02.000000Z", "text": "H"}\n')
         log = load_input_log(str(f))
         assert log == [InputLogEvent(datetime(2026, 7, 4, 11, 0, 2), 'text', text='H')]
+
+
+class TestWebcamStartWall:
+    def test_reads_first_webcam_start_event(self, tmp_path):
+        # An Alt+V logger-recorded webcam logs its exact same-machine start
+        # into the shared *-input.jsonl, alongside text/qso events.
+        f = tmp_path / 'input.jsonl'
+        f.write_text(
+            '{"t": "2026-07-14T18:20:54.000000Z", "event": "text", "text": "H"}\n'
+            '{"t": "2026-07-14T18:21:03.836107Z", "event": "webcam_start"}\n'
+            '{"t": "2026-07-14T18:23:59.413453Z", "event": "webcam_stop"}\n'
+        )
+        assert webcam_start_wall(str(f)) == datetime(2026, 7, 14, 18, 21, 3, 836107)
+
+    def test_none_when_no_webcam_start_event(self, tmp_path):
+        # Input log from before the Alt+V webcam feature -- caller falls back
+        # to the phone filename-timestamp path (parse_webcam_wall).
+        f = tmp_path / 'input.jsonl'
+        f.write_text(
+            '{"t": "2026-07-14T18:20:54.000000Z", "event": "text", "text": "H"}\n'
+            '{"t": "2026-07-14T18:21:05.000000Z", "event": "qso", "call": "HA5MIG"}\n'
+        )
+        assert webcam_start_wall(str(f)) is None
 
 
 class TestMatchQsoTimes:
