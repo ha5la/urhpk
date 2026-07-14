@@ -1165,7 +1165,12 @@ def run(lb: LogBook, tname: str):
             if dist:
                 geo = f"  {locs[0]}  {dist} km  {bear}° {_bearing_arrow(bear)}"
         worked_str = _format_combos(lb.worked_combos(call))
-        tail = f"  <ansired>{worked_str}</ansired>" if worked_str else ""
+        # ansibrightred, not ansired: when the current band/mode is itself a
+        # dup the whole input line background turns ansired (_get_input_style),
+        # and that reaches the rprompt too -- plain red text would be red-on-red
+        # and unreadable there. The brighter red stays legible on both the
+        # default dark background and the ansired dup background.
+        tail = f"  <ansibrightred>{worked_str}</ansibrightred>" if worked_str else ""
         if band and mode and lb.is_dup(call, band, mode):
             return HTML(f"<ansired><b>  DUP  </b></ansired><ansigreen>{geo}  </ansigreen>{tail}")
         if geo or tail:
