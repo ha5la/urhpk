@@ -950,6 +950,19 @@ class TestWebcamCaptureCmd:
         assert "v4l2" in cmd
         assert "pulse" in cmd
 
+    def test_stamps_v4l2_frames_with_wallclock(self):
+        # -use_wallclock_as_timestamps 1 must be an *input* option on the v4l2
+        # camera (before its -i), so ffmpeg tags each frame with the real
+        # capture wallclock. This is what lets contest_video read an exact
+        # frame-0 UTC start from the log, instead of the ~1s-early
+        # webcam_start event (stamped before ffmpeg even spawns).
+        cmd = _webcam_capture_cmd("/dev/video0", "default", "out.mp4")
+        assert "-use_wallclock_as_timestamps" in cmd
+        i = cmd.index("-use_wallclock_as_timestamps")
+        assert cmd[i + 1] == "1"
+        # before the camera's own -i /dev/video0 (an input option)
+        assert i < cmd.index("/dev/video0") - 1
+
 
 # ──────────────────────────────────────────────────────────────
 # current_rot

@@ -417,8 +417,16 @@ def _webcam_capture_cmd(device: str, audio_source: str, out_path: str) -> list[s
     """The ffmpeg command to capture the local webcam + mic to `out_path`.
     -preset ultrafast keeps this cheap enough to run alongside the logger
     for a multi-hour session without competing for CPU with rigctld polling
-    or the UI itself."""
-    return ["ffmpeg", "-y", "-f", "v4l2", "-i", device,
+    or the UI itself.
+
+    -use_wallclock_as_timestamps 1 on the v4l2 input stamps every captured
+    frame with the real gettimeofday wallclock, so ffmpeg logs an exact
+    frame-0 UTC start in the *-webcam.log (contest_video reads it back via
+    webcam_start_from_log). Without it, v4l2 timestamps are CLOCK_MONOTONIC
+    (uptime), useless as an absolute time -- and the logger's own
+    webcam_start event is stamped *before* this subprocess even spawns, so it
+    leads real frame 0 by the ffmpeg + camera warmup latency (~1s, variable)."""
+    return ["ffmpeg", "-y", "-f", "v4l2", "-use_wallclock_as_timestamps", "1", "-i", device,
            "-f", "pulse", "-i", audio_source,
            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
            "-c:a", "aac", out_path]

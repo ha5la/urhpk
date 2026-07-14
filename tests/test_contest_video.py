@@ -58,6 +58,7 @@ from contest_video import (
     remap_audio_t,
     sync_webcam_start,
     trim_to_duration,
+    webcam_start_from_log,
     webcam_start_wall,
 )
 
@@ -1478,6 +1479,50 @@ class TestWebcamStartWall:
             '{"t": "2026-07-14T18:21:05.000000Z", "event": "qso", "call": "HA5MIG"}\n'
         )
         assert webcam_start_wall(str(f)) is None
+
+
+class TestWebcamStartFromLog:
+    # Real magnitudes from an actual capture: a v4l2 monotonic start is
+    # ~1.7e6 (uptime seconds); a wallclock epoch is ~1.78e9.
+    _V4L2_HDR = "Input #0, video4linux2,v4l2, from '/dev/video0':\n"
+    _PULSE_HDR = "Input #1, pulse, from 'default':\n"
+
+    def test_prefers_v4l2_wallclock_when_flag_present(self, tmp_path):
+        # With -use_wallclock_as_timestamps 1 the video input's start: is a
+        # true epoch -- the exact frame-0 wallclock, preferred over audio.
+        f = tmp_path / 'cam.log'
+        f.write_text(
+            self._V4L2_HDR +
+            "  Duration: N/A, start: 1784053264.000000, bitrate: 147456 kb/s\n" +
+            self._PULSE_HDR +
+            "  Duration: N/A, start: 1784053265.500000, bitrate: 1536 kb/s\n"
+        )
+        assert webcam_start_from_log(str(f)) == datetime(2026, 7, 14, 18, 21, 4)
+
+    def test_falls_back_to_pulse_when_v4l2_is_monotonic(self, tmp_path):
+        # An older recording without the flag: v4l2 start is CLOCK_MONOTONIC
+        # (uptime, < 1e9) and unusable, but pulse always reports a wallclock
+        # epoch -- still far more precise than the ~1s-early logged event.
+        f = tmp_path / 'cam.log'
+        f.write_text(
+            self._V4L2_HDR +
+            "  Duration: N/A, start: 1765606.323676, bitrate: 147456 kb/s\n" +
+            self._PULSE_HDR +
+            "  Duration: N/A, start: 1784053264.967854, bitrate: 1536 kb/s\n"
+        )
+        assert webcam_start_from_log(str(f)) == \
+            datetime(2026, 7, 14, 18, 21, 4, 967854)
+
+    def test_none_when_no_absolute_epoch(self, tmp_path):
+        f = tmp_path / 'cam.log'
+        f.write_text(
+            self._V4L2_HDR +
+            "  Duration: N/A, start: 1765606.323676, bitrate: 147456 kb/s\n"
+        )
+        assert webcam_start_from_log(str(f)) is None
+
+    def test_none_when_log_missing(self, tmp_path):
+        assert webcam_start_from_log(str(tmp_path / 'nope.log')) is None
 
 
 class TestMatchQsoTimes:

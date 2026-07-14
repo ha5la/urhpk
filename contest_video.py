@@ -1105,6 +1105,53 @@ def webcam_start_wall(path: str) -> datetime | None:
     return None
 
 
+_LOG_INPUT_RE = re.compile(r'^Input #\d+, ([^,]+)')
+_LOG_START_RE = re.compile(r'start:\s*([0-9]+\.[0-9]+)')
+
+
+def webcam_start_from_log(log_path: str) -> datetime | None:
+    """Precise UTC frame-0 wallclock of a logger-recorded webcam, read from
+    the ffmpeg capture log (`*-webcam.log`) written next to the mp4.
+
+    ffmpeg prints each input's own capture start time under its `Input #N`
+    header. With -use_wallclock_as_timestamps 1 (see
+    puskas_logger._webcam_capture_cmd) the v4l2 video input's `start:` is a
+    true Unix epoch -- the exact real-world instant of the first frame, to the
+    microsecond. Without the flag it's CLOCK_MONOTONIC (uptime), useless as an
+    absolute time; the PulseAudio input always reports a wallclock epoch, so we
+    prefer the video input's `start:` (it's what the PiP shows) and fall back
+    to audio, distinguishing the two by magnitude (a Unix epoch is > 1e9; an
+    uptime is far smaller). Returns None if neither is an absolute epoch (an
+    old recording without the flag and, implausibly, no usable audio start) or
+    the log can't be read.
+
+    This is exact where webcam_start_wall (the logged webcam_start event) is
+    stamped ~1s early -- before ffmpeg spawns -- so it takes precedence."""
+    video_epoch = audio_epoch = None
+    cur = None
+    try:
+        for line in open(log_path, encoding='utf-8', errors='replace'):
+            m = _LOG_INPUT_RE.match(line.strip())
+            if m:
+                cur = m.group(1)
+                continue
+            if cur and 'start:' in line:
+                sm = _LOG_START_RE.search(line)
+                if sm and float(sm.group(1)) > 1e9:  # a Unix epoch, not uptime
+                    val = float(sm.group(1))
+                    if ('v4l2' in cur or 'video4linux' in cur) and video_epoch is None:
+                        video_epoch = val
+                    elif 'pulse' in cur and audio_epoch is None:
+                        audio_epoch = val
+                cur = None
+    except OSError:
+        return None
+    epoch = video_epoch if video_epoch is not None else audio_epoch
+    if epoch is None:
+        return None
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).replace(tzinfo=None)
+
+
 def _median(values: list[float]) -> float | None:
     if not values:
         return None
@@ -1844,15 +1891,21 @@ def main() -> None:
     webcam_rate = 0.0
     webcam_exact = False
     if args.webcam:
-        cam_wall = webcam_start_wall(args.input_log) if args.input_log else None
+        # Prefer the ffmpeg log's frame-0 wallclock (µs-precise) over the
+        # logger's webcam_start event (~1s early, stamped before ffmpeg
+        # spawned) -- see webcam_start_from_log. Both are same-machine, so
+        # placement is exact either way, no cross-correlation.
+        log_path = os.path.splitext(args.webcam)[0] + '.log'
+        cam_wall = webcam_start_from_log(log_path) if os.path.exists(log_path) else None
+        src = 'ffmpeg frame-0 wallclock'
+        if cam_wall is None and args.input_log:
+            cam_wall = webcam_start_wall(args.input_log)
+            src = 'logged webcam_start event'
         if cam_wall is not None:
-            # Logger-recorded (Alt+V) webcam: exact same-machine timestamp, no
-            # separate device clock to reconcile -- placed like the cast.
             webcam_start = audio_time_for(cam_wall + timedelta(hours=offset_h), segs)
             webcam_exact = True
             print(f"  webcam: synced to start at {webcam_start:.0f}s in the output "
-                  f"(exact -- logged webcam_start event, same-machine clock, no "
-                  f"cross-correlation needed)")
+                  f"(exact -- {src}, same-machine clock, no cross-correlation needed)")
         else:
             cam_wall = parse_webcam_wall(args.webcam)
             cam_dur = _ffprobe_duration(args.webcam)
