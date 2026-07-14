@@ -547,22 +547,41 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
     exact same frame (39 differing pixels with the old formula, 0 with the
     fixed one) before writing the permanent regression test
     (`test_draw_cast_row_descender_survives_the_row_belows_own_redraw`).
-  - **A second, separate artifact the user spotted in the same preview
-    ("some buffer garbage") turned out not to be a rendering bug at
-    all**: traced directly to the raw cast bytes, which show the recorded
-    application (the logger's own status line) using absolute cursor
-    positioning (`\x1b[N;97H`) with no erase-to-end-of-line escape code —
-    so when a redraw is shorter than what was previously drawn at that
-    screen position, the old characters are genuinely still there,
-    unerased, in the real terminal session exactly as recorded. Confirmed
-    this is not specific to this renderer: any correct terminal emulator
-    replaying the identical bytes would show the same stale characters.
-    Left as-is (a genuine, minor, cosmetic artifact in the *source*
-    recording, not the video pipeline) rather than "fixed" by erasing
-    lines the real session never erased — that would render something
-    that didn't actually happen on screen. Worth revisiting in
-    `puskas_logger.py` itself later per the "no visual glitches" principle,
-    since it's the logger's own redraw path that omits the erase.
+  - **A second, separate "buffer garbage" artifact the user spotted (stale
+    startup-screen text still showing behind the contest screen) is a real
+    renderer bug, fixed by `_CastScreen`/`_CastStream`** — subclasses of
+    `pyte.Screen`/`ByteStream` that implement three CSI sequences stock pyte
+    silently drops. The cast is recorded with the logger running inside
+    **tmux** (two panes: irssi + logger), and tmux clears/scrolls a *single*
+    pane by setting left/right margins (DECSLRM, `CSI Pl;Pr s`) and then
+    scrolling within them (SU `CSI Ps S` / SD `CSI Ps T`). pyte implements
+    none of the three (verified: no `S`/`T`/`s` in its CSI dispatch table, and
+    `?69h`/DECLRMM is ignored), so the pane was never actually cleared — when
+    the logger cleared its screen (`\x1b[2J\x1b[H`, which tmux translates into
+    a per-pane `\x1b[97;191s\x1b[51S`) and redrew shorter content, the old
+    tail stayed on screen. `_CastScreen.scroll_up`/`scroll_down` mirror pyte's
+    own `index`/`reverse_index` but operate cell-by-cell within *both* the
+    top/bottom margins (pyte's `self.margins`) and the left/right margins
+    (`self.margins_lr`, new), so only the pane's own columns shift; the other
+    pane and the `│` separator are untouched. `set_left_right_margins`
+    distinguishes DECSLRM (2 params) from a bare `CSI s` = SCOSC save-cursor
+    (<2 params). `_CastStream.csi` adds the three missing final bytes to the
+    dispatch table. **This corrects an earlier diagnosis** that called the
+    same garbage a genuine *source* artifact ("the logger omits
+    erase-to-end-of-line; any correct terminal would show it too") and left it
+    as-is — wrong on both counts: `asciinema play` (a correct emulator that
+    *does* honour SU+DECSLRM) always showed the cast clean, and the erase is
+    tmux's, not something the logger owes. Verified end-to-end on the real
+    July cast: the transition frame that showed `no QSOs yet5LA-2M.edi (34
+    QSOs)…` and `JN97TFS]:` now renders `no QSOs yet` and `JN97TF` cleanly
+    (regression tests `test_stock_pyte_leaves_stale_pane_content` /
+    `test_cast_screen_clears_only_the_pane_columns`). The dirty-row redraw
+    optimization is unaffected — `_scroll` adds the rows it shifts to
+    `screen.dirty`, so the incremental canvas still picks them up.
+    (A recording made *outside* tmux, or of a single pane, never emits these
+    sequences — the logger's own `\x1b[2J\x1b[H` is handled by stock pyte
+    fine — so this only bites tmux-captured casts, which is the documented
+    recording method.)
   - **Layout**: `CAST_PIP_WIDTH_FRAC`/`CAST_PIP_X_FRAC`/`CAST_PIP_Y_FRAC`
     position the cast as a large PiP — the dominant visual element, not a
     small inset, since the terminal session is most of what there is to

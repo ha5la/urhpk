@@ -24,6 +24,8 @@ from contest_video import (
     SegState,
     TelemetrySample,
     _cast_color,
+    _CastScreen,
+    _CastStream,
     _dominance,
     _draw_cast_row,
     _eff,
@@ -865,6 +867,40 @@ class TestTerminalCast:
         row0_after_row1_redraw = np.array(canvas_after.crop((0, 0, px_w, crop_h)))
 
         assert np.array_equal(row0_alone, row0_after_row1_redraw)
+
+    # tmux (the logger is recorded running inside it) scrolls/clears a single
+    # pane with left/right margins (DECSLRM, CSI Pl;Pr s) + scroll-up (SU,
+    # CSI Ps S) -- three sequences stock pyte drops, so a pane never cleared
+    # and old content showed through the new (the reported "startup screen
+    # still visible behind the contest screen" garbage). _CastScreen/
+    # _CastStream implement them; `asciinema play` always did, which is why
+    # the cast looked clean there but not in the render.
+    _CLEAR = b"\x1b[1;4r\x1b[11;20s\x1b[4S\x1b[1;4r"  # tmux clears cols 11-20
+
+    def test_stock_pyte_leaves_stale_pane_content(self):
+        # The bug this fixes: with plain pyte the pane-scroll is a no-op, so
+        # the old tail survives -- exactly the garbage seen in the render.
+        screen = pyte.Screen(20, 4)
+        stream = pyte.ByteStream(screen)
+        stream.feed(b"\x1b[1;1H0123456789ABCDEFGHIJ")
+        stream.feed(self._CLEAR)
+        assert screen.display[0][10:] == "ABCDEFGHIJ"   # NOT cleared
+
+    def test_cast_screen_clears_only_the_pane_columns(self):
+        screen = _CastScreen(20, 4)
+        stream = _CastStream(screen)
+        stream.feed(b"\x1b[1;1H0123456789ABCDEFGHIJ")
+        assert screen.display[0] == "0123456789ABCDEFGHIJ"
+        stream.feed(self._CLEAR)
+        assert screen.display[0][:10] == "0123456789"    # left pane untouched
+        assert screen.display[0][10:] == " " * 10        # right pane cleared
+
+    def test_bare_csi_s_is_save_cursor_not_a_margin(self):
+        # `CSI s` with <2 params is SCOSC (save cursor), not DECSLRM -- must
+        # not set a left/right margin (which would wrongly constrain scrolls).
+        screen = _CastScreen(20, 4)
+        _CastStream(screen).feed(b"\x1b[s")
+        assert screen.margins_lr is None
 
 
 class TestSkipGaps:

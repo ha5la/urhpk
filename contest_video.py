@@ -930,6 +930,61 @@ def _draw_cast_row(draw: ImageDraw.ImageDraw, line: dict, row: int, W: int,
         draw.text((x, y), ch.data, font=f, fill=fg)
 
 
+class _CastScreen(pyte.Screen):
+    """pyte.Screen plus the horizontal-margin scrolling stock pyte omits.
+
+    A logger cast recorded inside tmux (two panes side by side) needs this:
+    tmux scrolls/clears a *single* pane by setting left/right margins (DECSLRM,
+    `CSI Pl;Pr s`) and then scrolling within them (SU `CSI Ps S` / SD
+    `CSI Ps T`). Stock pyte implements none of these three, so a pane was never
+    actually cleared -- when the logger cleared its screen and redrew shorter
+    content, the old tail stayed on screen (the "startup screen still visible
+    behind the contest screen" garbage). A real terminal -- and `asciinema
+    play` -- honours them, which is why the cast looked clean there but not in
+    our render. (This corrects an earlier diagnosis that blamed the logger's
+    own redraw for omitting erase-to-end-of-line: the erase is really tmux's
+    SU+DECSLRM, which we were dropping.)"""
+
+    def reset(self) -> None:
+        super().reset()
+        self.margins_lr: tuple[int, int] | None = None
+
+    def set_left_right_margins(self, left: int = 0, right: int | None = None,
+                               **kwargs) -> None:
+        # `CSI s` with <2 params is SCOSC (save cursor), not DECSLRM.
+        if right is None:
+            self.save_cursor()
+            return
+        self.margins_lr = ((left or 1) - 1, (right or self.columns) - 1)
+
+    def _scroll(self, count: int, down: bool) -> None:
+        count = count or 1
+        top, bottom = self.margins if self.margins else (0, self.lines - 1)
+        left, right = self.margins_lr or (0, self.columns - 1)
+        self.dirty.update(range(top, bottom + 1))
+        blank = self.default_char
+        rows = range(bottom, top - 1, -1) if down else range(top, bottom + 1)
+        for y in rows:
+            src = y - count if down else y + count
+            srow = self.buffer[src] if top <= src <= bottom else None
+            row = self.buffer[y]
+            for x in range(left, right + 1):
+                row[x] = srow[x] if srow is not None else blank
+
+    def scroll_up(self, count: int = 0, **kwargs) -> None:
+        self._scroll(count, down=False)
+
+    def scroll_down(self, count: int = 0, **kwargs) -> None:
+        self._scroll(count, down=True)
+
+
+class _CastStream(pyte.ByteStream):
+    """pyte.ByteStream that routes the three CSI finals _CastScreen adds
+    (SU/SD/DECSLRM) -- stock pyte's dispatch table has no entry for them."""
+    csi = {**pyte.ByteStream.csi, 'S': 'scroll_up', 'T': 'scroll_down',
+           's': 'set_left_right_margins'}
+
+
 def render_cast_video(cast_path: str, out_path: str, fps: float = CAST_FPS) -> None:
     """Replay an asciinema cast into a standalone mp4 (its own timeline
     starting at t=0, matching the cast's own start) -- an intermediate
@@ -974,8 +1029,8 @@ def render_cast_video(cast_path: str, out_path: str, fps: float = CAST_FPS) -> N
     px_w += px_w % 2
     px_h += px_h % 2
 
-    screen = pyte.Screen(W, H)
-    stream = pyte.ByteStream(screen)
+    screen = _CastScreen(W, H)
+    stream = _CastStream(screen)
     canvas = Image.new("RGB", (px_w, px_h), CAST_BG)
     draw = ImageDraw.Draw(canvas)
     for row in range(H):
