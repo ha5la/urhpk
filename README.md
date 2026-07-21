@@ -16,6 +16,7 @@ Amateur radio contest toolset for the Puskás URH Kupa, plus a general-purpose
 | `puskas_harvester.py` | Pre-contest data collector; fetches all stations → `puskas-seen-stations.json` |
 | `puskas_visualizer.py` | Map and polar diagram from `puskas-seen-stations.json` |
 | `contest_video.py` | Annotated CW contest video from a timestamped recording + EDI log |
+| `hamlib_supervisor.py` | Starts/stops rigctld and rotctld based on USB device presence (inotify, no polling) |
 
 ## Quick start — IRC bridge
 

@@ -6,6 +6,7 @@ Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
 - `puskas_logger.py` – contest QSO logger with rigctld + rotctld integration; exports EDI files
 - `puskas_harvester.py` – pre-contest data collector; fetches all stations → `~/.puskas/puskas-seen-stations.json`
 - `puskas_visualizer.py` – map and polar diagram from `~/.puskas/puskas-seen-stations.json`
+- `hamlib_supervisor.py` – starts/stops rigctld and rotctld based on USB device presence (inotify)
 
 ## Housekeeping reminders
 - When adding or removing components, update the components table in **README.md**
@@ -230,6 +231,68 @@ uv run puskas_visualizer.py [CALLSIGN LOCATOR]
 - Generates `puskas_map.html` (interactive Folium map) and `puskas_polar.png` (polar scatter)
 - Missed stations (in seen_stations but not worked) shown in red on map
 - Dependencies: `folium`, `matplotlib`, `numpy`
+
+## hamlib_supervisor.py – rigctld/rotctld USB-replug supervisor
+
+Problem this solves: `rigctld`/`rotctld` were started by hand, picking the device path
+(`/dev/ttyUSBn`) from shell history. If the USB connection drops (cable wiggle, radio
+power-cycle) and the kernel re-enumerates the device, the running daemon keeps the old,
+now-dead file descriptor open — it does not notice the device came back on a new number.
+The fix is not "give it a stable device name" alone (a udev `SYMLINK+=` rule or, as it
+turns out, the distro's own `/dev/serial/by-id/` — see below — both already solve that
+half); the daemon itself still needs to *restart* against the new device node, since it
+never re-`open()`s a path once it's already got a fd.
+
+```
+uv run hamlib_supervisor.py
+```
+Run permanently (tmux, or a `systemd --user` unit) alongside the contest tools.
+
+- **No custom udev rule needed.** `/dev/serial/by-id/` is populated automatically by the
+  distro's own stock udev package for both devices here — verified directly on the
+  actual hardware, not assumed:
+  - IC-9700: `/dev/serial/by-id/usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_IC-9700_13013358_A-if00-port0`.
+    The radio actually exposes **two** separate CI-V USB-serial ports (`_A`/`_B`, real
+    distinct USB devices under the hood, not two interfaces of one) — likely so a second
+    CAT-speaking program can run without contending with rigctld. Port A is the one in
+    use; confirmed live (`145.355 MHz FM`) with `rigctld -m 3081 -s 115200`.
+  - Rotator (custom Arduino, Yaesu GS-232-compatible firmware):
+    `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0` (CH340, `1a86:7523` — no serial
+    number, but there's only one such device on this machine so plain VID/PID-based
+    identity, which is all `/dev/serial/by-id` uses here, is already unambiguous).
+    Confirmed live (real azimuth reading) with `rotctld -m 603 -s 9600` — **not** GS-232A
+    (`-m 601`): that returned "Protocol error" on `get_pos` despite genuinely receiving
+    bytes back (wrong response framing, not a dead link or wrong baud) — 603/GS-232B is
+    the sketch's actual dialect.
+  - If a device's `/dev/serial/by-id/` entry ever goes missing on a future machine (e.g.
+    a USB-serial chip too generic for udev's built-in rules to name distinctly), fall
+    back to a custom udev `SYMLINK+=` rule matched on `idVendor`/`idProduct` — see git
+    history / prior discussion for the template; not needed for the current hardware.
+- **inotify, not polling**: watches the parent directory of each configured device path
+  (both land in `/dev/serial/by-id/` here, so one shared watch) for `IN_CREATE`/
+  `IN_DELETE`/`IN_MOVED_TO`/`IN_MOVED_FROM`, implemented via `ctypes` directly against
+  libc — no `inotify_simple`/`watchdog` dependency, matching `on4kst_irc_bridge.py`'s
+  "pure stdlib" style. `reconcile_initial_state` handles the device-already-present-at-
+  startup case explicitly, since inotify only reports *future* events.
+- **Async/event-driven rig or rotator state (no polling `rigctld`/`rotctld` themselves)
+  was investigated and is not available for this hardware on the installed Hamlib
+  (4.6.2, confirmed also still absent in the latest release, 4.7.2)**: Hamlib's
+  `async_data_supported` backend flag — the mechanism that lets rigctld consume Icom
+  CI-V Transceive frames without polling, and even multicast them to network clients —
+  is set for `ic7300.c`/`ic7610.c`/`ic785x.c`/etc. but not `ic9700.c` (checked directly
+  against the Hamlib source at both version tags). Hamlib's rotator API
+  (`include/hamlib/rotator.h`) has no equivalent concept at all, for any backend, at
+  either version — this isn't a per-rig gap, the rotator subsystem never defined the
+  hook. So `puskas_logger.py`'s existing rig/rotator polling threads stay as they are;
+  this script only removes polling from the *device-presence* problem, not from
+  freq/mode/azimuth queries themselves.
+- The IC-7300MK2 (an unrelated HF rig also on this machine) has no dedicated Hamlib
+  backend in the installed 4.6.2 — `RIG_MODEL_IC7300MK2` was added in the 4.7 release
+  series (confirmed: absent from `rigctl --list` here, present in Hamlib's 4.7.2 source
+  and release notes). The plain IC-7300 model (`-m 3073`) was confirmed working against
+  it live for basic CAT (freq/mode read) regardless — Puskás Kupa is VHF/UHF-only so
+  this rig isn't part of this project's workflow either way, noted here only because it
+  came up while investigating the IC-9700.
 
 ## contest_video.py – Annotated CW contest video
 
@@ -1198,6 +1261,7 @@ EDI export: one file per band, `[REG1TEST;1]` format compatible with bb.mrasz.hu
 
 ## Running
 ```
+uv run hamlib_supervisor.py   # keep running: starts/stops rigctld+rotctld on USB replug
 uv run on4kst_irc_bridge.py   # IRC bridge (then connect irssi to localhost:6667)
 uv run puskas_harvester.py    # build ~/.puskas/puskas-seen-stations.json before a contest
 uv run puskas_logger.py       # log QSOs during the contest
@@ -1206,7 +1270,7 @@ uv run puskas_visualizer.py   # generate map and polar after the contest
 
 ## Testing
 ```
-uv run pytest tests/ -v     # 231 tests: parsing, IRC protocol, logger, harvester, integration
+uv run pytest tests/ -v     # 365 tests: parsing, IRC protocol, logger, harvester, integration
 uv run ruff check .         # linting: E/F/W/I rules; E501 and E701 intentionally ignored
 ```
 CI runs both on every push via GitHub Actions (`test.yml`).
