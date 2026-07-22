@@ -31,6 +31,7 @@ irssi quick-start:
     /save
     /connect on4kst
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -48,28 +49,29 @@ from pathlib import Path
 # ============================================================
 # Configuration
 # ============================================================
-KST_HOST          = "www.on4kst.info"
-KST_PORT          = 23000
-PUSKAS_DIR        = Path.home() / ".puskas"
-ON4KST_SEEN_PATH  = PUSKAS_DIR / "on4kst-seen-stations.json"
-CHAT_CHOICE  = "2"           # 144/432 MHz
-IRC_HOST     = "127.0.0.1"
-IRC_PORT     = 6667
-SERVER_NAME  = "on4kst.bridge"
-CHANNEL      = "#on4kst"
-REFRESH_SEC  = 120
-RECONNECT_S  = 30
-RIGCTLD_HOST   = "localhost"
-RIGCTLD_PORT   = 4532
+KST_HOST = "www.on4kst.info"
+KST_PORT = 23000
+PUSKAS_DIR = Path.home() / ".puskas"
+ON4KST_SEEN_PATH = PUSKAS_DIR / "on4kst-seen-stations.json"
+CHAT_CHOICE = "2"  # 144/432 MHz
+IRC_HOST = "127.0.0.1"
+IRC_PORT = 6667
+SERVER_NAME = "on4kst.bridge"
+CHANNEL = "#on4kst"
+REFRESH_SEC = 120
+RECONNECT_S = 30
+RIGCTLD_HOST = "localhost"
+RIGCTLD_PORT = 4532
 RIGCTLD_POLL_S = 5
 
 # ============================================================
 # Credentials
 # ============================================================
 
+
 def load_credentials() -> tuple[str, str]:
     try:
-        n     = netrc.netrc()
+        n = netrc.netrc()
         entry = n.authenticators(KST_HOST)
         if entry:
             login, _, password = entry
@@ -83,28 +85,33 @@ def load_credentials() -> tuple[str, str]:
     print(f"  Add: machine {KST_HOST} login <callsign> password SECRET")
     sys.exit(1)
 
+
 # ============================================================
 # Locator math (Maidenhead → lat/lon, haversine, bearing)
 # ============================================================
 
+
 def maidenhead_to_latlon(loc: str) -> tuple[float, float]:
     loc = loc.upper().strip()
-    lon = (ord(loc[0]) - ord('A')) * 20 - 180 + int(loc[2]) * 2
-    lat = (ord(loc[1]) - ord('A')) * 10 - 90  + int(loc[3]) * 1
+    lon = (ord(loc[0]) - ord("A")) * 20 - 180 + int(loc[2]) * 2
+    lat = (ord(loc[1]) - ord("A")) * 10 - 90 + int(loc[3]) * 1
     if len(loc) >= 6:
-        lon += (ord(loc[4]) - ord('A')) * (2 / 24) + (1 / 24)
-        lat += (ord(loc[5]) - ord('A')) * (1 / 24) + (1 / 48)
+        lon += (ord(loc[4]) - ord("A")) * (2 / 24) + (1 / 24)
+        lat += (ord(loc[5]) - ord("A")) * (1 / 24) + (1 / 48)
     else:
         lon += 1.0
         lat += 0.5
     return lat, lon
 
+
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     p = math.pi / 180
-    a = (math.sin((lat2 - lat1) * p / 2) ** 2
-         + math.cos(lat1 * p) * math.cos(lat2 * p)
-         * math.sin((lon2 - lon1) * p / 2) ** 2)
+    a = (
+        math.sin((lat2 - lat1) * p / 2) ** 2
+        + math.cos(lat1 * p) * math.cos(lat2 * p) * math.sin((lon2 - lon1) * p / 2) ** 2
+    )
     return 2 * 6371.0 * math.asin(math.sqrt(a))
+
 
 def initial_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     p = math.pi / 180
@@ -113,6 +120,7 @@ def initial_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float
     x = math.sin(dlon) * math.cos(la2)
     y = math.cos(la1) * math.sin(la2) - math.sin(la1) * math.cos(la2) * math.cos(dlon)
     return (math.degrees(math.atan2(x, y)) + 360) % 360
+
 
 def _loc_distance_str(my_loc: str, their_loc: str) -> str:
     """Returns ' | dist km bear°' or '' if either locator is missing/invalid."""
@@ -127,47 +135,54 @@ def _loc_distance_str(my_loc: str, their_loc: str) -> str:
     except Exception:
         return ""
 
+
 # ============================================================
 # Airplane scatter
 # ============================================================
 
-SCATTER_MIN_KM  = 200
-SCATTER_MAX_KM  = 1500
-SCATTER_RADIUS_KM = 50   # aircraft search radius around path midpoint
-OPENSKY_URL     = "https://opensky-network.org/api/states/all"
+SCATTER_MIN_KM = 200
+SCATTER_MAX_KM = 1500
+SCATTER_RADIUS_KM = 50  # aircraft search radius around path midpoint
+OPENSKY_URL = "https://opensky-network.org/api/states/all"
+
 
 def latlon_to_maidenhead(lat: float, lon: float) -> str:
     lon += 180
     lat += 90
-    loc  = chr(ord('A') + int(lon / 20))
-    loc += chr(ord('A') + int(lat / 10))
+    loc = chr(ord("A") + int(lon / 20))
+    loc += chr(ord("A") + int(lat / 10))
     loc += str(int((lon % 20) / 2))
     loc += str(int(lat % 10))
-    loc += chr(ord('A') + int((lon % 2) / (2 / 24)))
-    loc += chr(ord('A') + int((lat % 1) / (1 / 24)))
+    loc += chr(ord("A") + int((lon % 2) / (2 / 24)))
+    loc += chr(ord("A") + int((lat % 1) / (1 / 24)))
     return loc
 
-def great_circle_midpoint(lat1: float, lon1: float,
-                           lat2: float, lon2: float) -> tuple[float, float]:
-    p  = math.pi / 180
+
+def great_circle_midpoint(
+    lat1: float, lon1: float, lat2: float, lon2: float
+) -> tuple[float, float]:
+    p = math.pi / 180
     la1, la2 = lat1 * p, lat2 * p
     lo1, lo2 = lon1 * p, lon2 * p
     Bx = math.cos(la2) * math.cos(lo2 - lo1)
     By = math.cos(la2) * math.sin(lo2 - lo1)
-    lat_m = math.atan2(math.sin(la1) + math.sin(la2),
-                       math.sqrt((math.cos(la1) + Bx) ** 2 + By ** 2))
+    lat_m = math.atan2(
+        math.sin(la1) + math.sin(la2), math.sqrt((math.cos(la1) + Bx) ** 2 + By**2)
+    )
     lon_m = lo1 + math.atan2(By, math.cos(la1) + Bx)
     return lat_m / p, lon_m / p
 
-def fetch_aircraft_near(lat: float, lon: float,
-                         radius_km: float) -> list[dict]:
+
+def fetch_aircraft_near(lat: float, lon: float, radius_km: float) -> list[dict]:
     """Query OpenSky Network for aircraft within radius_km of (lat, lon).
     Returns a list of dicts with keys: callsign, lat, lon, altitude_m, distance_km.
     Returns [] on any error (network, rate-limit, etc.).
     """
     deg = radius_km / 111.0
-    params = (f"?lamin={lat - deg:.4f}&lomin={lon - deg:.4f}"
-              f"&lamax={lat + deg:.4f}&lomax={lon + deg:.4f}")
+    params = (
+        f"?lamin={lat - deg:.4f}&lomin={lon - deg:.4f}"
+        f"&lamax={lat + deg:.4f}&lomax={lon + deg:.4f}"
+    )
     try:
         with urllib.request.urlopen(OPENSKY_URL + params, timeout=5) as r:
             data = json.loads(r.read())
@@ -175,25 +190,27 @@ def fetch_aircraft_near(lat: float, lon: float,
         return []
 
     aircraft = []
-    for s in (data.get("states") or []):
+    for s in data.get("states") or []:
         # state vector: [icao, callsign, origin, ?, ?, lon, lat, baro_alt, ...]
         if s[5] is None or s[6] is None or s[7] is None:
             continue
         ac_lat, ac_lon, alt = s[6], s[5], s[7]
         dist = haversine_km(lat, lon, ac_lat, ac_lon)
         if dist <= radius_km:
-            aircraft.append({
-                "callsign":    (s[1] or "").strip() or s[0],
-                "lat":         ac_lat,
-                "lon":         ac_lon,
-                "altitude_m":  alt,
-                "distance_km": dist,
-            })
+            aircraft.append(
+                {
+                    "callsign": (s[1] or "").strip() or s[0],
+                    "lat": ac_lat,
+                    "lon": ac_lon,
+                    "altitude_m": alt,
+                    "distance_km": dist,
+                }
+            )
     aircraft.sort(key=lambda a: a["distance_km"])
     return aircraft
 
-async def scatter_candidates(my_loc: str,
-                              online_users: dict[str, dict]) -> list[dict]:
+
+async def scatter_candidates(my_loc: str, online_users: dict[str, dict]) -> list[dict]:
     """Return scatter-feasible online stations with nearest aircraft info."""
     if not my_loc:
         return []
@@ -217,20 +234,24 @@ async def scatter_candidates(my_loc: str,
         aircraft = await asyncio.get_event_loop().run_in_executor(
             None, fetch_aircraft_near, mid_lat, mid_lon, SCATTER_RADIUS_KM
         )
-        candidates.append({
-            "call":       call,
-            "loc":        loc,
-            "dist_km":    dist,
-            "bear_to_mid": bear_to_mid,
-            "mid_loc":    mid_loc,
-            "aircraft":   aircraft,
-        })
+        candidates.append(
+            {
+                "call": call,
+                "loc": loc,
+                "dist_km": dist,
+                "bear_to_mid": bear_to_mid,
+                "mid_loc": mid_loc,
+                "aircraft": aircraft,
+            }
+        )
     candidates.sort(key=lambda c: c["dist_km"])
     return candidates
+
 
 # ============================================================
 # Rig control (rigctld TCP client)
 # ============================================================
+
 
 async def fetch_rig_info() -> tuple[str, str]:
     """Returns (freq_mhz_str, mode) from rigctld, or ('', '') if unavailable."""
@@ -240,16 +261,21 @@ async def fetch_rig_info() -> tuple[str, str]:
         )
         writer.write(b"f\nm\n")
         await writer.drain()
-        freq_line = (await asyncio.wait_for(reader.readline(), timeout=2.0)).decode().strip()
-        mode_line = (await asyncio.wait_for(reader.readline(), timeout=2.0)).decode().strip()
+        freq_line = (
+            (await asyncio.wait_for(reader.readline(), timeout=2.0)).decode().strip()
+        )
+        mode_line = (
+            (await asyncio.wait_for(reader.readline(), timeout=2.0)).decode().strip()
+        )
         writer.close()
         return f"{float(freq_line) / 1e6:.3f}", mode_line
     except Exception:
         return "", ""
 
-def sked_text(call: str, my_call: str, my_loc: str,
-              their_loc: str,
-              qrg: str = "", mode: str = "") -> str:
+
+def sked_text(
+    call: str, my_call: str, my_loc: str, their_loc: str, qrg: str = "", mode: str = ""
+) -> str:
     msg = f"Hi {call}, sked? Puskás URH Kupa"
     if my_loc and their_loc:
         try:
@@ -269,13 +295,15 @@ def sked_text(call: str, my_call: str, my_loc: str,
     msg += f". 73 {my_call}"
     return msg
 
+
 # ============================================================
 # Telnet IAC filter
 # ============================================================
 
+
 def strip_iac(data: bytes) -> bytes:
     out = bytearray()
-    i   = 0
+    i = 0
     while i < len(data):
         if data[i] == 0xFF and i + 2 < len(data):
             i += 3
@@ -284,26 +312,28 @@ def strip_iac(data: bytes) -> bytes:
             i += 1
     return bytes(out)
 
+
 # ============================================================
 # Regexes
 # ============================================================
-RE_LOGIN     = re.compile(r"Login\s*:",    re.I)
-RE_PASSWORD  = re.compile(r"Password\s*:", re.I)
-RE_CHOICE    = re.compile(r"Your choice",  re.I)
-RE_CHAT      = re.compile(r"\d{4}Z\s+\S+\s+.+chat\s*>", re.I)
-RE_CHAT_MSG  = re.compile(r"^(\d{4}Z)\s+([A-Z0-9/]+)\s+.*?>\s+(.+)", re.I)
+RE_LOGIN = re.compile(r"Login\s*:", re.I)
+RE_PASSWORD = re.compile(r"Password\s*:", re.I)
+RE_CHOICE = re.compile(r"Your choice", re.I)
+RE_CHAT = re.compile(r"\d{4}Z\s+\S+\s+.+chat\s*>", re.I)
+RE_CHAT_MSG = re.compile(r"^(\d{4}Z)\s+([A-Z0-9/]+)\s+.*?>\s+(.+)", re.I)
 RE_RECIPIENT = re.compile(r"^\(([A-Z0-9/]+)\)\s+(.*)", re.I)
-RE_USR       = re.compile(
+RE_USR = re.compile(
     r"^(\(?)([A-Z0-9]{3,}(?:/[A-Z0-9]+)?)\)?\s{2,}([A-Z]{2}\d{2}[A-Z]{2})\s*(.*)",
     re.I,
 )
 # groups: 1=open-paren (away marker), 2=callsign, 3=locator, 4=name+equipment
-RE_PROMPT    = re.compile(r"(Login|Password|choice|chat)\s*[>:]\s*$", re.I)
-RE_LOCATOR   = re.compile(r"\b([A-R]{2}\d{2}[A-X]{2})\b", re.I)
+RE_PROMPT = re.compile(r"(Login|Password|choice|chat)\s*[>:]\s*$", re.I)
+RE_LOCATOR = re.compile(r"\b([A-R]{2}\d{2}[A-X]{2})\b", re.I)
 
 # ============================================================
 # ON4KST seen-stations persistence
 # ============================================================
+
 
 def _load_seen() -> dict[str, dict]:
     try:
@@ -311,29 +341,34 @@ def _load_seen() -> dict[str, dict]:
     except Exception:
         return {}
 
+
 def _persist_seen(data: str) -> None:
     try:
-        if (ON4KST_SEEN_PATH.exists() and
-                ON4KST_SEEN_PATH.read_text(encoding="utf-8") == data):
+        if (
+            ON4KST_SEEN_PATH.exists()
+            and ON4KST_SEEN_PATH.read_text(encoding="utf-8") == data
+        ):
             return
         PUSKAS_DIR.mkdir(exist_ok=True)
         ON4KST_SEEN_PATH.write_text(data, encoding="utf-8")
     except Exception:
         pass
 
+
 # ============================================================
 # Bridge  (coordinates ON4KST client ↔ IRC sessions)
 # ============================================================
 
+
 class Bridge:
     def __init__(self, callsign: str):
-        self.callsign    = callsign
-        self.my_locator  = ""
-        self.rig_qrg     = ""
-        self.rig_mode    = ""
+        self.callsign = callsign
+        self.my_locator = ""
+        self.rig_qrg = ""
+        self.rig_mode = ""
         self.kst: ON4KSTClient | None = None
         self._sessions: set[IRCSession] = set()
-        self._seen: dict[str, dict]    = _load_seen()
+        self._seen: dict[str, dict] = _load_seen()
 
     # ----------------------------------------------------------
     # IRC session lifecycle
@@ -365,9 +400,14 @@ class Bridge:
             if text.strip().lower() == "sked":
                 call = target.upper()
                 user = self.kst.online_users.get(call) or {}
-                msg  = sked_text(call, self.callsign, self.my_locator,
-                                 user.get("loc", ""),
-                                 self.rig_qrg, self.rig_mode)
+                msg = sked_text(
+                    call,
+                    self.callsign,
+                    self.my_locator,
+                    user.get("loc", ""),
+                    self.rig_qrg,
+                    self.rig_mode,
+                )
                 await self.kst.send(f"/CQ {call} {msg}")
                 await self._notify(f"→ /CQ {call}: {msg}")
             else:
@@ -403,14 +443,22 @@ class Bridge:
 
     async def _run_help(self):
         await self._notify("Local commands (not sent to the channel):")
-        await self._notify("  !list     – online stations sorted by distance and bearing")
-        await self._notify("  !scatter  – airplane scatter paths with live aircraft data")
+        await self._notify(
+            "  !list     – online stations sorted by distance and bearing"
+        )
+        await self._notify(
+            "  !scatter  – airplane scatter paths with live aircraft data"
+        )
         await self._notify("  !help     – this help")
         await self._notify("  /msg CALL sked  – send contest sked proposal via /CQ")
         if self.rig_qrg:
-            await self._notify(f"  Rig: {self.rig_qrg} MHz {self.rig_mode} (included in sked automatically)")
+            await self._notify(
+                f"  Rig: {self.rig_qrg} MHz {self.rig_mode} (included in sked automatically)"
+            )
         else:
-            await self._notify("  Rig: rigctld not connected (start rigctld to include QRG in sked)")
+            await self._notify(
+                "  Rig: rigctld not connected (start rigctld to include QRG in sked)"
+            )
 
     async def _run_list(self):
         if not self.kst:
@@ -462,9 +510,11 @@ class Bridge:
             ac = c["aircraft"]
             if ac:
                 a = ac[0]
-                ac_str = (f"✈ {a['callsign']} "
-                          f"{int(a['altitude_m'])} m, "
-                          f"{int(a['distance_km'])} km off midpoint")
+                ac_str = (
+                    f"✈ {a['callsign']} "
+                    f"{int(a['altitude_m'])} m, "
+                    f"{int(a['distance_km'])} km off midpoint"
+                )
             else:
                 ac_str = "no aircraft near midpoint"
             await self._notify(
@@ -474,16 +524,17 @@ class Bridge:
                 f"{ac_str}"
             )
 
-    async def kst_message(self, utc: str, from_call: str,
-                          recipient: str | None, text: str):
+    async def kst_message(
+        self, utc: str, from_call: str, recipient: str | None, text: str
+    ):
         if from_call == self.callsign:
             return  # suppress echo of our own messages
 
         if recipient and recipient == self.callsign:
-            target = self.callsign   # PM addressed to me → query window
+            target = self.callsign  # PM addressed to me → query window
         elif recipient:
-            target = CHANNEL         # addressed to someone else → channel
-            text   = f"({recipient}) {text}"
+            target = CHANNEL  # addressed to someone else → channel
+            text = f"({recipient}) {text}"
         else:
             target = CHANNEL
 
@@ -533,16 +584,18 @@ class Bridge:
 # IRC session  (one connected IRC client)
 # ============================================================
 
+
 class IRCSession:
-    def __init__(self, reader: asyncio.StreamReader,
-                 writer: asyncio.StreamWriter, bridge: Bridge):
+    def __init__(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, bridge: Bridge
+    ):
         self._reader = reader
         self._writer = writer
         self._bridge = bridge
-        self.nick          = ""
-        self._got_user     = False
-        self._reg          = False   # registration complete
-        self._cap_pending  = False   # True between CAP LS and CAP END
+        self.nick = ""
+        self._got_user = False
+        self._reg = False  # registration complete
+        self._cap_pending = False  # True between CAP LS and CAP END
 
     # ----------------------------------------------------------
     # Low-level send helpers
@@ -553,8 +606,8 @@ class IRCSession:
         await self._writer.drain()
 
     async def _num(self, code: int, *params: str):
-        target   = self.nick or "*"
-        parts    = list(params)
+        target = self.nick or "*"
+        parts = list(params)
         parts[-1] = f":{parts[-1]}"
         await self._send(f":{SERVER_NAME} {code:03d} {target} {' '.join(parts)}")
 
@@ -572,12 +625,12 @@ class IRCSession:
         await self._send(f":{callsign}!{callsign}@on4kst PART {CHANNEL}")
 
     async def _send_names(self):
-        kst     = self._bridge.kst
-        users   = list(kst.online_users.keys()) if kst else []
-        me      = self._bridge.callsign
-        nicks   = [me] + [u for u in users if u != me]
+        kst = self._bridge.kst
+        users = list(kst.online_users.keys()) if kst else []
+        me = self._bridge.callsign
+        nicks = [me] + [u for u in users if u != me]
         for i in range(0, max(1, len(nicks)), 20):
-            chunk = " ".join(nicks[i:i + 20])
+            chunk = " ".join(nicks[i : i + 20])
             await self._send(f":{SERVER_NAME} 353 {self.nick} = {CHANNEL} :{chunk}")
         await self._num(366, CHANNEL, "End of /NAMES list.")
 
@@ -587,10 +640,10 @@ class IRCSession:
 
     async def _welcome(self):
         callsign = self._bridge.callsign
-        await self._num(1,   f"Welcome to the ON4KST IRC Bridge, {self.nick}")
-        await self._num(2,   f"Your host is {SERVER_NAME}")
-        await self._num(3,   "This server was created today")
-        await self._num(4,   SERVER_NAME, "on4kst-bridge-1.0", "o", "o")
+        await self._num(1, f"Welcome to the ON4KST IRC Bridge, {self.nick}")
+        await self._num(2, f"Your host is {SERVER_NAME}")
+        await self._num(3, "This server was created today")
+        await self._num(4, SERVER_NAME, "on4kst-bridge-1.0", "o", "o")
         await self._num(375, f"- {SERVER_NAME} Message of the Day -")
         await self._num(372, "- ON4KST 144/432 MHz IRC bridge")
         await self._num(372, f"- Connected as: {callsign}")
@@ -621,7 +674,7 @@ class IRCSession:
         if line.startswith(":"):
             line = line.split(" ", 1)[-1]
         parts = line.split(" ", 2)
-        cmd   = parts[0].upper()
+        cmd = parts[0].upper()
 
         if cmd == "CAP":
             subcmd = parts[1].upper() if len(parts) > 1 else ""
@@ -658,7 +711,7 @@ class IRCSession:
         elif cmd == "PRIVMSG":
             if len(parts) >= 3:
                 target = parts[1]
-                text   = parts[2].lstrip(":")
+                text = parts[2].lstrip(":")
                 await self._bridge.irc_message(target, text)
 
         elif cmd == "AWAY":
@@ -676,7 +729,7 @@ class IRCSession:
             target = parts[1].strip() if len(parts) > 1 else CHANNEL
             if target.lower() == CHANNEL.lower() and self._bridge.kst:
                 for call, user in self._bridge.kst.online_users.items():
-                    flag  = "G" if user.get("away") else "H"
+                    flag = "G" if user.get("away") else "H"
                     gecos = user.get("info") or user["loc"]
                     await self._send(
                         f":{SERVER_NAME} 352 {self.nick} {CHANNEL} {call} on4kst "
@@ -686,14 +739,15 @@ class IRCSession:
 
         elif cmd == "WHOIS":
             target = (parts[1].strip() if len(parts) > 1 else "").upper()
-            kst    = self._bridge.kst
-            user   = kst.online_users.get(target) if kst else None
+            kst = self._bridge.kst
+            user = kst.online_users.get(target) if kst else None
             if user:
-                gecos    = user.get("info") or user["loc"]
-                loc      = user["loc"]
+                gecos = user.get("info") or user["loc"]
+                loc = user["loc"]
                 dist_str = _loc_distance_str(self._bridge.my_locator, loc)
-                await self._num(311, target, target, "on4kst", "*",
-                                f"{gecos} [{loc}]{dist_str}")
+                await self._num(
+                    311, target, target, "on4kst", "*", f"{gecos} [{loc}]{dist_str}"
+                )
                 await self._num(319, target, CHANNEL)
                 await self._num(312, target, SERVER_NAME, f"ON4KST {loc}")
                 if user.get("away"):
@@ -701,7 +755,7 @@ class IRCSession:
             await self._num(318, target, "End of WHOIS list.")
 
         elif cmd == "MODE":
-            ch   = parts[1].strip() if len(parts) > 1 else ""
+            ch = parts[1].strip() if len(parts) > 1 else ""
             flag = parts[2].strip() if len(parts) > 2 else ""
             if ch.lower() == CHANNEL.lower():
                 if flag == "b":
@@ -742,18 +796,20 @@ class IRCSession:
 # ON4KST client
 # ============================================================
 
+
 class ON4KSTClient:
-    def __init__(self, host: str, port: int,
-                 callsign: str, password: str, bridge: Bridge):
-        self.host     = host
-        self.port     = port
+    def __init__(
+        self, host: str, port: int, callsign: str, password: str, bridge: Bridge
+    ):
+        self.host = host
+        self.port = port
         self.callsign = callsign.upper()
         self.password = password
-        self._bridge  = bridge
+        self._bridge = bridge
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
-        self._buf         = b""
-        self._collecting  = False
+        self._buf = b""
+        self._collecting = False
         self._new_users: dict[str, dict] = {}
         self.online_users: dict[str, dict] = {}
 
@@ -836,9 +892,9 @@ class ON4KSTClient:
 
     def _process_chunk(self, chunk: bytes):
         self._buf += strip_iac(chunk)
-        decoded    = self._buf.decode("utf-8", errors="replace")
-        lines      = re.split(r"\r?\n", decoded)
-        self._buf  = lines[-1].encode("utf-8", errors="replace")
+        decoded = self._buf.decode("utf-8", errors="replace")
+        lines = re.split(r"\r?\n", decoded)
+        self._buf = lines[-1].encode("utf-8", errors="replace")
         for line in lines[:-1]:
             self._process_line(line)
         tail = lines[-1]
@@ -847,7 +903,7 @@ class ON4KSTClient:
             self._buf = b""
 
     def _process_line(self, line: str):
-        line     = html.unescape(line)
+        line = html.unescape(line)
         stripped = line.strip()
 
         # --- user list accumulation ---
@@ -855,7 +911,7 @@ class ON4KSTClient:
         if m:
             away = m.group(1) == "("
             call = m.group(2).upper()
-            loc  = m.group(3).upper()
+            loc = m.group(3).upper()
             info = m.group(4).strip()
             self._new_users[call] = {"loc": loc, "info": info, "away": away}
             self._collecting = True
@@ -879,16 +935,16 @@ class ON4KSTClient:
         # --- chat messages ---
         m = RE_CHAT_MSG.match(stripped)
         if m:
-            utc       = m.group(1)
+            utc = m.group(1)
             from_call = m.group(2).upper()
-            rest      = m.group(3)
+            rest = m.group(3)
             r = RE_RECIPIENT.match(rest)
             if r:
                 recipient = r.group(1).upper()
-                text      = r.group(2)
+                text = r.group(2)
             else:
                 recipient = None
-                text      = rest
+                text = rest
             asyncio.create_task(
                 self._bridge.kst_message(utc, from_call, recipient, text)
             )
@@ -898,7 +954,7 @@ class ON4KSTClient:
             return
         old = self.online_users
         self.online_users = dict(self._new_users)
-        self._new_users   = {}
+        self._new_users = {}
         asyncio.create_task(self._bridge.kst_userlist(old, self.online_users))
 
     async def read_loop(self):
@@ -907,9 +963,7 @@ class ON4KSTClient:
         while True:
             timeout = max(0.1, last_refresh + REFRESH_SEC - time.monotonic())
             try:
-                chunk = await asyncio.wait_for(
-                    self._reader.read(4096), timeout=timeout
-                )
+                chunk = await asyncio.wait_for(self._reader.read(4096), timeout=timeout)
             except asyncio.TimeoutError:
                 await self.send("/SHow USer")
                 last_refresh = time.monotonic()
@@ -927,6 +981,7 @@ class ON4KSTClient:
 # Entry point
 # ============================================================
 
+
 async def _rig_poller(bridge: Bridge):
     """Poll rigctld every RIGCTLD_POLL_S seconds and cache freq/mode on bridge."""
     was_connected = False
@@ -936,15 +991,16 @@ async def _rig_poller(bridge: Bridge):
             if not was_connected:
                 await bridge._notify_status(f"[rig] Connected – {qrg} MHz {mode}")
                 was_connected = True
-            bridge.rig_qrg  = qrg
+            bridge.rig_qrg = qrg
             bridge.rig_mode = mode
         else:
             if was_connected:
                 await bridge._notify_status("[rig] Disconnected – rig info unavailable")
                 was_connected = False
-            bridge.rig_qrg  = ""
+            bridge.rig_qrg = ""
             bridge.rig_mode = ""
         await asyncio.sleep(RIGCTLD_POLL_S)
+
 
 async def _run_kst(bridge: Bridge, callsign: str, password: str):
     """Keep ON4KST connected, reconnecting as needed."""
@@ -968,13 +1024,19 @@ async def _run_kst(bridge: Bridge, callsign: str, password: str):
                 await bridge._notify_status("[kst] Connected to ON4KST")
                 was_connected = True
                 await kst.read_loop()
-                await bridge._notify_status(f"[kst] Disconnected – reconnecting in {RECONNECT_S} s")
+                await bridge._notify_status(
+                    f"[kst] Disconnected – reconnecting in {RECONNECT_S} s"
+                )
             else:
                 print("[KST] Login failed.")
-                await bridge._notify_status(f"[kst] Login failed – reconnecting in {RECONNECT_S} s")
+                await bridge._notify_status(
+                    f"[kst] Login failed – reconnecting in {RECONNECT_S} s"
+                )
         else:
             if was_connected:
-                await bridge._notify_status(f"[kst] Connection lost – reconnecting in {RECONNECT_S} s")
+                await bridge._notify_status(
+                    f"[kst] Connection lost – reconnecting in {RECONNECT_S} s"
+                )
         bridge.kst = None
         was_connected = False
         print(f"[KST] Reconnecting in {RECONNECT_S} s ...")
@@ -987,15 +1049,14 @@ async def _main():
 
     bridge = Bridge(callsign)
 
-    async def _irc_handler(reader: asyncio.StreamReader,
-                           writer: asyncio.StreamWriter):
+    async def _irc_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         addr = writer.get_extra_info("peername")
         print(f"[IRC] Client connected from {addr}")
         session = IRCSession(reader, writer, bridge)
         await session.handle_loop()
 
     server = await asyncio.start_server(_irc_handler, IRC_HOST, IRC_PORT)
-    addrs  = ", ".join(str(s.getsockname()) for s in server.sockets)
+    addrs = ", ".join(str(s.getsockname()) for s in server.sockets)
     print(f"[IRC] Listening on {addrs}")
     print(f"[IRC] irssi: /server localhost {IRC_PORT}  (auto-joins {CHANNEL})")
 

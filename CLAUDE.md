@@ -1269,10 +1269,11 @@ clone: `uv run pre-commit install`. What actually runs is defined in
 `.pre-commit-config.yaml`, the only source of truth for it; CI (`test.yml`) runs the
 same config rather than a separately maintained list of steps.
 
-**Ruff policy**: `ruff check` only — no `ruff format`. The formatter strips intentional
-aligned-assignment style (e.g. `RIGCTLD_HOST   = "localhost"`) that aids readability in
-the configuration and dataclass sections. E501 (line length) and E701 (single-line
-`if …: return` in lookup functions like `_mode_str`) are suppressed globally.
+**Ruff policy**: both `ruff check` and `ruff format` run via pre-commit. Aligned-assignment
+style (e.g. `RIGCTLD_HOST   = "localhost"`) is no longer preserved — `ruff format` collapses
+it to single-space, and that's accepted as worth it to avoid diff noise from realigning a
+whole block whenever one name's length changes. E501 (line length) and E701 (single-line
+`if …: return` in lookup functions like `_mode_str`) are still suppressed for `ruff check`.
 
 ## Repository
 - `.gitignore` excludes generated files (`puskas_map.html`, `puskas_polar.png`) and scratch

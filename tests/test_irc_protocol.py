@@ -2,6 +2,7 @@
 IRC protocol tests — IRCSession via socketpair + MockBridge.
 No ON4KST server needed; tests the IRC-facing layer in isolation.
 """
+
 import asyncio
 
 import pytest
@@ -13,6 +14,7 @@ from tests.helpers import CALLSIGN, MockBridge, make_irc_pair
 # Fixture: a factory that yields (task, client, bridge) tuples
 # and cancels all tasks on teardown.
 # ============================================================
+
 
 @pytest.fixture
 async def make_registered():
@@ -30,7 +32,7 @@ async def make_registered():
         task = asyncio.create_task(session.handle_loop())
         tasks.append(task)
         await client.register(nick)
-        await client.drain()   # consume NICK-change + auto-join output
+        await client.drain()  # consume NICK-change + auto-join output
         return task, client, bridge
 
     yield _factory
@@ -47,6 +49,7 @@ async def make_registered():
 # CAP negotiation
 # ============================================================
 
+
 class TestCAPNegotiation:
     async def test_cap_ls_returns_empty_list(self):
         bridge = MockBridge()
@@ -56,7 +59,7 @@ class TestCAPNegotiation:
             await client.send("CAP LS 302")
             line = await client.recv()
             assert "CAP * LS" in line
-            assert line.rstrip().endswith(":")   # empty capability list
+            assert line.rstrip().endswith(":")  # empty capability list
         finally:
             task.cancel()
 
@@ -79,7 +82,7 @@ class TestCAPNegotiation:
         task = asyncio.create_task(session.handle_loop())
         try:
             await client.send("CAP LS 302")
-            await client.recv()   # consume CAP LS response
+            await client.recv()  # consume CAP LS response
             await client.send("NICK TESTNICK")
             await client.send("USER test 0 * :Test")
             # No CAP END yet — server must not send 001
@@ -96,6 +99,7 @@ class TestCAPNegotiation:
 # ============================================================
 # Registration / welcome
 # ============================================================
+
 
 class TestRegistration:
     async def test_welcome_numerics_present(self, make_registered):
@@ -130,8 +134,9 @@ class TestRegistration:
             lines += await client.drain()
             # No NICK command should appear (the join has the nick but as
             # part of a JOIN line, not a NICK line)
-            nick_cmds = [line for line in lines
-                         if line.lstrip(":").split()[0].upper() == "NICK"]
+            nick_cmds = [
+                line for line in lines if line.lstrip(":").split()[0].upper() == "NICK"
+            ]
             assert not nick_cmds, "No NICK change when nick already matches callsign"
         finally:
             task.cancel()
@@ -168,6 +173,7 @@ class TestRegistration:
 # ============================================================
 # Channel sync  (the set that irssi sends after JOIN)
 # ============================================================
+
 
 class TestChannelSync:
     async def test_mode_channel_returns_324(self, make_registered):
@@ -213,7 +219,9 @@ class TestChannelSync:
         _, client, _ = await make_registered(bridge)
         await client.send(f"WHO {CHANNEL}")
         lines = await client.recv_until("315")
-        assert any("352" in line for line in lines), "Plain WHO must produce 352 replies"
+        assert any("352" in line for line in lines), (
+            "Plain WHO must produce 352 replies"
+        )
 
     async def test_whois_shows_name_and_locator(self, make_registered):
         bridge = MockBridge()
@@ -268,6 +276,7 @@ class TestChannelSync:
 # AWAY forwarding
 # ============================================================
 
+
 class TestAway:
     async def test_away_with_message_sends_unset_here(self, make_registered):
         _, client, bridge = await make_registered()
@@ -287,6 +296,7 @@ class TestAway:
 # ============================================================
 # PRIVMSG routing
 # ============================================================
+
 
 class TestMessaging:
     async def test_channel_privmsg_forwarded_to_bridge(self, make_registered):

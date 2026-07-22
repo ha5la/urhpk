@@ -22,24 +22,25 @@ import time
 import urllib.request
 from pathlib import Path
 
-CONTEST_ID      = "67952021b55b621ae6619a4e"
-BASE_URL        = "https://bb.mrasz.hu/nest"
-LIST_URL        = "https://bb.mrasz.hu/nest/events/list?site=bb.mrasz.hu"
-CACHE_DIR       = Path(".puskas_cache")
-PUSKAS_DIR      = Path.home() / ".puskas"
-OUTPUT          = PUSKAS_DIR / "puskas-seen-stations.json"
-REQUEST_DELAY   = 0.3
+CONTEST_ID = "67952021b55b621ae6619a4e"
+BASE_URL = "https://bb.mrasz.hu/nest"
+LIST_URL = "https://bb.mrasz.hu/nest/events/list?site=bb.mrasz.hu"
+CACHE_DIR = Path(".puskas_cache")
+PUSKAS_DIR = Path.home() / ".puskas"
+OUTPUT = PUSKAS_DIR / "puskas-seen-stations.json"
+REQUEST_DELAY = 0.3
 REQUEST_TIMEOUT = 15
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; PuskasHarvester/1.0)",
-    "Accept":     "application/json",
-    "Referer":    "https://bb.mrasz.hu/",
+    "Accept": "application/json",
+    "Referer": "https://bb.mrasz.hu/",
 }
 
 
 # ──────────────────────────────────────────────────────────────
 # Cache
 # ──────────────────────────────────────────────────────────────
+
 
 def _cache_path(key: str) -> Path:
     CACHE_DIR.mkdir(exist_ok=True)
@@ -55,7 +56,9 @@ def _cached_get(url: str) -> dict | list | None:
         req = urllib.request.Request(url, headers=HEADERS)
         with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
             data = json.loads(resp.read())
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
         time.sleep(REQUEST_DELAY)
         return data
     except Exception as e:
@@ -66,6 +69,7 @@ def _cached_get(url: str) -> dict | list | None:
 # ──────────────────────────────────────────────────────────────
 # Event discovery
 # ──────────────────────────────────────────────────────────────
+
 
 def fetch_event_ids() -> list[str]:
     CACHE_DIR.mkdir(exist_ok=True)
@@ -78,15 +82,17 @@ def fetch_event_ids() -> list[str]:
             req = urllib.request.Request(LIST_URL, headers=HEADERS)
             with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
                 data = json.loads(resp.read())
-            list_cache.write_text(json.dumps(data, ensure_ascii=False, indent=2),
-                                  encoding="utf-8")
+            list_cache.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
             time.sleep(REQUEST_DELAY)
         except Exception as e:
             print(f"  [error] {LIST_URL} → {e}")
             return []
 
     rounds = [
-        e for e in data
+        e
+        for e in data
         if e.get("isClaimed") and e.get("contest", {}).get("_id") == CONTEST_ID
     ]
     # Sort oldest-first by submitDeadline (ISO string, sorts lexicographically).
@@ -102,8 +108,9 @@ def fetch_event_ids() -> list[str]:
 # API
 # ──────────────────────────────────────────────────────────────
 
+
 def fetch_claimed(event_id: str) -> list[dict]:
-    url  = f"{BASE_URL}/claimed?eventId={event_id}"
+    url = f"{BASE_URL}/claimed?eventId={event_id}"
     data = _cached_get(url)
     if not data:
         return []
@@ -111,14 +118,14 @@ def fetch_claimed(event_id: str) -> list[dict]:
     for category in data:
         for log in category.get("logs", []):
             call = log.get("_id", {}).get("callsign", "").upper().strip()
-            wwl  = log.get("_id", {}).get("WWL", "").upper().strip()
+            wwl = log.get("_id", {}).get("WWL", "").upper().strip()
             if call and wwl and call not in stations:
                 stations[call] = wwl
     return [{"callsign": c, "wwl": w} for c, w in stations.items()]
 
 
 def fetch_round_codes(event_id: str, callsign: str) -> list[str]:
-    url  = f"{BASE_URL}/log?eventId={event_id}&skip=0&limit=25&callsign={callsign}"
+    url = f"{BASE_URL}/log?eventId={event_id}&skip=0&limit=25&callsign={callsign}"
     data = _cached_get(url)
     if not data:
         return []
@@ -132,16 +139,18 @@ def fetch_round_codes(event_id: str, callsign: str) -> list[str]:
 
 
 def fetch_qsos(event_id: str, callsign: str, round_code: str) -> list[dict]:
-    url  = (f"{BASE_URL}/qso?eventId={event_id}"
-            f"&callsign={callsign}&roundCode={round_code}&isClaimed=true")
+    url = (
+        f"{BASE_URL}/qso?eventId={event_id}"
+        f"&callsign={callsign}&roundCode={round_code}&isClaimed=true"
+    )
     data = _cached_get(url)
     if not data:
         return []
     qsos = []
     for q in data.get("qsos", []):
         dx_call = q.get("callsign", "").upper().strip()
-        dx_wwl  = q.get("rWWL", "").upper().strip()
-        band    = q.get("band", "").strip()
+        dx_wwl = q.get("rWWL", "").upper().strip()
+        band = q.get("band", "").strip()
         if dx_call and dx_wwl:
             qsos.append({"callsign": dx_call, "wwl": dx_wwl, "band": band})
     return qsos
@@ -150,6 +159,7 @@ def fetch_qsos(event_id: str, callsign: str, round_code: str) -> list[dict]:
 # ──────────────────────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────────────────────
+
 
 def main():
     print("Puskás URH Kupa – Station Harvester")
@@ -185,7 +195,7 @@ def main():
 
         for j, s in enumerate(claimed, 1):
             call = s["callsign"]
-            wwl  = s["wwl"]
+            wwl = s["wwl"]
             _record(call, wwl)
 
             for code in fetch_round_codes(event_id, call):
@@ -195,10 +205,15 @@ def main():
                         stations[call]["bands"].append(band)
 
             if j % 10 == 0 or j == len(claimed):
-                print(f"  {j}/{len(claimed)} processed — {len(stations)} total", flush=True)
+                print(
+                    f"  {j}/{len(claimed)} processed — {len(stations)} total",
+                    flush=True,
+                )
 
     PUSKAS_DIR.mkdir(exist_ok=True)
-    OUTPUT.write_text(json.dumps(stations, ensure_ascii=False, indent=2), encoding="utf-8")
+    OUTPUT.write_text(
+        json.dumps(stations, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     print(f"\n[OK] {len(stations)} stations → {OUTPUT}")
     print(f"     Delete {CACHE_DIR}/ to force a fresh fetch next time")
 

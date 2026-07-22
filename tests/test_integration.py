@@ -2,6 +2,7 @@
 Integration tests — full bridge with MockKSTServer and IRCClientHelper.
 Covers the end-to-end message flows between ON4KST and IRC.
 """
+
 import asyncio
 
 import pytest
@@ -19,6 +20,7 @@ from tests.helpers import (
 # Fixture: full bridge environment
 # ============================================================
 
+
 @pytest.fixture
 async def bridge_env():
     """
@@ -34,14 +36,12 @@ async def bridge_env():
         await IRCSession(r, w, bridge).handle_loop()
 
     irc_server = await asyncio.start_server(handle_irc, "127.0.0.1", 0)
-    irc_port   = irc_server.sockets[0].getsockname()[1]
+    irc_port = irc_server.sockets[0].getsockname()[1]
 
     kst_ref = []
 
     async def run_kst():
-        kst = ON4KSTClient(
-            "127.0.0.1", kst_server.port, CALLSIGN, PASSWORD, bridge
-        )
+        kst = ON4KSTClient("127.0.0.1", kst_server.port, CALLSIGN, PASSWORD, bridge)
         kst_ref.append(kst)
         try:
             if await kst.connect() and await kst.login():
@@ -65,7 +65,7 @@ async def bridge_env():
     except (asyncio.CancelledError, asyncio.TimeoutError):
         pass
     irc_server.close()
-    await asyncio.sleep(0.1)   # let active sessions drain; skip wait_closed()
+    await asyncio.sleep(0.1)  # let active sessions drain; skip wait_closed()
     await kst_server.stop()
 
 
@@ -81,6 +81,7 @@ async def irc_connect(irc_port: int, nick: str = "TESTNICK"):
 # ============================================================
 # ON4KST → IRC
 # ============================================================
+
 
 class TestKSTToIRC:
     async def test_public_message_forwarded(self, bridge_env):
@@ -99,9 +100,7 @@ class TestKSTToIRC:
         _, kst_server, irc_port = bridge_env
         client, w = await irc_connect(irc_port)
         try:
-            await kst_server.inject(
-                f"0712Z G6DDN Ian 2m14> ({CALLSIGN}) Hey, sked?"
-            )
+            await kst_server.inject(f"0712Z G6DDN Ian 2m14> ({CALLSIGN}) Hey, sked?")
             line = await client.recv()
             assert f"PRIVMSG {CALLSIGN}" in line
             assert "G6DDN" in line
@@ -113,9 +112,7 @@ class TestKSTToIRC:
         _, kst_server, irc_port = bridge_env
         client, w = await irc_connect(irc_port)
         try:
-            await kst_server.inject(
-                "0712Z G6DDN Ian 2m14> (DK5DV) See you on 2m!"
-            )
+            await kst_server.inject("0712Z G6DDN Ian 2m14> (DK5DV) See you on 2m!")
             line = await client.recv()
             assert f"PRIVMSG {CHANNEL}" in line
             assert "(DK5DV)" in line
@@ -126,9 +123,7 @@ class TestKSTToIRC:
         _, kst_server, irc_port = bridge_env
         client, w = await irc_connect(irc_port)
         try:
-            await kst_server.inject(
-                f"0712Z {CALLSIGN} HA5LA JN97MX> Testing 1 2 3"
-            )
+            await kst_server.inject(f"0712Z {CALLSIGN} HA5LA JN97MX> Testing 1 2 3")
             with pytest.raises(TimeoutError):
                 await client.recv(timeout=0.3)
         finally:
@@ -139,12 +134,10 @@ class TestKSTToIRC:
         client, w = await irc_connect(irc_port)
         try:
             # Entities must be decoded in the message body before forwarding
-            await kst_server.inject(
-                "0712Z G6DDN Ian 2m14> 6&amp;2m &#9889; sked?"
-            )
+            await kst_server.inject("0712Z G6DDN Ian 2m14> 6&amp;2m &#9889; sked?")
             line = await client.recv()
-            assert "6&2m" in line    # &amp; → &
-            assert "⚡" in line      # &#9889; → ⚡
+            assert "6&2m" in line  # &amp; → &
+            assert "⚡" in line  # &#9889; → ⚡
         finally:
             w.close()
 
@@ -152,6 +145,7 @@ class TestKSTToIRC:
 # ============================================================
 # IRC → ON4KST
 # ============================================================
+
 
 class TestIRCToKST:
     async def test_channel_message_forwarded(self, bridge_env):
@@ -178,6 +172,7 @@ class TestIRCToKST:
 # ============================================================
 # Presence (/SET HERE / /UNSET HERE)
 # ============================================================
+
 
 class TestPresence:
     async def test_set_here_on_irc_connect(self, bridge_env):
@@ -212,11 +207,11 @@ class TestPresence:
         try:
             await client.send("AWAY :Gone")
             await asyncio.sleep(0.05)
-            await client.send("AWAY")          # bare AWAY = back
+            await client.send("AWAY")  # bare AWAY = back
             await asyncio.sleep(0.1)
             sent = kst_server.received
             set_here_count = sum(1 for c in sent if "/SET HERE" == c)
-            assert set_here_count >= 2         # once on connect, once on back
+            assert set_here_count >= 2  # once on connect, once on back
         finally:
             w.close()
 
@@ -224,6 +219,7 @@ class TestPresence:
 # ============================================================
 # User list → JOIN / PART
 # ============================================================
+
 
 class TestUserList:
     async def test_new_user_triggers_join(self, bridge_env):
@@ -246,7 +242,7 @@ class TestUserList:
             # First establish G6DDN as online via a proper user list
             await kst_server.inject("G6DDN           IO83RJ Ian")
             await kst_server.inject("1234Z HA5LA HA5LA JN97MX chat >")
-            await client.recv_until("G6DDN")   # wait for the JOIN
+            await client.recv_until("G6DDN")  # wait for the JOIN
 
             # New user list without G6DDN → G6DDN should PART
             await kst_server.inject("DK5DV            JO30XS Gerd")
@@ -261,12 +257,15 @@ class TestUserList:
 # Sked commands
 # ============================================================
 
+
 class TestSkedCommands:
     async def test_pm_sked_sends_cq_with_sked_text(self, bridge_env):
         bridge, kst_server, irc_port = bridge_env
         bridge.my_locator = "JN97MX"
         bridge.kst.online_users["G6DDN"] = {
-            "loc": "IO83RJ", "info": "Ian", "away": False
+            "loc": "IO83RJ",
+            "info": "Ian",
+            "away": False,
         }
         client, w = await irc_connect(irc_port)
         try:
@@ -283,7 +282,9 @@ class TestSkedCommands:
         bridge, kst_server, irc_port = bridge_env
         bridge.my_locator = "JN97MX"
         bridge.kst.online_users["G6DDN"] = {
-            "loc": "IO83RJ", "info": "Ian", "away": False
+            "loc": "IO83RJ",
+            "info": "Ian",
+            "away": False,
         }
         client, w = await irc_connect(irc_port)
         try:
@@ -313,6 +314,7 @@ class TestSkedCommands:
 # Local channel commands (!list, !help, !scatter, unknown)
 # ============================================================
 
+
 class TestLocalCommands:
     async def test_exclamation_not_forwarded_to_kst(self, bridge_env):
         _, kst_server, irc_port = bridge_env
@@ -334,8 +336,9 @@ class TestLocalCommands:
             lines = await client.drain()
             notices = [line for line in lines if "NOTICE" in line]
             assert notices, "!help must produce NOTICE lines"
-            assert all(CHANNEL in line for line in notices), \
+            assert all(CHANNEL in line for line in notices), (
                 "NOTICEs must target the channel, not the status window"
+            )
         finally:
             w.close()
 
@@ -356,7 +359,9 @@ class TestLocalCommands:
         bridge, kst_server, irc_port = bridge_env
         bridge.my_locator = "JN97MX"
         bridge.kst.online_users["G6DDN"] = {
-            "loc": "IO83RJ", "info": "Ian", "away": False
+            "loc": "IO83RJ",
+            "info": "Ian",
+            "away": False,
         }
         client, w = await irc_connect(irc_port)
         try:
@@ -384,19 +389,18 @@ class TestLocalCommands:
 # rigctld integration
 # ============================================================
 
+
 class MockRigctld:
     """Minimal rigctld stub: responds to f\n+m\n with fixed freq and mode."""
 
     def __init__(self, freq_hz: str = "144174000", mode: str = "USB"):
         self._freq_hz = freq_hz
-        self._mode    = mode
-        self._server  = None
+        self._mode = mode
+        self._server = None
         self.port: int = 0
 
     async def start(self):
-        self._server = await asyncio.start_server(
-            self._handle, "127.0.0.1", 0
-        )
+        self._server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
         self.port = self._server.sockets[0].getsockname()[1]
 
     async def stop(self):
@@ -407,8 +411,7 @@ class MockRigctld:
             except asyncio.TimeoutError:
                 pass
 
-    async def _handle(self, reader: asyncio.StreamReader,
-                      writer: asyncio.StreamWriter):
+    async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         try:
             while True:
                 line = await reader.readline()
@@ -430,10 +433,12 @@ class TestRigctld:
     async def test_sked_includes_qrg_when_cache_populated(self, bridge_env):
         bridge, kst_server, irc_port = bridge_env
         bridge.my_locator = "JN97MX"
-        bridge.rig_qrg  = "144.174"
+        bridge.rig_qrg = "144.174"
         bridge.rig_mode = "USB"
         bridge.kst.online_users["G6DDN"] = {
-            "loc": "IO83RJ", "info": "Ian", "away": False
+            "loc": "IO83RJ",
+            "info": "Ian",
+            "away": False,
         }
         client, w = await irc_connect(irc_port)
         try:
@@ -448,10 +453,12 @@ class TestRigctld:
     async def test_sked_omits_qrg_when_rigctld_unavailable(self, bridge_env):
         bridge, kst_server, irc_port = bridge_env
         bridge.my_locator = "JN97MX"
-        bridge.rig_qrg  = ""
+        bridge.rig_qrg = ""
         bridge.rig_mode = ""
         bridge.kst.online_users["G6DDN"] = {
-            "loc": "IO83RJ", "info": "Ian", "away": False
+            "loc": "IO83RJ",
+            "info": "Ian",
+            "away": False,
         }
         client, w = await irc_connect(irc_port)
         try:
@@ -467,7 +474,7 @@ class TestRigctld:
         rig = MockRigctld(freq_hz="144174000", mode="USB")
         await rig.start()
         orig_host, orig_port = bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT
-        orig_poll  = bridge_module.RIGCTLD_POLL_S
+        orig_poll = bridge_module.RIGCTLD_POLL_S
         bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT = "127.0.0.1", rig.port
         bridge_module.RIGCTLD_POLL_S = 0.1
         notices = []
@@ -487,8 +494,8 @@ class TestRigctld:
                 await task
             except asyncio.CancelledError:
                 pass
-            bridge_module.RIGCTLD_HOST   = orig_host
-            bridge_module.RIGCTLD_PORT   = orig_port
+            bridge_module.RIGCTLD_HOST = orig_host
+            bridge_module.RIGCTLD_PORT = orig_port
             bridge_module.RIGCTLD_POLL_S = orig_poll
             await rig.stop()
 
@@ -497,7 +504,7 @@ class TestRigctld:
         rig = MockRigctld()
         await rig.start()
         orig_host, orig_port = bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT
-        orig_poll  = bridge_module.RIGCTLD_POLL_S
+        orig_poll = bridge_module.RIGCTLD_POLL_S
         bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT = "127.0.0.1", rig.port
         bridge_module.RIGCTLD_POLL_S = 0.1
         notices = []
@@ -508,9 +515,9 @@ class TestRigctld:
         bridge._notify_status = fake_notify_status
         task = asyncio.create_task(bridge_module._rig_poller(bridge))
         try:
-            await asyncio.sleep(0.3)   # let it connect
+            await asyncio.sleep(0.3)  # let it connect
             await rig.stop()
-            await asyncio.sleep(0.4)   # let it detect disconnect
+            await asyncio.sleep(0.4)  # let it detect disconnect
             assert any("Disconnected" in n for n in notices)
         finally:
             task.cancel()
@@ -518,6 +525,6 @@ class TestRigctld:
                 await task
             except asyncio.CancelledError:
                 pass
-            bridge_module.RIGCTLD_HOST   = orig_host
-            bridge_module.RIGCTLD_PORT   = orig_port
+            bridge_module.RIGCTLD_HOST = orig_host
+            bridge_module.RIGCTLD_PORT = orig_port
             bridge_module.RIGCTLD_POLL_S = orig_poll

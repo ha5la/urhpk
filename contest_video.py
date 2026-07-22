@@ -31,6 +31,7 @@ filenames) is used only to line QSOs up against the audio. The EDI QSO times
 are UTC; the UTC->local offset is derived automatically from the data, so DST
 is handled without configuration.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -53,52 +54,88 @@ from PIL import Image, ImageDraw, ImageFont
 # ---------------------------------------------------------------------------
 
 MORSE = {
-    '.-': 'A', '-...': 'B', '-.-.': 'C', '-..': 'D', '.': 'E', '..-.': 'F',
-    '--.': 'G', '....': 'H', '..': 'I', '.---': 'J', '-.-': 'K', '.-..': 'L',
-    '--': 'M', '-.': 'N', '---': 'O', '.--.': 'P', '--.-': 'Q', '.-.': 'R',
-    '...': 'S', '-': 'T', '..-': 'U', '...-': 'V', '.--': 'W', '-..-': 'X',
-    '-.--': 'Y', '--..': 'Z', '-----': '0', '.----': '1', '..---': '2',
-    '...--': '3', '....-': '4', '.....': '5', '-....': '6', '--...': '7',
-    '---..': '8', '----.': '9', '.-.-.-': '.', '--..--': ',', '..--..': '?',
-    '-..-.': '/', '-...-': '=', '.-.-.': '+', '-....-': '-', '-.-.--': '!',
+    ".-": "A",
+    "-...": "B",
+    "-.-.": "C",
+    "-..": "D",
+    ".": "E",
+    "..-.": "F",
+    "--.": "G",
+    "....": "H",
+    "..": "I",
+    ".---": "J",
+    "-.-": "K",
+    ".-..": "L",
+    "--": "M",
+    "-.": "N",
+    "---": "O",
+    ".--.": "P",
+    "--.-": "Q",
+    ".-.": "R",
+    "...": "S",
+    "-": "T",
+    "..-": "U",
+    "...-": "V",
+    ".--": "W",
+    "-..-": "X",
+    "-.--": "Y",
+    "--..": "Z",
+    "-----": "0",
+    ".----": "1",
+    "..---": "2",
+    "...--": "3",
+    "....-": "4",
+    ".....": "5",
+    "-....": "6",
+    "--...": "7",
+    "---..": "8",
+    "----.": "9",
+    ".-.-.-": ".",
+    "--..--": ",",
+    "..--..": "?",
+    "-..-.": "/",
+    "-...-": "=",
+    ".-.-.": "+",
+    "-....-": "-",
+    "-.-.--": "!",
 }
 
-ENV_FS = 200        # envelope sample rate (Hz) after demodulation
+ENV_FS = 200  # envelope sample rate (Hz) after demodulation
 LOWPASS_CUTOFF_HZ = 120.0  # envelope filter cutoff -- covers real CW keying bandwidth
-LOWPASS_NTAPS = 321        # windowed-sinc length; longer than the old boxcar for a
-                           # much sharper stopband (rejects moderate-offset QRM
-                           # noticeably better -- verified against real recordings)
+LOWPASS_NTAPS = 321  # windowed-sinc length; longer than the old boxcar for a
+# much sharper stopband (rejects moderate-offset QRM
+# noticeably better -- verified against real recordings)
 THR_HI_FRAC = 0.35  # hysteresis: fraction of (peak-floor) to trigger "on"
 THR_LO_FRAC = 0.15  # hysteresis: fraction of (peak-floor) to release back to "off"
 DEBOUNCE_DIT_FRAC = 0.5  # on/off runs shorter than this fraction of the segment's
-                         # own preliminary dit estimate are noise, not real keying
-                         # -- merged into their neighbour (see _debounce_on)
+# own preliminary dit estimate are noise, not real keying
+# -- merged into their neighbour (see _debounce_on)
 
 # A segment's decode is trusted (shown in the ticker) only if it looks like a
 # real over rather than band noise. The long "listening / calling CQ" stretches
 # between QSOs carry many overlapping signals and noise at the CW pitch, which a
 # single-tone decoder turns into gibberish; these three gates reject them while
 # keeping every genuine exchange.
-MAX_OVER_S = 35.0    # a real over is short; long segments are listening periods.
-                     # No clean statistical gap here (unlike e.g.
-                     # FREQ_MATCH_TOLERANCE_HZ) -- real segment durations form
-                     # a continuum from 30s up past 100s, so this is a modest,
-                     # evidence-backed nudge (was 30.0) to capture one confirmed
-                     # real 32.5s exchange with a full locator exchange, not a
-                     # broad guess. The other three gates (SNR/quality/dominance)
-                     # still guard against genuine long listening periods that
-                     # happen to fall in the 30-35s range.
-MIN_SNR_DB = 20.0    # reject weak noise-only segments
-MIN_QUALITY = 0.5    # reject text dominated by isolated single letters (noise)
+MAX_OVER_S = 35.0  # a real over is short; long segments are listening periods.
+# No clean statistical gap here (unlike e.g.
+# FREQ_MATCH_TOLERANCE_HZ) -- real segment durations form
+# a continuum from 30s up past 100s, so this is a modest,
+# evidence-backed nudge (was 30.0) to capture one confirmed
+# real 32.5s exchange with a full locator exchange, not a
+# broad guess. The other three gates (SNR/quality/dominance)
+# still guard against genuine long listening periods that
+# happen to fall in the 30-35s range.
+MIN_SNR_DB = 20.0  # reject weak noise-only segments
+MIN_QUALITY = 0.5  # reject text dominated by isolated single letters (noise)
 MAX_DOMINANCE = 0.4  # reject text where one letter dominates (chopped carrier)
 MIN_CHARS_FOR_DOMINANCE = 5  # below this length, dominance is structurally
-                             # high regardless of content -- see _dominance
+# high regardless of content -- see _dominance
 
 
 def _quality(text: str) -> float:
     """Fraction of whitespace tokens longer than one char. Noise decodes to a
     stream of single letters (E/T/I/S); real overs to callsigns and reports."""
-    toks = [t for t in text.split(' ') if t]
+    toks = [t for t in text.split(" ") if t]
     if not toks:
         return 0.0
     return 1.0 - sum(1 for t in toks if len(t) == 1) / len(toks)
@@ -117,14 +154,15 @@ def _dominance(text: str) -> float:
     correctly-decoded "TU" and "73EE" were being silently dropped from
     the ticker. The "chopped carrier" pattern this guards against only
     shows up over many characters in practice anyway (see test_contest_video)."""
-    chars = [c for c in text if c != ' ']
+    chars = [c for c in text if c != " "]
     if len(chars) < MIN_CHARS_FOR_DOMINANCE:
         return 0.0
     return max(chars.count(c) for c in set(chars)) / len(chars)
 
 
-def gate_events(dur: float, events: list["CharEvent"], snr: float,
-                check_duration: bool = True) -> list["CharEvent"]:
+def gate_events(
+    dur: float, events: list["CharEvent"], snr: float, check_duration: bool = True
+) -> list["CharEvent"]:
     """Return events if the segment is a trustworthy over, else [].
 
     check_duration=False skips the MAX_OVER_S check -- for telemetry-
@@ -133,17 +171,20 @@ def gate_events(dur: float, events: list["CharEvent"], snr: float,
     rejecting a segment whose unexplained length makes it suspicious --
     doesn't apply: telemetry mode confirmation is already stronger evidence
     than length that this specific span is genuine CW, not noise."""
-    text = ''.join(e.ch for e in events)
-    if ((not check_duration or dur < MAX_OVER_S) and snr >= MIN_SNR_DB
-            and _quality(text) >= MIN_QUALITY
-            and _dominance(text) <= MAX_DOMINANCE):
+    text = "".join(e.ch for e in events)
+    if (
+        (not check_duration or dur < MAX_OVER_S)
+        and snr >= MIN_SNR_DB
+        and _quality(text) >= MIN_QUALITY
+        and _dominance(text) <= MAX_DOMINANCE
+    ):
         return events
     return []
 
 
 @dataclass
 class CharEvent:
-    t: float   # seconds, relative to segment start
+    t: float  # seconds, relative to segment start
     ch: str
 
 
@@ -194,7 +235,7 @@ def _envelope(x: np.ndarray, sr: int, pitch: float) -> tuple[np.ndarray, float]:
     t = np.arange(len(x)) / sr
     iq = x * np.exp(-2j * np.pi * pitch * t)
     h = _lowpass_kernel(LOWPASS_CUTOFF_HZ, sr, LOWPASS_NTAPS)
-    env = np.abs(np.convolve(iq, h, 'same'))
+    env = np.abs(np.convolve(iq, h, "same"))
     win = max(1, int(sr / ENV_FS))
     return env[::win], sr / win
 
@@ -272,7 +313,9 @@ def _estimate_dit(runs: list[tuple[bool, float, int]]) -> float | None:
     return dit if dit > 0 else None
 
 
-def _decode_samples(x: np.ndarray, sr: int, pitch: float = 600.0) -> tuple[list[CharEvent], float]:
+def _decode_samples(
+    x: np.ndarray, sr: int, pitch: float = 600.0
+) -> tuple[list[CharEvent], float]:
     """Decode a raw sample buffer into timed characters and its SNR in dB --
     the actual demod/hysteresis/debounce/decode pipeline, factored out of
     decode_segment so decode_long_segment (see below) can run the same
@@ -318,7 +361,7 @@ def _decode_samples(x: np.ndarray, sr: int, pitch: float = 600.0) -> tuple[list[
         return [], snr
 
     events: list[CharEvent] = []
-    sym = ''
+    sym = ""
     sym_start = 0.0
     for s, d, idx in runs:
         t0 = idx / efs
@@ -326,18 +369,18 @@ def _decode_samples(x: np.ndarray, sr: int, pitch: float = 600.0) -> tuple[list[
         if s:
             if not sym:
                 sym_start = t0
-            sym += '.' if u < 2.0 else '-'
+            sym += "." if u < 2.0 else "-"
         else:
-            if u >= 2.0 and sym:          # end of character
-                ch = MORSE.get(sym, '')
+            if u >= 2.0 and sym:  # end of character
+                ch = MORSE.get(sym, "")
                 if ch:
                     events.append(CharEvent(sym_start, ch))
-                sym = ''
-            if u >= 5.0:                  # word gap
-                if events and events[-1].ch != ' ':
-                    events.append(CharEvent(t0, ' '))
+                sym = ""
+            if u >= 5.0:  # word gap
+                if events and events[-1].ch != " ":
+                    events.append(CharEvent(t0, " "))
     if sym:
-        ch = MORSE.get(sym, '')
+        ch = MORSE.get(sym, "")
         if ch:
             events.append(CharEvent(sym_start, ch))
     return events, snr
@@ -380,8 +423,9 @@ def _read_wav_range(path: str, t0: float, t1: float) -> tuple[np.ndarray, int]:
     return x, sr
 
 
-def cw_subranges(seg: "Segment", state_events: list[tuple[float, float, "SegState"]]
-                 ) -> list[tuple[float, float]]:
+def cw_subranges(
+    seg: "Segment", state_events: list[tuple[float, float, "SegState"]]
+) -> list[tuple[float, float]]:
     """Telemetry-confirmed CW-mode time ranges within `seg`'s own span,
     expressed as (start, end) offsets in seconds relative to the segment's
     own start (0..seg.dur) -- deliberately not absolute video-timeline
@@ -399,7 +443,7 @@ def cw_subranges(seg: "Segment", state_events: list[tuple[float, float, "SegStat
     seg_start, seg_end = seg.audio_t, seg.audio_t + seg.dur
     out: list[tuple[float, float]] = []
     for start, end, st in state_events:
-        if st.mode != 'CW':
+        if st.mode != "CW":
             continue
         s0, s1 = max(start, seg_start), min(end, seg_end)
         if s1 > s0:
@@ -407,8 +451,11 @@ def cw_subranges(seg: "Segment", state_events: list[tuple[float, float, "SegStat
     return out
 
 
-def decode_long_segment(seg: "Segment", state_events: list[tuple[float, float, "SegState"]],
-                        pitch: float = 600.0) -> list[tuple[float, float, list[CharEvent]]]:
+def decode_long_segment(
+    seg: "Segment",
+    state_events: list[tuple[float, float, "SegState"]],
+    pitch: float = 600.0,
+) -> list[tuple[float, float, list[CharEvent]]]:
     """Recover CW content from a segment too long to decode as a whole (see
     MAX_OVER_S) by decoding just its telemetry-confirmed CW-mode sub-ranges,
     if any -- e.g. two other stations negotiating a CW frequency over voice,
@@ -448,17 +495,22 @@ def decode_long_segment(seg: "Segment", state_events: list[tuple[float, float, "
 # Timeline + EDI
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class Segment:
     path: str
-    wall: datetime      # local wall-clock start (from filename)
-    dur: float          # seconds (full recorded duration)
-    audio_t: float      # start offset in the output video (seconds)
+    wall: datetime  # local wall-clock start (from filename)
+    dur: float  # seconds (full recorded duration)
+    audio_t: float  # start offset in the output video (seconds)
     events: list[CharEvent] = field(default_factory=list)
     eff_dur: float | None = None  # trimmed duration in output; None = use full dur
-    freq_hz: int | None = None    # from the WAV's own IC-9700 metadata (read_wav_metadata)
-    mode: str | None = None       # ditto
-    ptt: bool | None = None       # ditto -- ground truth at the segment's own start, no telemetry lag
+    freq_hz: int | None = (
+        None  # from the WAV's own IC-9700 metadata (read_wav_metadata)
+    )
+    mode: str | None = None  # ditto
+    ptt: bool | None = (
+        None  # ditto -- ground truth at the segment's own start, no telemetry lag
+    )
 
 
 def _eff(s: Segment) -> float:
@@ -467,7 +519,7 @@ def _eff(s: Segment) -> float:
 
 @dataclass
 class Qso:
-    dt: datetime        # UTC (from EDI)
+    dt: datetime  # UTC (from EDI)
     call: str
     rst_s: str
     nr_s: str
@@ -476,17 +528,17 @@ class Qso:
     loc: str
     pts: int
     dup: bool
-    band: str = ''      # from the EDI PBand header (2M/70CM/23CM); '' if unknown
-    mode: str = ''      # SSB/CW/FM, from the EDI per-QSO mode code; '' if unknown
+    band: str = ""  # from the EDI PBand header (2M/70CM/23CM); '' if unknown
+    mode: str = ""  # SSB/CW/FM, from the EDI per-QSO mode code; '' if unknown
 
 
 def scan_segments(recdir: str) -> list[Segment]:
     segs: list[Segment] = []
     audio_t = 0.0
-    files = sorted(f for f in os.listdir(recdir) if f.lower().endswith('.wav'))
+    files = sorted(f for f in os.listdir(recdir) if f.lower().endswith(".wav"))
     for f in files:
         try:
-            wall = datetime.strptime(f[:15], '%Y%m%d_%H%M%S')
+            wall = datetime.strptime(f[:15], "%Y%m%d_%H%M%S")
         except ValueError:
             continue
         p = os.path.join(recdir, f)
@@ -499,8 +551,15 @@ def scan_segments(recdir: str) -> list[Segment]:
 
 
 _WAV_TITLE_RE = re.compile(
-    r'(\d+)\.(\d+)\.(\d+)\s+(\S+)\s+.*?(RX|TX)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s*$')
-_SSB_ALIASES = ('USB', 'LSB', 'AM', 'DSB', 'SAM')  # matches puskas_logger.py's _mode_str
+    r"(\d+)\.(\d+)\.(\d+)\s+(\S+)\s+.*?(RX|TX)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s*$"
+)
+_SSB_ALIASES = (
+    "USB",
+    "LSB",
+    "AM",
+    "DSB",
+    "SAM",
+)  # matches puskas_logger.py's _mode_str
 
 
 def parse_wav_title(title: str) -> tuple[int, str, bool] | None:
@@ -519,8 +578,8 @@ def parse_wav_title(title: str) -> tuple[int, str, bool] | None:
     mhz, khz, h10, mode, rxtx = m.groups()
     freq_hz = int(mhz) * 1_000_000 + int(khz) * 1_000 + int(h10) * 10
     if mode in _SSB_ALIASES:
-        mode = 'SSB'
-    return freq_hz, mode, rxtx == 'TX'
+        mode = "SSB"
+    return freq_hz, mode, rxtx == "TX"
 
 
 def _read_wav_title(path: str) -> str | None:
@@ -528,28 +587,30 @@ def _read_wav_title(path: str) -> str | None:
     RIFF chunk structure -- no subprocess. ffprobe can read the same tag
     but spawning it once per file doesn't scale: measured 707 files at
     ~112s via ffprobe vs. ~0.02s reading the raw chunk headers directly."""
-    with open(path, 'rb') as f:
+    with open(path, "rb") as f:
         header = f.read(12)
-        if len(header) < 12 or header[0:4] != b'RIFF' or header[8:12] != b'WAVE':
+        if len(header) < 12 or header[0:4] != b"RIFF" or header[8:12] != b"WAVE":
             return None
         while True:
             chunk_header = f.read(8)
             if len(chunk_header) < 8:
                 return None
             chunk_id = chunk_header[0:4]
-            chunk_size = int.from_bytes(chunk_header[4:8], 'little')
-            if chunk_id == b'LIST':
+            chunk_size = int.from_bytes(chunk_header[4:8], "little")
+            if chunk_id == b"LIST":
                 data = f.read(chunk_size)
                 if chunk_size % 2:
                     f.read(1)  # chunks are padded to an even size
-                if data[0:4] == b'INFO':
+                if data[0:4] == b"INFO":
                     pos = 4
                     while pos + 8 <= len(data):
-                        sub_id = data[pos:pos + 4]
-                        sub_size = int.from_bytes(data[pos + 4:pos + 8], 'little')
-                        sub_data = data[pos + 8:pos + 8 + sub_size]
-                        if sub_id == b'INAM':
-                            return sub_data.rstrip(b'\x00').decode('ascii', errors='replace')
+                        sub_id = data[pos : pos + 4]
+                        sub_size = int.from_bytes(data[pos + 4 : pos + 8], "little")
+                        sub_data = data[pos + 8 : pos + 8 + sub_size]
+                        if sub_id == b"INAM":
+                            return sub_data.rstrip(b"\x00").decode(
+                                "ascii", errors="replace"
+                            )
                         pos += 8 + sub_size + (sub_size % 2)
             else:
                 f.seek(chunk_size + (chunk_size % 2), 1)
@@ -619,35 +680,48 @@ _EDI_MODE = {"1": "SSB", "2": "CW", "6": "FM"}
 
 
 def parse_edi(path: str) -> tuple[str, str, list[Qso]]:
-    mycall, mywwl, band = '', '', ''
+    mycall, mywwl, band = "", "", ""
     qsos: list[Qso] = []
     in_records = False
-    for line in open(path, encoding='utf-8', errors='replace'):
-        line = line.rstrip('\n')
-        if line.startswith('PCall='):
-            mycall = line.split('=', 1)[1].strip()
-        elif line.startswith('PWWLo='):
-            mywwl = line.split('=', 1)[1].strip()
-        elif line.startswith('PBand='):
-            band = _EDI_BAND.get(line.split('=', 1)[1].strip(), '')
-        elif line.startswith('[QSORecords'):
+    for line in open(path, encoding="utf-8", errors="replace"):
+        line = line.rstrip("\n")
+        if line.startswith("PCall="):
+            mycall = line.split("=", 1)[1].strip()
+        elif line.startswith("PWWLo="):
+            mywwl = line.split("=", 1)[1].strip()
+        elif line.startswith("PBand="):
+            band = _EDI_BAND.get(line.split("=", 1)[1].strip(), "")
+        elif line.startswith("[QSORecords"):
             in_records = True
             continue
-        elif line.startswith('['):
+        elif line.startswith("["):
             in_records = False
         elif in_records and line:
-            f = line.split(';')
+            f = line.split(";")
             if len(f) < 11:
                 continue
-            dt = datetime.strptime(f[0] + f[1], '%y%m%d%H%M')
+            dt = datetime.strptime(f[0] + f[1], "%y%m%d%H%M")
             try:
                 pts = int(f[10]) if f[10] else 0
             except ValueError:
                 pts = 0
-            dup = len(f) > 13 and f[13].strip().upper() == 'D'
-            mode = _EDI_MODE.get(f[3].strip(), '')
-            qsos.append(Qso(dt, f[2], f[4], f[5], f[6], f[7], f[9], pts, dup,
-                            band=band, mode=mode))
+            dup = len(f) > 13 and f[13].strip().upper() == "D"
+            mode = _EDI_MODE.get(f[3].strip(), "")
+            qsos.append(
+                Qso(
+                    dt,
+                    f[2],
+                    f[4],
+                    f[5],
+                    f[6],
+                    f[7],
+                    f[9],
+                    pts,
+                    dup,
+                    band=band,
+                    mode=mode,
+                )
+            )
     return mycall, mywwl, qsos
 
 
@@ -655,7 +729,7 @@ def merge_edi(paths: list[str]) -> tuple[str, str, list[Qso]]:
     """Merge one or more per-band EDI logs (e.g. 2M + 70CM from the same
     session) into a single chronological QSO list -- the recording is one
     continuous audio timeline regardless of how many bands were worked."""
-    mycall, mywwl = '', ''
+    mycall, mywwl = "", ""
     qsos: list[Qso] = []
     for path in paths:
         mc, mw, qs = parse_edi(path)
@@ -681,13 +755,12 @@ def derive_utc_offset(segs: list[Segment], qsos: list[Qso]) -> int:
     """Integer-hour offset such that qso_utc + offset ~= wav local time."""
     if not qsos:
         return 0
-    wav_mid = segs[0].wall + timedelta(
-        seconds=(segs[-1].audio_t + segs[-1].dur) / 2)
+    wav_mid = segs[0].wall + timedelta(seconds=(segs[-1].audio_t + segs[-1].dur) / 2)
     qso_mid = qsos[0].dt + (qsos[-1].dt - qsos[0].dt) / 2
     return round((wav_mid - qso_mid).total_seconds() / 3600)
 
 
-_WEBCAM_TS_RE = re.compile(r'(\d{8}_\d{6})')
+_WEBCAM_TS_RE = re.compile(r"(\d{8}_\d{6})")
 
 
 def parse_webcam_wall(path: str) -> datetime:
@@ -696,11 +769,16 @@ def parse_webcam_wall(path: str) -> datetime:
     m = _WEBCAM_TS_RE.search(os.path.basename(path))
     if not m:
         raise ValueError(f"no YYYYMMDD_HHMMSS timestamp found in {path}")
-    return datetime.strptime(m.group(1), '%Y%m%d_%H%M%S')
+    return datetime.strptime(m.group(1), "%Y%m%d_%H%M%S")
 
 
-def sync_webcam_start(cam_wall: datetime, cam_dur: float, qsos: list[Qso],
-                      segs: list[Segment], offset_h: int) -> float:
+def sync_webcam_start(
+    cam_wall: datetime,
+    cam_dur: float,
+    qsos: list[Qso],
+    segs: list[Segment],
+    offset_h: int,
+) -> float:
     """Video-timeline position (seconds) where the webcam recording begins.
 
     The webcam is a separate device with its own clock convention, which
@@ -713,14 +791,15 @@ def sync_webcam_start(cam_wall: datetime, cam_dur: float, qsos: list[Qso],
     the *full* QSO list (not any --duration-trimmed subset, since a short
     preview's QSO span is too narrow an anchor for reliable hour rounding).
     """
-    cam_seg = Segment('', cam_wall, cam_dur, 0.0)
+    cam_seg = Segment("", cam_wall, cam_dur, 0.0)
     cam_offset_h = derive_utc_offset([cam_seg], qsos)
     cam_utc_start = cam_wall - timedelta(hours=cam_offset_h)
     return audio_time_for(cam_utc_start + timedelta(hours=offset_h), segs)
 
 
-def _read_webcam_audio_range(path: str, t0: float, dur: float, sr: int = 16000
-                             ) -> tuple[np.ndarray, int]:
+def _read_webcam_audio_range(
+    path: str, t0: float, dur: float, sr: int = 16000
+) -> tuple[np.ndarray, int]:
     """Read `dur` seconds of audio starting at `t0` from a video file's own
     audio track, resampled to mono `sr` -- for cross-correlating against the
     radio's own WAV audio (see refine_webcam_start). Returns an empty array
@@ -729,9 +808,28 @@ def _read_webcam_audio_range(path: str, t0: float, dur: float, sr: int = 16000
         return np.array([]), sr
     try:
         out = subprocess.run(
-            ['ffmpeg', '-v', 'error', '-ss', f'{t0:.3f}', '-t', f'{dur:.3f}',
-             '-i', path, '-vn', '-ac', '1', '-ar', str(sr), '-f', 's16le', '-'],
-            check=True, capture_output=True).stdout
+            [
+                "ffmpeg",
+                "-v",
+                "error",
+                "-ss",
+                f"{t0:.3f}",
+                "-t",
+                f"{dur:.3f}",
+                "-i",
+                path,
+                "-vn",
+                "-ac",
+                "1",
+                "-ar",
+                str(sr),
+                "-f",
+                "s16le",
+                "-",
+            ],
+            check=True,
+            capture_output=True,
+        ).stdout
     except subprocess.CalledProcessError:
         return np.array([]), sr
     return np.frombuffer(out, dtype=np.int16).astype(float), sr
@@ -746,13 +844,17 @@ def _rms_envelope(x: np.ndarray, sr: int, win_s: float = 0.05) -> np.ndarray:
     n = len(x) // win
     if n == 0:
         return np.array([])
-    return np.sqrt(np.mean(x[:n * win].reshape(n, win) ** 2, axis=1))
+    return np.sqrt(np.mean(x[: n * win].reshape(n, win) ** 2, axis=1))
 
 
-def _find_offset_correction(radio_audio: np.ndarray, radio_sr: int,
-                            webcam_audio: np.ndarray, webcam_sr: int,
-                            padding_s: float, env_win_s: float = 0.05
-                            ) -> tuple[float, float]:
+def _find_offset_correction(
+    radio_audio: np.ndarray,
+    radio_sr: int,
+    webcam_audio: np.ndarray,
+    webcam_sr: int,
+    padding_s: float,
+    env_win_s: float = 0.05,
+) -> tuple[float, float]:
     """Cross-correlate the envelope of `radio_audio` (one known TX segment)
     against a `webcam_audio` window that starts `padding_s` earlier than the
     coarse webcam_start would predict, spanning padding_s extra on each end.
@@ -771,17 +873,22 @@ def _find_offset_correction(radio_audio: np.ndarray, radio_sr: int,
     r_norm = float(np.linalg.norm(r_env))
     if r_norm == 0:
         return 0.0, 0.0
-    corr = np.correlate(w_env, r_env, mode='valid')
+    corr = np.correlate(w_env, r_env, mode="valid")
     best_idx = int(np.argmax(corr))
-    w_local_norm = float(np.linalg.norm(w_env[best_idx:best_idx + len(r_env)]))
+    w_local_norm = float(np.linalg.norm(w_env[best_idx : best_idx + len(r_env)]))
     confidence = corr[best_idx] / (r_norm * w_local_norm) if w_local_norm > 0 else 0.0
     correction = padding_s - best_idx * env_win_s
     return correction, float(confidence)
 
 
-def refine_webcam_start(webcam_path: str, segs: list[Segment], webcam_start: float,
-                        max_anchors: int = 20, padding_s: float = 8.0,
-                        min_confidence: float = 0.3) -> tuple[float, float, int]:
+def refine_webcam_start(
+    webcam_path: str,
+    segs: list[Segment],
+    webcam_start: float,
+    max_anchors: int = 20,
+    padding_s: float = 8.0,
+    min_confidence: float = 0.3,
+) -> tuple[float, float, int]:
     """Refine the coarse (whole-hour) webcam_start via audio cross-
     correlation against the operator's own TX audio, fitting a *linear
     drift* model rather than a single constant correction.
@@ -840,11 +947,13 @@ def refine_webcam_start(webcam_path: str, segs: list[Segment], webcam_start: flo
             continue
         src_start = seg.audio_t - webcam_start - padding_s
         cam_audio, cam_sr = _read_webcam_audio_range(
-            webcam_path, src_start, seg.dur + 2 * padding_s)
+            webcam_path, src_start, seg.dur + 2 * padding_s
+        )
         if len(cam_audio) == 0:
             continue
         correction, confidence = _find_offset_correction(
-            radio_audio, radio_sr, cam_audio, cam_sr, padding_s)
+            radio_audio, radio_sr, cam_audio, cam_sr, padding_s
+        )
         if confidence >= min_confidence:
             audio_ts.append(seg.audio_t)
             corrections.append(correction)
@@ -878,12 +987,23 @@ CAST_FONT_SIZE = 13
 CAST_FPS = 10.0  # text doesn't need video frame rates to read cleanly
 CAST_BG = (10, 10, 10)
 CAST_PALETTE = {
-    "default": (220, 220, 220), "black": (0, 0, 0), "red": (205, 49, 49),
-    "green": (13, 188, 121), "brown": (229, 229, 16), "blue": (36, 114, 200),
-    "magenta": (188, 63, 188), "cyan": (17, 168, 205), "white": (229, 229, 229),
-    "brightblack": (102, 102, 102), "brightred": (241, 76, 76), "brightgreen": (35, 209, 139),
-    "brightbrown": (245, 245, 67), "brightblue": (59, 142, 234), "brightmagenta": (214, 112, 214),
-    "brightcyan": (41, 184, 219), "brightwhite": (255, 255, 255),
+    "default": (220, 220, 220),
+    "black": (0, 0, 0),
+    "red": (205, 49, 49),
+    "green": (13, 188, 121),
+    "brown": (229, 229, 16),
+    "blue": (36, 114, 200),
+    "magenta": (188, 63, 188),
+    "cyan": (17, 168, 205),
+    "white": (229, 229, 229),
+    "brightblack": (102, 102, 102),
+    "brightred": (241, 76, 76),
+    "brightgreen": (35, 209, 139),
+    "brightbrown": (245, 245, 67),
+    "brightblue": (59, 142, 234),
+    "brightmagenta": (214, 112, 214),
+    "brightcyan": (41, 184, 219),
+    "brightwhite": (255, 255, 255),
 }
 
 
@@ -895,19 +1015,30 @@ def parse_cast_header(path: str) -> tuple[datetime, int, int]:
     whole-hour rounding is needed here at all."""
     with open(path) as f:
         header = json.loads(f.readline())
-    start_utc = datetime.fromtimestamp(header["timestamp"], tz=timezone.utc).replace(tzinfo=None)
+    start_utc = datetime.fromtimestamp(header["timestamp"], tz=timezone.utc).replace(
+        tzinfo=None
+    )
     return start_utc, header["width"], header["height"]
 
 
-def _cast_color(name: str | None, default: tuple[int, int, int]) -> tuple[int, int, int]:
+def _cast_color(
+    name: str | None, default: tuple[int, int, int]
+) -> tuple[int, int, int]:
     if name is None or name == "default":
         return default
     return CAST_PALETTE.get(name, default)
 
 
-def _draw_cast_row(draw: ImageDraw.ImageDraw, line: dict, row: int, W: int,
-                   font: ImageFont.FreeTypeFont, font_b: ImageFont.FreeTypeFont,
-                   cw: float, lh: int) -> None:
+def _draw_cast_row(
+    draw: ImageDraw.ImageDraw,
+    line: dict,
+    row: int,
+    W: int,
+    font: ImageFont.FreeTypeFont,
+    font_b: ImageFont.FreeTypeFont,
+    cw: float,
+    lh: int,
+) -> None:
     """Redraw one terminal row onto `draw`'s canvas -- erasing the row
     first (a plain background rectangle) is essential, not an optimization:
     without it, a cell that goes from non-blank to blank (e.g. a shorter
@@ -918,7 +1049,7 @@ def _draw_cast_row(draw: ImageDraw.ImageDraw, line: dict, row: int, W: int,
     draw.rectangle([0, y, int(cw * W) + 4, y + lh], fill=CAST_BG)
     for col in range(W):
         ch = line[col]
-        if ch.data == ' ' and ch.bg in (None, 'default') and not ch.reverse:
+        if ch.data == " " and ch.bg in (None, "default") and not ch.reverse:
             continue
         fg = _cast_color(ch.fg, CAST_PALETTE["default"])
         bg = _cast_color(ch.bg, CAST_BG)
@@ -950,8 +1081,9 @@ class _CastScreen(pyte.Screen):
         super().reset()
         self.margins_lr: tuple[int, int] | None = None
 
-    def set_left_right_margins(self, left: int = 0, right: int | None = None,
-                               **kwargs) -> None:
+    def set_left_right_margins(
+        self, left: int = 0, right: int | None = None, **kwargs
+    ) -> None:
         # `CSI s` with <2 params is SCOSC (save cursor), not DECSLRM.
         if right is None:
             self.save_cursor()
@@ -982,8 +1114,13 @@ class _CastScreen(pyte.Screen):
 class _CastStream(pyte.ByteStream):
     """pyte.ByteStream that routes the three CSI finals _CastScreen adds
     (SU/SD/DECSLRM) -- stock pyte's dispatch table has no entry for them."""
-    csi = {**pyte.ByteStream.csi, 'S': 'scroll_up', 'T': 'scroll_down',
-           's': 'set_left_right_margins'}
+
+    csi = {
+        **pyte.ByteStream.csi,
+        "S": "scroll_up",
+        "T": "scroll_down",
+        "s": "set_left_right_margins",
+    }
 
 
 def render_cast_video(cast_path: str, out_path: str, fps: float = CAST_FPS) -> None:
@@ -1038,11 +1175,32 @@ def render_cast_video(cast_path: str, out_path: str, fps: float = CAST_FPS) -> N
         _draw_cast_row(draw, screen.buffer[row], row, W, font, font_b, cw, lh)
     screen.dirty.clear()
 
-    cmd = ['ffmpeg', '-y', '-hide_banner', '-loglevel', 'warning',
-          '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', f'{px_w}x{px_h}',
-          '-r', f'{fps}', '-i', '-',
-          '-c:v', 'libx264', '-preset', 'fast', '-crf', '20',
-          '-pix_fmt', 'yuv420p', out_path]
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "warning",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s",
+        f"{px_w}x{px_h}",
+        "-r",
+        f"{fps}",
+        "-i",
+        "-",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "20",
+        "-pix_fmt",
+        "yuv420p",
+        out_path,
+    ]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     try:
         ei = 0
@@ -1074,6 +1232,7 @@ def render_cast_video(cast_path: str, out_path: str, fps: float = CAST_FPS) -> N
 # no equivalent in the WAV metadata at all.
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class TelemetrySample:
     t: datetime
@@ -1093,27 +1252,28 @@ class SegState:
 def load_telemetry(path: str) -> list[TelemetrySample]:
     """Parse a puskas_logger `*-telemetry.jsonl` file."""
     samples: list[TelemetrySample] = []
-    for line in open(path, encoding='utf-8'):
+    for line in open(path, encoding="utf-8"):
         line = line.strip()
         if not line:
             continue
         try:
             rec = json.loads(line)
-            ts = datetime.strptime(rec['t'], '%Y-%m-%dT%H:%M:%SZ')
+            ts = datetime.strptime(rec["t"], "%Y-%m-%dT%H:%M:%SZ")
         except (json.JSONDecodeError, KeyError, ValueError):
             continue
-        samples.append(TelemetrySample(ts, rec.get('freq_hz'),
-                                       rec.get('mode'), rec.get('az')))
+        samples.append(
+            TelemetrySample(ts, rec.get("freq_hz"), rec.get("mode"), rec.get("az"))
+        )
     return samples
 
 
 @dataclass
 class InputLogEvent:
     t: datetime
-    kind: str            # 'text' (keystroke) or 'qso' (an actual submit)
-    text: str = ''        # kind == 'text': the full input-box contents
-    call: str = ''        # kind == 'qso'
-    dup: bool = False     # kind == 'qso'
+    kind: str  # 'text' (keystroke) or 'qso' (an actual submit)
+    text: str = ""  # kind == 'text': the full input-box contents
+    call: str = ""  # kind == 'qso'
+    dup: bool = False  # kind == 'qso'
 
 
 def load_input_log(path: str) -> list[InputLogEvent]:
@@ -1125,18 +1285,25 @@ def load_input_log(path: str) -> list[InputLogEvent]:
     unambiguously knows -- see match_qso_times, which uses it to give QSO
     panels an exact submit time instead of the EDI's minute-precision guess."""
     out: list[InputLogEvent] = []
-    for line in open(path, encoding='utf-8'):
+    for line in open(path, encoding="utf-8"):
         line = line.strip()
         if not line:
             continue
         try:
             rec = json.loads(line)
-            ts = datetime.strptime(rec['t'], '%Y-%m-%dT%H:%M:%S.%fZ')
+            ts = datetime.strptime(rec["t"], "%Y-%m-%dT%H:%M:%S.%fZ")
         except (json.JSONDecodeError, KeyError, ValueError):
             continue
-        kind = rec.get('event', 'text')
-        out.append(InputLogEvent(ts, kind, rec.get('text', ''),
-                                 rec.get('call', ''), rec.get('dup', False)))
+        kind = rec.get("event", "text")
+        out.append(
+            InputLogEvent(
+                ts,
+                kind,
+                rec.get("text", ""),
+                rec.get("call", ""),
+                rec.get("dup", False),
+            )
+        )
     return out
 
 
@@ -1155,7 +1322,7 @@ def webcam_start_wall(path: str) -> datetime | None:
     clock-drift rate). None here means the input log predates the Alt+V webcam
     feature -- fall back to the filename-timestamp phone path."""
     try:
-        for line in open(path, encoding='utf-8'):
+        for line in open(path, encoding="utf-8"):
             line = line.strip()
             if not line:
                 continue
@@ -1163,9 +1330,9 @@ def webcam_start_wall(path: str) -> datetime | None:
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if rec.get('event') == 'webcam_start':
+            if rec.get("event") == "webcam_start":
                 try:
-                    return datetime.strptime(rec['t'], '%Y-%m-%dT%H:%M:%S.%fZ')
+                    return datetime.strptime(rec["t"], "%Y-%m-%dT%H:%M:%S.%fZ")
                 except (KeyError, ValueError):
                     return None
     except OSError:
@@ -1173,8 +1340,8 @@ def webcam_start_wall(path: str) -> datetime | None:
     return None
 
 
-_LOG_INPUT_RE = re.compile(r'^Input #\d+, ([^,]+)')
-_LOG_START_RE = re.compile(r'start:\s*([0-9]+\.[0-9]+)')
+_LOG_INPUT_RE = re.compile(r"^Input #\d+, ([^,]+)")
+_LOG_START_RE = re.compile(r"start:\s*([0-9]+\.[0-9]+)")
 
 
 def webcam_start_from_log(log_path: str) -> datetime | None:
@@ -1198,18 +1365,18 @@ def webcam_start_from_log(log_path: str) -> datetime | None:
     video_epoch = audio_epoch = None
     cur = None
     try:
-        for line in open(log_path, encoding='utf-8', errors='replace'):
+        for line in open(log_path, encoding="utf-8", errors="replace"):
             m = _LOG_INPUT_RE.match(line.strip())
             if m:
                 cur = m.group(1)
                 continue
-            if cur and 'start:' in line:
+            if cur and "start:" in line:
                 sm = _LOG_START_RE.search(line)
                 if sm and float(sm.group(1)) > 1e9:  # a Unix epoch, not uptime
                     val = float(sm.group(1))
-                    if ('v4l2' in cur or 'video4linux' in cur) and video_epoch is None:
+                    if ("v4l2" in cur or "video4linux" in cur) and video_epoch is None:
                         video_epoch = val
-                    elif 'pulse' in cur and audio_epoch is None:
+                    elif "pulse" in cur and audio_epoch is None:
                         audio_epoch = val
                 cur = None
     except OSError:
@@ -1231,8 +1398,9 @@ def _median(values: list[float]) -> float | None:
 FREQ_MATCH_TOLERANCE_HZ = 500  # see build_state_events' docstring
 
 
-def build_state_events(segs: list[Segment], telemetry: list[TelemetrySample],
-                       offset_h: int) -> list[tuple[float, float, SegState]]:
+def build_state_events(
+    segs: list[Segment], telemetry: list[TelemetrySample], offset_h: int
+) -> list[tuple[float, float, SegState]]:
     """RX/TX + QRG/mode/bearing badge events.
 
     ptt/freq_hz/mode at a segment's own start come straight from
@@ -1281,8 +1449,9 @@ def build_state_events(segs: list[Segment], telemetry: list[TelemetrySample],
 
         utc_start = s.wall - timedelta(hours=offset_h)
         utc_end = utc_start + timedelta(seconds=s.dur)
-        inside = sorted((t for t in telemetry if utc_start <= t.t < utc_end),
-                        key=lambda t: t.t)
+        inside = sorted(
+            (t for t in telemetry if utc_start <= t.t < utc_end), key=lambda t: t.t
+        )
 
         # Runs of consecutive (freq_hz, mode), seeded from the WAV's own
         # metadata, not from telemetry -- only sub-divided when a later
@@ -1294,8 +1463,11 @@ def build_state_events(segs: list[Segment], telemetry: list[TelemetrySample],
         for t in inside:
             new_freq = t.freq_hz if t.freq_hz is not None else cur_freq
             new_mode = t.mode if t.mode is not None else cur_mode
-            freq_changed = (new_freq is not None and cur_freq is not None
-                            and abs(new_freq - cur_freq) > FREQ_MATCH_TOLERANCE_HZ)
+            freq_changed = (
+                new_freq is not None
+                and cur_freq is not None
+                and abs(new_freq - cur_freq) > FREQ_MATCH_TOLERANCE_HZ
+            )
             mode_changed = new_mode is not None and new_mode != cur_mode
             if freq_changed or mode_changed:
                 cur_freq, cur_mode = new_freq, new_mode
@@ -1305,21 +1477,37 @@ def build_state_events(segs: list[Segment], telemetry: list[TelemetrySample],
 
         seg_end = s.audio_t + _eff(s)
         for i, (key, samples) in enumerate(runs):
-            start = s.audio_t if i == 0 else \
-                audio_time_for(samples[0].t + timedelta(hours=offset_h), segs)
-            end = (audio_time_for(runs[i + 1][1][0].t + timedelta(hours=offset_h), segs)
-                   if i + 1 < len(runs) else seg_end)
+            start = (
+                s.audio_t
+                if i == 0
+                else audio_time_for(samples[0].t + timedelta(hours=offset_h), segs)
+            )
+            end = (
+                audio_time_for(runs[i + 1][1][0].t + timedelta(hours=offset_h), segs)
+                if i + 1 < len(runs)
+                else seg_end
+            )
             if end <= start:
                 continue
             freq_hz, mode = key
-            events.append((start, end, SegState(
-                ptt=s.ptt, freq_hz=freq_hz, mode=mode,
-                az=_median([t.az for t in samples if t.az is not None]),
-            )))
+            events.append(
+                (
+                    start,
+                    end,
+                    SegState(
+                        ptt=s.ptt,
+                        freq_hz=freq_hz,
+                        mode=mode,
+                        az=_median([t.az for t in samples if t.az is not None]),
+                    ),
+                )
+            )
     return events
 
 
-def match_qso_times(qsos: list[Qso], input_log: list[InputLogEvent]) -> list[datetime | None]:
+def match_qso_times(
+    qsos: list[Qso], input_log: list[InputLogEvent]
+) -> list[datetime | None]:
     """Precise submit timestamp for each qsos[i], from the input log's 'qso'
     events -- an exact replacement for the EDI's minute-precision q.dt when
     available, None otherwise (older recordings, or a --duration cut that
@@ -1339,7 +1527,7 @@ def match_qso_times(qsos: list[Qso], input_log: list[InputLogEvent]) -> list[dat
     sequence, and "next unused" stays correct."""
     by_call: dict[str, list[datetime]] = {}
     for e in input_log:
-        if e.kind == 'qso':
+        if e.kind == "qso":
             by_call.setdefault(e.call, []).append(e.t)
     used: dict[str, int] = {}
     out: list[datetime | None] = []
@@ -1358,10 +1546,10 @@ def match_qso_times(qsos: list[Qso], input_log: list[InputLogEvent]) -> list[dat
 # ASS generation
 # ---------------------------------------------------------------------------
 
-RESOLUTIONS = {'1080p': (1920, 1080), '720p': (1280, 720)}
-VIS_CHARS = 84          # characters kept in the decode ticker window
-CPL = 42                # characters per ticker line
-TICKER_HOLD_S = 3.0     # ticker clears if no new character arrives within this long
+RESOLUTIONS = {"1080p": (1920, 1080), "720p": (1280, 720)}
+VIS_CHARS = 84  # characters kept in the decode ticker window
+CPL = 42  # characters per ticker line
+TICKER_HOLD_S = 3.0  # ticker clears if no new character arrives within this long
 
 
 def _ass_time(t: float) -> str:
@@ -1374,9 +1562,9 @@ def _ass_time(t: float) -> str:
 
 def _wrap(text: str, cpl: int, keep: int) -> str:
     lines: list[str] = []
-    cur = ''
-    for tok in text.split(' '):
-        piece = tok if not cur else cur + ' ' + tok
+    cur = ""
+    for tok in text.split(" "):
+        piece = tok if not cur else cur + " " + tok
         if len(piece) > cpl and cur:
             lines.append(cur)
             cur = tok
@@ -1384,11 +1572,11 @@ def _wrap(text: str, cpl: int, keep: int) -> str:
             cur = piece
     if cur:
         lines.append(cur)
-    return '\\N'.join(lines[-keep:])
+    return "\\N".join(lines[-keep:])
 
 
 def _esc(s: str) -> str:
-    return s.replace('\\', '\\\\').replace('{', '(').replace('}', ')')
+    return s.replace("\\", "\\\\").replace("{", "(").replace("}", ")")
 
 
 def _bursts(segs: list[Segment]) -> list[list[Segment]]:
@@ -1474,8 +1662,13 @@ def _snap_to_cluster(t: float, clusters: list[float]) -> float:
     return max(candidates) if candidates else t
 
 
-def qso_windows(qsos: list[Qso], segs: list[Segment], offset_h: int, total: float,
-                qso_times: list[datetime | None] | None = None) -> list[tuple[float, float]]:
+def qso_windows(
+    qsos: list[Qso],
+    segs: list[Segment],
+    offset_h: int,
+    total: float,
+    qso_times: list[datetime | None] | None = None,
+) -> list[tuple[float, float]]:
     """Return the (start, end) video-time window shown for each QSO's panel.
 
     Only the *start* needs a heuristic at all: there's no way to know from
@@ -1511,14 +1704,18 @@ def qso_windows(qsos: list[Qso], segs: list[Segment], offset_h: int, total: floa
         anchor = precise if precise is not None else q.dt
         anchor_t = audio_time_for(anchor + timedelta(hours=offset_h), segs)
         snapped = _snap_to_cluster(anchor_t, clusters)
-        if precise is not None and snapped == prev_cluster and finishes[i - 1] is not None:
+        if (
+            precise is not None
+            and snapped == prev_cluster
+            and finishes[i - 1] is not None
+        ):
             starts.append(finishes[i - 1])
         else:
             starts.append(snapped)
         finishes.append(anchor_t if precise is not None else None)
         prev_cluster = snapped
     for i in range(1, len(starts)):
-        starts[i] = max(starts[i], starts[i - 1])   # keep panel order sane
+        starts[i] = max(starts[i], starts[i - 1])  # keep panel order sane
     windows: list[tuple[float, float]] = []
     for i, start in enumerate(starts):
         fallback_end = starts[i + 1] if i + 1 < len(starts) else total
@@ -1527,8 +1724,8 @@ def qso_windows(qsos: list[Qso], segs: list[Segment], offset_h: int, total: floa
     return windows
 
 
-STATE_TX_HEX = '0000FF'  # ASS \c is &HbbggrrH -- this is pure red
-STATE_RX_HEX = '00FF00'  # pure green
+STATE_TX_HEX = "0000FF"  # ASS \c is &HbbggrrH -- this is pure red
+STATE_RX_HEX = "00FF00"  # pure green
 
 
 def _mode_at(t: float, state_events: list[tuple[float, float, SegState]]) -> str | None:
@@ -1538,9 +1735,13 @@ def _mode_at(t: float, state_events: list[tuple[float, float, SegState]]) -> str
     return None
 
 
-def build_ass(segs: list[Segment], W: int, H: int,
-              state_events: list[tuple[float, float, SegState]] | None = None,
-              long_cw_spans: list[tuple[float, float, list[CharEvent]]] | None = None) -> str:
+def build_ass(
+    segs: list[Segment],
+    W: int,
+    H: int,
+    state_events: list[tuple[float, float, SegState]] | None = None,
+    long_cw_spans: list[tuple[float, float, list[CharEvent]]] | None = None,
+) -> str:
     """The RX/TX badge and CW ticker are the only overlays left here --
     everything else the video used to render itself (timestamp, QSO
     panels, running score, band/mode/callsign text, what was typed) is
@@ -1574,7 +1775,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     def ev(start, end, style, text, layer=0):
         lines.append(
             f"Dialogue: {layer},{_ass_time(start)},{_ass_time(end)},"
-            f"{style},,0,0,0,,{text}")
+            f"{style},,0,0,0,,{text}"
+        )
 
     total = segs[-1].audio_t + _eff(segs[-1]) if segs else 0.0
 
@@ -1587,12 +1789,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             if st.ptt is None:
                 continue
             hexcol = STATE_TX_HEX if st.ptt else STATE_RX_HEX
-            label = 'TX' if st.ptt else 'RX'
+            label = "TX" if st.ptt else "RX"
             # Just the RX/TX dot -- the QRG/mode/rotator line that used to sit
             # under it was dropped as redundant: the same info is legible in the
             # terminal-session PiP's own toolbar, and its second line overlapped
             # the cast box at 720p.
-            ev(start, end, 'State', f"{{\\c&H{hexcol}&}}● {label}")
+            ev(start, end, "State", f"{{\\c&H{hexcol}&}}● {label}")
 
     # --- decode ticker: rolling window, flushed at the start of every fresh
     # burst of on-air activity -- not at a QSO's EDI timestamp, which is
@@ -1617,41 +1819,41 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     chunks: list[tuple[float, float, list[CharEvent]]] = []
     for s in segs:
         mode = _mode_at(s.audio_t, state_events) if state_events is not None else None
-        if s.events and (mode is None or mode == 'CW'):
+        if s.events and (mode is None or mode == "CW"):
             chunks.append((s.audio_t, s.audio_t + _eff(s), s.events))
     chunks.extend(long_cw_spans or [])
     chunks.sort(key=lambda c: c[0])
 
-    stream: list[tuple[float, str, bool]] = []   # (t, ch, flush_before)
+    stream: list[tuple[float, str, bool]] = []  # (t, ch, flush_before)
     prev_end: float | None = None
     for start, end, events in chunks:
         is_burst_start = prev_end is None or start - prev_end > MAX_OVER_S
         if not is_burst_start and stream:
-            stream.append((start, ' ', False))   # gap between overs, same burst
+            stream.append((start, " ", False))  # gap between overs, same burst
         for j, e in enumerate(events):
             stream.append((start + e.t, e.ch, is_burst_start and j == 0))
         prev_end = end
-    transcript = ''
+    transcript = ""
     for i, (t, ch, flush) in enumerate(stream):
         if flush:
-            transcript = ''
+            transcript = ""
         transcript += ch
         vis = transcript[-VIS_CHARS:]
         end = stream[i + 1][0] if i + 1 < len(stream) else total
-        end = min(end, t + TICKER_HOLD_S)   # clear rather than show stale text in gaps
+        end = min(end, t + TICKER_HOLD_S)  # clear rather than show stale text in gaps
         if end <= t:
             continue
-        ev(t, end, 'Ticker', _wrap(vis, CPL, 2))
+        ev(t, end, "Ticker", _wrap(vis, CPL, 2))
 
-    return ''.join(x if x.endswith('\n') else x + '\n' for x in lines)
+    return "".join(x if x.endswith("\n") else x + "\n" for x in lines)
 
 
 # ---------------------------------------------------------------------------
 # YouTube chapters + SRT captions (for seeking without scrubbing)
 # ---------------------------------------------------------------------------
 
-MIN_CHAPTER_GAP_S = 10   # YouTube ignores chapters closer together than this
-CAPTION_DUR_S = 8.0      # how long each SRT cue is shown
+MIN_CHAPTER_GAP_S = 10  # YouTube ignores chapters closer together than this
+CAPTION_DUR_S = 8.0  # how long each SRT cue is shown
 
 
 def _yt_time(t: float) -> str:
@@ -1689,7 +1891,7 @@ def build_chapters(qsos: list[Qso], windows: list[tuple[float, float]]) -> str:
             continue
         lines.append(f"{_yt_time(t)} {_qso_label(i, q)}")
         last_t = t
-    return '\n'.join(lines) + '\n'
+    return "\n".join(lines) + "\n"
 
 
 def _srt_time(t: float) -> str:
@@ -1709,63 +1911,98 @@ def build_srt(qsos: list[Qso], windows: list[tuple[float, float]]) -> str:
         end = min(end, start + CAPTION_DUR_S)
         text = _qso_label(i, q)
         blocks.append(f"{i + 1}\n{_srt_time(start)} --> {_srt_time(end)}\n{text}\n")
-    return '\n'.join(blocks)
+    return "\n".join(blocks)
 
 
 # ---------------------------------------------------------------------------
 # ffmpeg
 # ---------------------------------------------------------------------------
 
+
 def concat_audio(segs: list[Segment], out_wav: str) -> None:
-    listfile = out_wav + '.txt'
-    with open(listfile, 'w') as fh:
+    listfile = out_wav + ".txt"
+    with open(listfile, "w") as fh:
         for s in segs:
             fh.write(f"file '{os.path.abspath(s.path)}'\n")
             if s.eff_dur is not None:
                 fh.write(f"outpoint {s.eff_dur:.6f}\n")
     subprocess.run(
-        ['ffmpeg', '-y', '-hide_banner', '-loglevel', 'error',
-         '-f', 'concat', '-safe', '0', '-i', listfile, '-c', 'copy', out_wav],
-        check=True)
+        [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            listfile,
+            "-c",
+            "copy",
+            out_wav,
+        ],
+        check=True,
+    )
     os.remove(listfile)
 
 
 def _ffprobe_duration(path: str) -> float:
     out = subprocess.run(
-        ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
-         '-of', 'csv=p=0', path],
-        check=True, capture_output=True, text=True).stdout
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "csv=p=0",
+            path,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
     return float(out.strip())
 
 
-PIP_WIDTH_FRAC = 0.20   # webcam PiP width as a fraction of the frame width
+PIP_WIDTH_FRAC = 0.20  # webcam PiP width as a fraction of the frame width
 PIP_MARGIN_FRAC = 0.02  # gap from the frame edge, same fraction basis
-CAST_PIP_WIDTH_FRAC = 0.73   # terminal-session PiP is the dominant visual
-                              # element, not a small inset -- the logger UI
-                              # itself is most of what there is to watch.
-                              # Sized against render_cast_video's *real*
-                              # output aspect ratio (~1.69 for a 191x52
-                              # DejaVu Sans Mono 13pt terminal, i.e. taller
-                              # than the first mockup assumed -- that mockup
-                              # was rendered before the descender-clipping
-                              # line-height fix, at the shorter pre-fix
-                              # aspect of ~1.91) so the box leaves genuine
-                              # room below for the CW ticker rather than
-                              # visually covering it.
+CAST_PIP_WIDTH_FRAC = 0.73  # terminal-session PiP is the dominant visual
+# element, not a small inset -- the logger UI
+# itself is most of what there is to watch.
+# Sized against render_cast_video's *real*
+# output aspect ratio (~1.69 for a 191x52
+# DejaVu Sans Mono 13pt terminal, i.e. taller
+# than the first mockup assumed -- that mockup
+# was rendered before the descender-clipping
+# line-height fix, at the shorter pre-fix
+# aspect of ~1.91) so the box leaves genuine
+# room below for the CW ticker rather than
+# visually covering it.
 CAST_PIP_X_FRAC = 0.0104
-CAST_PIP_Y_FRAC = 0.11        # clears the RX/TX badge above it
-CAST_PIP_ALPHA = 0.85         # slightly transparent so the waterfall shows
-                              # faintly through the terminal PiP; 1.0 = opaque
-RENDER_FPS = 30          # output frame rate; the webcam PiP is resampled to
-                         # this too (see render) so both branches share one
-                         # real-time clock
+CAST_PIP_Y_FRAC = 0.11  # clears the RX/TX badge above it
+CAST_PIP_ALPHA = 0.85  # slightly transparent so the waterfall shows
+# faintly through the terminal PiP; 1.0 = opaque
+RENDER_FPS = 30  # output frame rate; the webcam PiP is resampled to
+# this too (see render) so both branches share one
+# real-time clock
 
 
-def render(wav: str, ass: str, out: str, W: int, H: int,
-          webcam: str | None = None, webcam_start: float = 0.0,
-          webcam_rate: float = 0.0,
-          cast: str | None = None, cast_start: float = 0.0) -> None:
-    ass_esc = ass.replace('\\', '\\\\').replace(':', '\\:').replace("'", "\\'")
+def render(
+    wav: str,
+    ass: str,
+    out: str,
+    W: int,
+    H: int,
+    webcam: str | None = None,
+    webcam_start: float = 0.0,
+    webcam_rate: float = 0.0,
+    cast: str | None = None,
+    cast_start: float = 0.0,
+) -> None:
+    ass_esc = ass.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
     # Full-screen scrolling waterfall, dimmed to ~half luma so it reads as an
     # ambient background and the text stays crisp on top. overlap=0.8 makes it
     # scroll fast enough to fill the frame within the first few seconds.
@@ -1775,9 +2012,8 @@ def render(wav: str, ass: str, out: str, W: int, H: int,
         f"lutyuv=y=val*0.42,format=yuv420p,fps={RENDER_FPS}[bg];"
         f"[bg]subtitles='{ass_esc}':fontsdir=/usr/share/fonts[v0]"
     )
-    cmd = ['ffmpeg', '-y', '-hide_banner', '-stats', '-loglevel', 'warning',
-           '-i', wav]
-    cur = 'v0'
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-stats", "-loglevel", "warning", "-i", wav]
+    cur = "v0"
     if cast:
         # cast is our own render_cast_video output -- a synthetic, constant-
         # framerate file we just encoded, not an independent physical device
@@ -1790,7 +2026,7 @@ def render(wav: str, ass: str, out: str, W: int, H: int,
         cast_w = round(W * CAST_PIP_WIDTH_FRAC)
         cast_x = round(W * CAST_PIP_X_FRAC)
         cast_y = round(H * CAST_PIP_Y_FRAC)
-        cmd += ['-itsoffset', f'{cast_start:.3f}', '-i', cast]
+        cmd += ["-itsoffset", f"{cast_start:.3f}", "-i", cast]
         # format=yuva420p + colorchannelmixer=aa lowers the PiP's alpha so the
         # overlay blends it over the waterfall (a little transparency, not a
         # wash) -- overlay honours the top input's own alpha channel.
@@ -1801,7 +2037,7 @@ def render(wav: str, ass: str, out: str, W: int, H: int,
             f";[{cur}][castpip]overlay=x={cast_x}:y={cast_y}:"
             f"enable='gte(t,{cast_start:.3f})'[v1]"
         )
-        cur = 'v1'
+        cur = "v1"
     if webcam:
         # itsoffset delays the whole cam stream's presentation timestamps so
         # its own frame 0 lands at webcam_start in the output timeline --
@@ -1851,93 +2087,143 @@ def render(wav: str, ass: str, out: str, W: int, H: int,
         pip_w = round(W * PIP_WIDTH_FRAC)
         margin = round(W * PIP_MARGIN_FRAC)
         webcam_idx = 2 if cast else 1
-        cmd += ['-itsoffset', f'{webcam_start:.3f}', '-i', webcam]
+        cmd += ["-itsoffset", f"{webcam_start:.3f}", "-i", webcam]
         fchain += (
             f";[{webcam_idx}:v]setpts=PTS/{1 - webcam_rate:.8f},fps={RENDER_FPS},"
             f"scale={pip_w}:-2,tpad=stop_mode=clone:stop_duration=99999[pip]"
             f";[{cur}][pip]overlay=x=main_w-w-{margin}:y=main_h-h-{margin}:"
             f"enable='gte(t,{webcam_start:.3f})'[v]"
         )
-        cur = 'v'
-    if cur != 'v':
+        cur = "v"
+    if cur != "v":
         fchain += f";[{cur}]null[v]"
-    cmd += ['-filter_complex', fchain,
-           '-map', '[v]', '-map', '0:a',
-           '-c:v', 'libx264', '-preset', 'fast', '-crf', '21',
-           '-c:a', 'aac', '-b:a', '96k', '-shortest', out]
+    cmd += [
+        "-filter_complex",
+        fchain,
+        "-map",
+        "[v]",
+        "-map",
+        "0:a",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "21",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "96k",
+        "-shortest",
+        out,
+    ]
     subprocess.run(cmd, check=True)
 
 
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('recdir', help='directory of timestamped WAV segments')
-    ap.add_argument('edi', nargs='+',
-                    help='EDI log(s) for the same session -- pass more than one '
-                         'to merge multiple bands worked in one recording')
-    ap.add_argument('-o', '--out', default='contest_video.mp4')
-    ap.add_argument('--pitch', type=float, default=600.0, help='CW tone Hz')
-    ap.add_argument('--res', choices=RESOLUTIONS, default='1080p')
-    ap.add_argument('--contest', default='URH OB 2026 - CW')
-    ap.add_argument('--skip-gaps', action='store_true',
-                    help=f'trim silent gaps between QSOs to {GAP_KEEP_S:.0f}s each')
-    ap.add_argument('--keep-ass', action='store_true',
-                    help='keep intermediate .ass/.wav for inspection')
-    ap.add_argument('--telemetry',
-                    help='puskas_logger *-telemetry.jsonl -- optional: the RX/TX + QRG/mode '
-                         'badge already comes from the WAV files\' own IC-9700 metadata; this '
-                         'only adds bearing (ROT) and refines QRG/mode within long segments '
-                         'where the operator QSY\'d with nothing to split the WAV on')
-    ap.add_argument('--duration', type=float,
-                    help='trim to the first DURATION seconds of real session time '
-                         '(chronological preview; also skips CW-decoding past the '
-                         'cutoff, so a short preview is much faster to build)')
-    ap.add_argument('--cast',
-                    help='asciinema cast (v2) recording of the logger/irssi terminal '
-                         'session, shown as a large picture-in-picture -- synced from '
-                         'the cast header\'s own Unix-epoch timestamp, exact real-world '
-                         'UTC with no whole-hour rounding needed')
-    ap.add_argument('--webcam',
-                    help='picture-in-picture selfie/webcam clip, synced automatically '
-                         'from its own filename timestamp (e.g. VID_20260706_180003.mp4), '
-                         'then refined via audio cross-correlation against the operator\'s '
-                         'own TX audio (see --webcam-offset to override)')
-    ap.add_argument('--webcam-offset', type=float,
-                    help='manual fine-tune correction (seconds, may be negative) added to '
-                         'the coarse whole-hour webcam sync -- bypasses the automatic audio '
-                         'cross-correlation entirely; use this if it finds no confident '
-                         'match (e.g. the webcam clip has no audio track), or to override it')
-    ap.add_argument('--input-log',
-                    help="puskas_logger *-input.jsonl for exact QSO-panel/chapter/caption "
-                         "timing (its 'qso' events) instead of the EDI's minute-precision "
-                         "clock -- optional, older recordings won't have one")
-    ap.add_argument('--seed-input-log',
-                    help="write a hand-editable 'qso' event skeleton to this path, one line "
-                         "per QSO in the EDI(s) with a placeholder timestamp, then exit "
-                         "without rendering -- for a recording made before --input-log "
-                         "existed: edit each 't' against the audio, then pass the result "
-                         "back in as --input-log for exact chapter/caption timing with no "
-                         "cluster-snapping heuristics involved")
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument("recdir", help="directory of timestamped WAV segments")
+    ap.add_argument(
+        "edi",
+        nargs="+",
+        help="EDI log(s) for the same session -- pass more than one "
+        "to merge multiple bands worked in one recording",
+    )
+    ap.add_argument("-o", "--out", default="contest_video.mp4")
+    ap.add_argument("--pitch", type=float, default=600.0, help="CW tone Hz")
+    ap.add_argument("--res", choices=RESOLUTIONS, default="1080p")
+    ap.add_argument("--contest", default="URH OB 2026 - CW")
+    ap.add_argument(
+        "--skip-gaps",
+        action="store_true",
+        help=f"trim silent gaps between QSOs to {GAP_KEEP_S:.0f}s each",
+    )
+    ap.add_argument(
+        "--keep-ass",
+        action="store_true",
+        help="keep intermediate .ass/.wav for inspection",
+    )
+    ap.add_argument(
+        "--telemetry",
+        help="puskas_logger *-telemetry.jsonl -- optional: the RX/TX + QRG/mode "
+        "badge already comes from the WAV files' own IC-9700 metadata; this "
+        "only adds bearing (ROT) and refines QRG/mode within long segments "
+        "where the operator QSY'd with nothing to split the WAV on",
+    )
+    ap.add_argument(
+        "--duration",
+        type=float,
+        help="trim to the first DURATION seconds of real session time "
+        "(chronological preview; also skips CW-decoding past the "
+        "cutoff, so a short preview is much faster to build)",
+    )
+    ap.add_argument(
+        "--cast",
+        help="asciinema cast (v2) recording of the logger/irssi terminal "
+        "session, shown as a large picture-in-picture -- synced from "
+        "the cast header's own Unix-epoch timestamp, exact real-world "
+        "UTC with no whole-hour rounding needed",
+    )
+    ap.add_argument(
+        "--webcam",
+        help="picture-in-picture selfie/webcam clip, synced automatically "
+        "from its own filename timestamp (e.g. VID_20260706_180003.mp4), "
+        "then refined via audio cross-correlation against the operator's "
+        "own TX audio (see --webcam-offset to override)",
+    )
+    ap.add_argument(
+        "--webcam-offset",
+        type=float,
+        help="manual fine-tune correction (seconds, may be negative) added to "
+        "the coarse whole-hour webcam sync -- bypasses the automatic audio "
+        "cross-correlation entirely; use this if it finds no confident "
+        "match (e.g. the webcam clip has no audio track), or to override it",
+    )
+    ap.add_argument(
+        "--input-log",
+        help="puskas_logger *-input.jsonl for exact QSO-panel/chapter/caption "
+        "timing (its 'qso' events) instead of the EDI's minute-precision "
+        "clock -- optional, older recordings won't have one",
+    )
+    ap.add_argument(
+        "--seed-input-log",
+        help="write a hand-editable 'qso' event skeleton to this path, one line "
+        "per QSO in the EDI(s) with a placeholder timestamp, then exit "
+        "without rendering -- for a recording made before --input-log "
+        "existed: edit each 't' against the audio, then pass the result "
+        "back in as --input-log for exact chapter/caption timing with no "
+        "cluster-snapping heuristics involved",
+    )
     args = ap.parse_args()
 
     if args.seed_input_log:
         _, _, qsos_all = merge_edi(args.edi)
-        with open(args.seed_input_log, 'w') as fh:
+        with open(args.seed_input_log, "w") as fh:
             for q in qsos_all:
-                fh.write(json.dumps({
-                    't': q.dt.strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z',
-                    'event': 'qso',
-                    'call': q.call,
-                    'nr_s': q.nr_s,
-                    'loc': q.loc,
-                    'dup': q.dup,
-                }) + '\n')
+                fh.write(
+                    json.dumps(
+                        {
+                            "t": q.dt.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z",
+                            "event": "qso",
+                            "call": q.call,
+                            "nr_s": q.nr_s,
+                            "loc": q.loc,
+                            "dup": q.dup,
+                        }
+                    )
+                    + "\n"
+                )
         print(f"wrote {len(qsos_all)} seed 'qso' events to {args.seed_input_log}")
-        print("each 't' is just the EDI's own minute, seconds zeroed -- edit it to the "
-              "QSO's real time from the audio, then pass "
-              f"--input-log {args.seed_input_log} when rendering")
+        print(
+            "each 't' is just the EDI's own minute, seconds zeroed -- edit it to the "
+            "QSO's real time from the audio, then pass "
+            f"--input-log {args.seed_input_log} when rendering"
+        )
         return
 
     W, H = RESOLUTIONS[args.res]
@@ -1954,9 +2240,11 @@ def main() -> None:
     if args.cast:
         cast_wall, cast_cols, cast_rows = parse_cast_header(args.cast)
         cast_start = audio_time_for(cast_wall + timedelta(hours=offset_h), segs)
-        print(f"  cast: {cast_cols}x{cast_rows} terminal, synced to start at "
-              f"{cast_start:.0f}s in the output (exact -- Unix-epoch timestamp, "
-              f"no whole-hour rounding needed)")
+        print(
+            f"  cast: {cast_cols}x{cast_rows} terminal, synced to start at "
+            f"{cast_start:.0f}s in the output (exact -- Unix-epoch timestamp, "
+            f"no whole-hour rounding needed)"
+        )
 
     webcam_start = None
     webcam_rate = 0.0
@@ -1966,23 +2254,29 @@ def main() -> None:
         # logger's webcam_start event (~1s early, stamped before ffmpeg
         # spawned) -- see webcam_start_from_log. Both are same-machine, so
         # placement is exact either way, no cross-correlation.
-        log_path = os.path.splitext(args.webcam)[0] + '.log'
+        log_path = os.path.splitext(args.webcam)[0] + ".log"
         cam_wall = webcam_start_from_log(log_path) if os.path.exists(log_path) else None
-        src = 'ffmpeg frame-0 wallclock'
+        src = "ffmpeg frame-0 wallclock"
         if cam_wall is None and args.input_log:
             cam_wall = webcam_start_wall(args.input_log)
-            src = 'logged webcam_start event'
+            src = "logged webcam_start event"
         if cam_wall is not None:
             webcam_start = audio_time_for(cam_wall + timedelta(hours=offset_h), segs)
             webcam_exact = True
-            print(f"  webcam: synced to start at {webcam_start:.0f}s in the output "
-                  f"(exact -- {src}, same-machine clock, no cross-correlation needed)")
+            print(
+                f"  webcam: synced to start at {webcam_start:.0f}s in the output "
+                f"(exact -- {src}, same-machine clock, no cross-correlation needed)"
+            )
         else:
             cam_wall = parse_webcam_wall(args.webcam)
             cam_dur = _ffprobe_duration(args.webcam)
-            webcam_start = sync_webcam_start(cam_wall, cam_dur, qsos_all, segs, offset_h)
-            print(f"  webcam: synced to start at {webcam_start:.0f}s in the output (coarse, "
-                  f"whole-hour only -- see refine_webcam_start below)")
+            webcam_start = sync_webcam_start(
+                cam_wall, cam_dur, qsos_all, segs, offset_h
+            )
+            print(
+                f"  webcam: synced to start at {webcam_start:.0f}s in the output (coarse, "
+                f"whole-hour only -- see refine_webcam_start below)"
+            )
 
     # read_wav_metadata runs before --duration trims segs (unlike the CW
     # decode loop further down, which *should* skip past the cutoff) so the
@@ -1999,38 +2293,52 @@ def main() -> None:
         # is no separate device clock to have drifted, so no rate correction.
         if args.webcam_offset is not None:
             webcam_start += args.webcam_offset
-            print(f"  webcam: manual offset {args.webcam_offset:+.2f}s applied -> "
-                  f"starts at {webcam_start:.2f}s")
+            print(
+                f"  webcam: manual offset {args.webcam_offset:+.2f}s applied -> "
+                f"starts at {webcam_start:.2f}s"
+            )
     elif args.webcam and webcam_start is not None:
         if args.webcam_offset is not None:
             webcam_start += args.webcam_offset
-            print(f"  webcam: manual offset {args.webcam_offset:+.2f}s applied -> "
-                  f"starts at {webcam_start:.2f}s (no drift-rate correction -- "
-                  f"pass no --webcam-offset to use automatic cross-correlation instead)")
+            print(
+                f"  webcam: manual offset {args.webcam_offset:+.2f}s applied -> "
+                f"starts at {webcam_start:.2f}s (no drift-rate correction -- "
+                f"pass no --webcam-offset to use automatic cross-correlation instead)"
+            )
         else:
             refined, rate, n = refine_webcam_start(args.webcam, segs, webcam_start)
             if n:
-                print(f"  webcam: audio cross-correlation refined start by "
-                      f"{refined - webcam_start:+.2f}s and found a "
-                      f"{rate * 3600:+.3f}s/hour clock-drift rate using {n} anchor(s) "
-                      f"-> starts at {refined:.2f}s")
+                print(
+                    f"  webcam: audio cross-correlation refined start by "
+                    f"{refined - webcam_start:+.2f}s and found a "
+                    f"{rate * 3600:+.3f}s/hour clock-drift rate using {n} anchor(s) "
+                    f"-> starts at {refined:.2f}s"
+                )
                 webcam_start = refined
                 webcam_rate = rate
             else:
-                print("  webcam: audio cross-correlation found no confident match "
-                      "(no audio track, or no TX segments long enough) -- using "
-                      "coarse whole-hour sync only; pass --webcam-offset to "
-                      "fine-tune manually")
+                print(
+                    "  webcam: audio cross-correlation found no confident match "
+                    "(no audio track, or no TX segments long enough) -- using "
+                    "coarse whole-hour sync only; pass --webcam-offset to "
+                    "fine-tune manually"
+                )
 
     if args.duration:
         segs = trim_to_duration(segs, args.duration)
-        print(f"  duration: preview cut to first {args.duration:.0f}s "
-              f"({len(segs)} segments)")
+        print(
+            f"  duration: preview cut to first {args.duration:.0f}s "
+            f"({len(segs)} segments)"
+        )
 
     telemetry = load_telemetry(args.telemetry) if args.telemetry else []
     state_events = build_state_events(segs, telemetry, offset_h)
     known = sum(1 for _, _, st in state_events if st.ptt is not None)
-    suffix = f" ({args.telemetry} refines freq/mode within long segments)" if args.telemetry else ""
+    suffix = (
+        f" ({args.telemetry} refines freq/mode within long segments)"
+        if args.telemetry
+        else ""
+    )
     print(f"  RX/TX: {known} state changes{suffix}")
 
     print("decoding CW ...")
@@ -2050,22 +2358,31 @@ def main() -> None:
             continue
         events, snr = decode_segment(s.path, args.pitch)
         s.events = gate_events(s.dur, events, snr)
-    decoded = sum(len(s.events) for s in segs) + sum(len(ev) for _, _, _, ev in long_cw_raw)
+    decoded = sum(len(s.events) for s in segs) + sum(
+        len(ev) for _, _, _, ev in long_cw_raw
+    )
     trusted_overs = sum(1 for s in segs if s.events) + len(long_cw_raw)
     print(f"  {decoded} characters from {trusted_overs} trusted overs")
     if long_cw_raw:
-        print(f"  including {len(long_cw_raw)} CW exchange(s) recovered from "
-              f"otherwise-too-long listening segments")
+        print(
+            f"  including {len(long_cw_raw)} CW exchange(s) recovered from "
+            f"otherwise-too-long listening segments"
+        )
 
     if args.skip_gaps:
         long_cw_segs = {id(s) for s, _, _, _ in long_cw_raw}
         remap_audio_t(segs, long_cw_segs)
         total = segs[-1].audio_t + _eff(segs[-1])
-        print(f"  skip-gaps: {total:.0f}s video (was {segs[-1].audio_t + segs[-1].dur:.0f}s)")
+        print(
+            f"  skip-gaps: {total:.0f}s video (was {segs[-1].audio_t + segs[-1].dur:.0f}s)"
+        )
 
     total = segs[-1].audio_t + _eff(segs[-1])
-    qsos = [q for q in qsos_all
-            if audio_time_for(q.dt + timedelta(hours=offset_h), segs) < total]
+    qsos = [
+        q
+        for q in qsos_all
+        if audio_time_for(q.dt + timedelta(hours=offset_h), segs) < total
+    ]
     if len(qsos) < len(qsos_all):
         print(f"  {len(qsos)}/{len(qsos_all)} QSOs fall within the {total:.0f}s cut")
 
@@ -2079,8 +2396,10 @@ def main() -> None:
 
     # Resolved to absolute video-timeline time only now, using each
     # segment's final audio_t (post-remap, if --skip-gaps was used).
-    long_cw_spans = [(seg.audio_t + t0, seg.audio_t + t1, events)
-                     for seg, t0, t1, events in long_cw_raw]
+    long_cw_spans = [
+        (seg.audio_t + t0, seg.audio_t + t1, events)
+        for seg, t0, t1, events in long_cw_raw
+    ]
 
     # Only feeds qso_windows()'s exact chapter/caption timing now -- the
     # typewriter overlay this also used to drive is gone, since the
@@ -2090,36 +2409,46 @@ def main() -> None:
         input_log = load_input_log(args.input_log)
         qso_times = match_qso_times(qsos, input_log)
         matched = sum(1 for t in qso_times if t is not None)
-        print(f"  {matched}/{len(qsos)} QSOs got an exact submit time from the input log")
+        print(
+            f"  {matched}/{len(qsos)} QSOs got an exact submit time from the input log"
+        )
 
     ass_text = build_ass(segs, W, H, state_events, long_cw_spans=long_cw_spans)
-    ass_path = os.path.splitext(args.out)[0] + '.ass'
-    with open(ass_path, 'w') as fh:
+    ass_path = os.path.splitext(args.out)[0] + ".ass"
+    with open(ass_path, "w") as fh:
         fh.write(ass_text)
 
     stem = os.path.splitext(args.out)[0]
     windows = qso_windows(qsos, segs, offset_h, total, qso_times)
-    with open(stem + '.chapters.txt', 'w') as fh:
+    with open(stem + ".chapters.txt", "w") as fh:
         fh.write(build_chapters(qsos, windows))
-    with open(stem + '.srt', 'w') as fh:
+    with open(stem + ".srt", "w") as fh:
         fh.write(build_srt(qsos, windows))
     print(f"wrote {stem}.chapters.txt and {stem}.srt")
 
-    wav = os.path.splitext(args.out)[0] + '.concat.wav'
+    wav = os.path.splitext(args.out)[0] + ".concat.wav"
     print("concatenating audio ...")
     concat_audio(segs, wav)
 
     cast_video = None
     if args.cast and cast_start is not None:
-        cast_video = stem + '.cast.mp4'
+        cast_video = stem + ".cast.mp4"
         print("rendering terminal-session PiP ...")
         render_cast_video(args.cast, cast_video)
 
     print("rendering (this takes a while) ...")
-    render(wav, ass_path, args.out, W, H,
-          webcam=args.webcam if webcam_start is not None else None,
-          webcam_start=webcam_start or 0.0, webcam_rate=webcam_rate,
-          cast=cast_video, cast_start=cast_start or 0.0)
+    render(
+        wav,
+        ass_path,
+        args.out,
+        W,
+        H,
+        webcam=args.webcam if webcam_start is not None else None,
+        webcam_start=webcam_start or 0.0,
+        webcam_rate=webcam_rate,
+        cast=cast_video,
+        cast_start=cast_start or 0.0,
+    )
 
     if not args.keep_ass:
         os.remove(wav)
@@ -2129,5 +2458,5 @@ def main() -> None:
     print(f"wrote {args.out}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

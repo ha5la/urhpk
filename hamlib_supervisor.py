@@ -30,6 +30,7 @@ Usage:
     rest of the session. Handles SIGHUP as well as SIGTERM/SIGINT so
     killing that tmux window/session stops rigctld/rotctld cleanly too.
 """
+
 from __future__ import annotations
 
 import ctypes
@@ -45,17 +46,17 @@ from pathlib import Path
 # ============================================================
 # Configuration
 # ============================================================
-RIG_DEVICE  = Path(
+RIG_DEVICE = Path(
     "/dev/serial/by-id/"
     "usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_IC-9700_13013358_A-if00-port0"
 )
-RIG_MODEL   = "3081"          # Icom IC-9700 (RIG_MODEL_IC9700)
-RIG_BAUD    = "115200"
+RIG_MODEL = "3081"  # Icom IC-9700 (RIG_MODEL_IC9700)
+RIG_BAUD = "115200"
 RIGCTLD_PORT = 4532
 
-ROT_DEVICE  = Path("/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0")
-ROT_MODEL   = "603"           # Yaesu GS-232B-compatible (custom Arduino)
-ROT_BAUD    = "9600"
+ROT_DEVICE = Path("/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0")
+ROT_MODEL = "603"  # Yaesu GS-232B-compatible (custom Arduino)
+ROT_BAUD = "9600"
 ROTCTLD_PORT = 4533
 
 STOP_TIMEOUT_S = 5.0
@@ -63,11 +64,11 @@ STOP_TIMEOUT_S = 5.0
 # ============================================================
 # inotify (ctypes, pure stdlib — no watchdog/inotify_simple dependency)
 # ============================================================
-IN_CREATE     = 0x00000100
-IN_DELETE     = 0x00000200
+IN_CREATE = 0x00000100
+IN_DELETE = 0x00000200
 IN_MOVED_FROM = 0x00000040
-IN_MOVED_TO   = 0x00000080
-WATCH_MASK    = IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO
+IN_MOVED_TO = 0x00000080
+WATCH_MASK = IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO
 
 _libc = ctypes.CDLL("libc.so.6", use_errno=True)
 _libc.inotify_init1.argtypes = [ctypes.c_int]
@@ -97,7 +98,7 @@ class INotify:
         while i < len(buf):
             wd, mask, _cookie, name_len = _EVENT_HEADER.unpack_from(buf, i)
             i += _EVENT_HEADER.size
-            name = buf[i:i + name_len].split(b"\0", 1)[0].decode()
+            name = buf[i : i + name_len].split(b"\0", 1)[0].decode()
             i += name_len
             events.append((wd, mask, name))
         return events
@@ -106,6 +107,7 @@ class INotify:
 # ============================================================
 # Daemon lifecycle
 # ============================================================
+
 
 def _log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
@@ -144,16 +146,30 @@ def build_daemons() -> list[Daemon]:
             name="rigctld",
             device=RIG_DEVICE,
             cmd=[
-                "rigctld", "-m", RIG_MODEL, "-r", str(RIG_DEVICE),
-                "-s", RIG_BAUD, "-t", str(RIGCTLD_PORT),
+                "rigctld",
+                "-m",
+                RIG_MODEL,
+                "-r",
+                str(RIG_DEVICE),
+                "-s",
+                RIG_BAUD,
+                "-t",
+                str(RIGCTLD_PORT),
             ],
         ),
         Daemon(
             name="rotctld",
             device=ROT_DEVICE,
             cmd=[
-                "rotctld", "-m", ROT_MODEL, "-r", str(ROT_DEVICE),
-                "-s", ROT_BAUD, "-t", str(ROTCTLD_PORT),
+                "rotctld",
+                "-m",
+                ROT_MODEL,
+                "-r",
+                str(ROT_DEVICE),
+                "-s",
+                ROT_BAUD,
+                "-t",
+                str(ROTCTLD_PORT),
             ],
         ),
     ]

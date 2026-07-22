@@ -29,6 +29,7 @@ def _wait_until(predicate, timeout=2.0):
 # INotify
 # ──────────────────────────────────────────────────────────────
 
+
 def test_inotify_detects_file_create_and_delete(tmp_path):
     inotify = INotify()
     inotify.add_watch(tmp_path)
@@ -46,6 +47,7 @@ def test_inotify_detects_file_create_and_delete(tmp_path):
 # ──────────────────────────────────────────────────────────────
 # Daemon lifecycle
 # ──────────────────────────────────────────────────────────────
+
 
 def test_daemon_start_launches_process(tmp_path):
     d = Daemon(name="test", device=tmp_path / "dev", cmd=SLEEP_CMD)
@@ -86,6 +88,7 @@ def test_daemon_stop_when_never_started_is_a_noop(tmp_path):
 # ──────────────────────────────────────────────────────────────
 # reconcile_initial_state / route_event
 # ──────────────────────────────────────────────────────────────
+
 
 def test_reconcile_starts_only_daemons_whose_device_already_exists(tmp_path):
     present = tmp_path / "present"

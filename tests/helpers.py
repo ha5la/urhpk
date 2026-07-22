@@ -1,4 +1,5 @@
 """Shared test helpers: mock servers and IRC client."""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,8 +7,8 @@ import socket
 
 from on4kst_irc_bridge import IRCSession
 
-CALLSIGN   = "HA5LA"
-PASSWORD   = "testpass"
+CALLSIGN = "HA5LA"
+PASSWORD = "testpass"
 # A minimal chat-prompt line that satisfies RE_CHAT and contains a locator
 CHAT_PROMPT = b"1234Z HA5LA HA5LA JN97MX chat >\r\n"
 
@@ -15,6 +16,7 @@ CHAT_PROMPT = b"1234Z HA5LA HA5LA JN97MX chat >\r\n"
 # ============================================================
 # Mock ON4KST server
 # ============================================================
+
 
 class MockKSTServer:
     """Minimal ON4KST server for integration tests."""
@@ -27,9 +29,7 @@ class MockKSTServer:
         self._logged_in = asyncio.Event()
 
     async def start(self):
-        self._server = await asyncio.start_server(
-            self._handle, "127.0.0.1", 0
-        )
+        self._server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
         self.port = self._server.sockets[0].getsockname()[1]
 
     async def stop(self):
@@ -40,8 +40,7 @@ class MockKSTServer:
             except asyncio.TimeoutError:
                 pass
 
-    async def _handle(self, reader: asyncio.StreamReader,
-                      writer: asyncio.StreamWriter):
+    async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         self._writer = writer
         try:
             writer.write(b"Login: ")
@@ -104,6 +103,7 @@ class MockKSTServer:
 # Mock Bridge / KST proxy  (for IRCSession unit tests)
 # ============================================================
 
+
 class MockKSTProxy:
     def __init__(self):
         self.sent: list[str] = []
@@ -115,14 +115,15 @@ class MockKSTProxy:
 
 class MockBridge:
     """Minimal Bridge substitute — lets IRCSession tests run without KST."""
+
     callsign = CALLSIGN
 
     def __init__(self):
-        self.kst            = MockKSTProxy()
-        self.my_locator     = ""
-        self.irc_messages:   list[tuple[str, str]] = []
-        self.connected:      list = []
-        self.disconnected:   list = []
+        self.kst = MockKSTProxy()
+        self.my_locator = ""
+        self.irc_messages: list[tuple[str, str]] = []
+        self.connected: list = []
+        self.disconnected: list = []
 
     async def irc_connected(self, session):
         self.connected.append(session)
@@ -138,12 +139,12 @@ class MockBridge:
 # IRC client helper
 # ============================================================
 
+
 class IRCClientHelper:
-    def __init__(self, reader: asyncio.StreamReader,
-                 writer: asyncio.StreamWriter):
+    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         self._reader = reader
         self._writer = writer
-        self._buf    = ""
+        self._buf = ""
 
     async def send(self, line: str):
         self._writer.write((line + "\r\n").encode())
@@ -191,6 +192,7 @@ class IRCClientHelper:
 # Stream pair helper
 # ============================================================
 
+
 async def make_stream_pair():
     """Two connected (reader, writer) pairs via socketpair."""
     s1, s2 = socket.socketpair()
@@ -203,5 +205,5 @@ async def make_irc_pair(bridge: MockBridge):
     """Return (IRCSession, IRCClientHelper) wired together."""
     (sr, sw), (cr, cw) = await make_stream_pair()
     session = IRCSession(sr, sw, bridge)
-    client  = IRCClientHelper(cr, cw)
+    client = IRCClientHelper(cr, cw)
     return session, client

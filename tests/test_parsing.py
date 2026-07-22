@@ -1,4 +1,5 @@
 """Unit tests for parsing functions and regexes — no async, no network."""
+
 import html
 
 import pytest
@@ -23,22 +24,22 @@ class TestStripIAC:
         assert strip_iac(data) == data
 
     def test_removes_three_byte_sequence(self):
-        assert strip_iac(b"pre\xFF\xFB\x01post") == b"prepost"
+        assert strip_iac(b"pre\xff\xfb\x01post") == b"prepost"
 
     def test_removes_multiple_sequences(self):
-        assert strip_iac(b"\xFF\xFB\x01\xFF\xFD\x03ok") == b"ok"
+        assert strip_iac(b"\xff\xfb\x01\xff\xfd\x03ok") == b"ok"
 
     def test_truncated_iac_not_removed(self):
         # Only 2 bytes — not a complete IAC sequence, should be kept
-        result = strip_iac(b"\xFF\xFB")
-        assert b"\xFF" in result
+        result = strip_iac(b"\xff\xfb")
+        assert b"\xff" in result
 
 
 class TestREUSR:
     def test_normal_entry(self):
         m = RE_USR.match("CT1FCX           IM59LG Pedro")
         assert m is not None
-        assert m.group(1) == ""             # not away
+        assert m.group(1) == ""  # not away
         assert m.group(2).upper() == "CT1FCX"
         assert m.group(3).upper() == "IM59LG"
         assert "Pedro" in m.group(4)
@@ -46,7 +47,7 @@ class TestREUSR:
     def test_away_entry(self):
         m = RE_USR.match("(DD0VF)          JO61TB Steffen 2-70-23")
         assert m is not None
-        assert m.group(1) == "("            # away marker
+        assert m.group(1) == "("  # away marker
         assert m.group(2).upper() == "DD0VF"
         assert m.group(3).upper() == "JO61TB"
         assert "Steffen" in m.group(4)
@@ -165,16 +166,16 @@ class TestSkedText:
         assert "km" not in text
 
     def test_with_qrg_and_mode(self):
-        text = sked_text("G6DDN", "HA5LA", "JN97MX", "IO83RJ",
-                         qrg="144.174", mode="USB")
+        text = sked_text(
+            "G6DDN", "HA5LA", "JN97MX", "IO83RJ", qrg="144.174", mode="USB"
+        )
         assert "144.174 MHz" in text
         assert "USB" in text
         # QRG appears before locator
         assert text.index("144.174") < text.index("JN97MX")
 
     def test_with_qrg_no_mode(self):
-        text = sked_text("G6DDN", "HA5LA", "JN97MX", "IO83RJ",
-                         qrg="144.174", mode="")
+        text = sked_text("G6DDN", "HA5LA", "JN97MX", "IO83RJ", qrg="144.174", mode="")
         assert "144.174 MHz" in text
         assert "USB" not in text
 

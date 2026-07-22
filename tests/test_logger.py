@@ -1,4 +1,5 @@
 """Tests for puskas_logger pure functions — no rig, no network, no prompts."""
+
 import io
 from datetime import datetime, timezone
 
@@ -41,20 +42,43 @@ from puskas_logger import (
 # Helpers
 # ──────────────────────────────────────────────────────────────
 
+
 def _dt(h: int = 16, m: int = 0) -> datetime:
     return datetime(2026, 5, 4, h, m, tzinfo=timezone.utc)
 
-def _qso(call="HA7NS", band="2M", mode="SSB", nr_s=1, nr_r=1,
-         rst_s="59", rst_r="59", loc="JN97WM", dist_km=38,
-         h=16, m=0, dt=None) -> QSO:
-    return QSO(dt=dt or _dt(h, m), band=band, mode=mode, call=call,
-               rst_s=rst_s, nr_s=nr_s, rst_r=rst_r, nr_r=nr_r,
-               loc=loc, dist_km=dist_km)
+
+def _qso(
+    call="HA7NS",
+    band="2M",
+    mode="SSB",
+    nr_s=1,
+    nr_r=1,
+    rst_s="59",
+    rst_r="59",
+    loc="JN97WM",
+    dist_km=38,
+    h=16,
+    m=0,
+    dt=None,
+) -> QSO:
+    return QSO(
+        dt=dt or _dt(h, m),
+        band=band,
+        mode=mode,
+        call=call,
+        rst_s=rst_s,
+        nr_s=nr_s,
+        rst_r=rst_r,
+        nr_r=nr_r,
+        loc=loc,
+        dist_km=dist_km,
+    )
 
 
 # ──────────────────────────────────────────────────────────────
 # parse_input
 # ──────────────────────────────────────────────────────────────
+
 
 class TestParseInput:
     def test_three_tokens_no_locator_returns_error(self):
@@ -133,6 +157,7 @@ class TestParseInput:
 # LogBook
 # ──────────────────────────────────────────────────────────────
 
+
 class TestLogBook:
     def setup_method(self):
         self.lb = LogBook("HA5LA", "JN97TF", {"HA7NS": ["JN97WM"]})
@@ -146,7 +171,7 @@ class TestLogBook:
         assert self.lb.next_nr("70CM") == 1
 
     def test_next_nr_no_band_returns_total_plus_one(self):
-        self.lb.add(_qso(band="2M",   nr_s=1))
+        self.lb.add(_qso(band="2M", nr_s=1))
         self.lb.add(_qso(band="70CM", nr_s=1))
         assert self.lb.next_nr("") == 3
 
@@ -160,12 +185,11 @@ class TestLogBook:
     def test_dup_check_uses_all_three_keys(self):
         self.lb.add(_qso(call="HA7NS", band="2M", mode="SSB"))
         assert self.lb.add(_qso(call="HA7NS", band="70CM", mode="SSB")) is False
-        assert self.lb.add(_qso(call="HA7NS", band="2M",   mode="CW"))  is False
-        assert self.lb.add(_qso(call="HA7NS", band="2M",   mode="FM"))  is False
+        assert self.lb.add(_qso(call="HA7NS", band="2M", mode="CW")) is False
+        assert self.lb.add(_qso(call="HA7NS", band="2M", mode="FM")) is False
 
     def test_nine_valid_combos_per_station(self):
-        combos = [(b, m) for b in ("2M", "70CM", "23CM")
-                         for m in ("SSB", "CW", "FM")]
+        combos = [(b, m) for b in ("2M", "70CM", "23CM") for m in ("SSB", "CW", "FM")]
         assert len(combos) == 9
         for b, m in combos:
             assert self.lb.add(_qso(call="HA7NS", band=b, mode=m)) is False
@@ -250,6 +274,7 @@ class TestLogBook:
 # _is_dup_in_log
 # ──────────────────────────────────────────────────────────────
 
+
 class TestIsDupInLog:
     def test_first_occurrence_is_not_dup(self):
         q = _qso(call="HA7NS", band="2M", mode="SSB")
@@ -261,7 +286,7 @@ class TestIsDupInLog:
         assert _is_dup_in_log([q1, q2], q2) is True
 
     def test_different_band_not_dup(self):
-        q1 = _qso(call="HA7NS", band="2M",   mode="SSB")
+        q1 = _qso(call="HA7NS", band="2M", mode="SSB")
         q2 = _qso(call="HA7NS", band="70CM", mode="SSB")
         assert _is_dup_in_log([q1, q2], q2) is False
 
@@ -270,20 +295,27 @@ class TestIsDupInLog:
 # tname_for
 # ──────────────────────────────────────────────────────────────
 
+
 class TestTnameFor:
     def test_may_2026(self):
         assert tname_for(datetime(2026, 5, 4, tzinfo=timezone.utc)) == "PUSKAS2026MAJUS"
 
     def test_january(self):
-        assert tname_for(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "PUSKAS2026JANUAR"
+        assert (
+            tname_for(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "PUSKAS2026JANUAR"
+        )
 
     def test_december(self):
-        assert tname_for(datetime(2025, 12, 8, tzinfo=timezone.utc)) == "PUSKAS2025DECEMBER"
+        assert (
+            tname_for(datetime(2025, 12, 8, tzinfo=timezone.utc))
+            == "PUSKAS2025DECEMBER"
+        )
 
 
 # ──────────────────────────────────────────────────────────────
 # write_edi
 # ──────────────────────────────────────────────────────────────
+
 
 class TestWriteEdi:
     def setup_method(self, tmp_path_factory):
@@ -313,8 +345,19 @@ class TestWriteEdi:
 
     def test_qso_record_format(self, tmp_path):
         lb = LogBook("HA5LA", "JN97TF", {})
-        lb.add(_qso(call="HA7NS", band="2M", mode="SSB",
-                    nr_s=1, nr_r=1, rst_s="59", rst_r="59", loc="JN97WM", dist_km=38))
+        lb.add(
+            _qso(
+                call="HA7NS",
+                band="2M",
+                mode="SSB",
+                nr_s=1,
+                nr_r=1,
+                rst_s="59",
+                rst_r="59",
+                loc="JN97WM",
+                dist_km=38,
+            )
+        )
         txt = write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path).read_text()
         assert "260504;1600;HA7NS;1;59;001;59;001;;JN97WM;38" in txt
 
@@ -322,13 +365,13 @@ class TestWriteEdi:
         lb = LogBook("HA5LA", "JN97TF", {})
         lb.add(_qso(band="2M", mode="CW", rst_s="599", rst_r="599", nr_s=1))
         txt = write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path).read_text()
-        assert ";2;" in txt   # mode code 2 = CW
+        assert ";2;" in txt  # mode code 2 = CW
 
     def test_fm_mode_code(self, tmp_path):
         lb = LogBook("HA5LA", "JN97TF", {})
         lb.add(_qso(band="2M", mode="FM", nr_s=1))
         txt = write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path).read_text()
-        assert ";6;" in txt   # mode code 6 = FM
+        assert ";6;" in txt  # mode code 6 = FM
 
     def test_dup_flagged_with_d(self, tmp_path):
         lb = LogBook("HA5LA", "JN97TF", {})
@@ -337,16 +380,16 @@ class TestWriteEdi:
         txt = write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path).read_text()
         lines = [line for line in txt.splitlines() if "HA7NS" in line]
         assert len(lines) == 2
-        assert lines[0].endswith(";")    # not a dup
+        assert lines[0].endswith(";")  # not a dup
         assert lines[1].endswith("D;")  # dup
 
     def test_dup_excluded_from_score(self, tmp_path):
         lb = LogBook("HA5LA", "JN97TF", {})
-        lb.add(_qso(call="HA7NS",  band="2M", mode="SSB", nr_s=1, dist_km=38, h=16))
+        lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_s=1, dist_km=38, h=16))
         lb.add(_qso(call="HA3KHB", band="2M", mode="SSB", nr_s=2, dist_km=168, h=17))
-        lb.add(_qso(call="HA7NS",  band="2M", mode="SSB", nr_s=3, dist_km=38,  h=18))
+        lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_s=3, dist_km=38, h=18))
         txt = write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path).read_text()
-        assert "CQSOP=206" in txt   # 38 + 168; dup not counted
+        assert "CQSOP=206" in txt  # 38 + 168; dup not counted
 
     def test_qso_count_header(self, tmp_path):
         lb = LogBook("HA5LA", "JN97TF", {})
@@ -372,13 +415,48 @@ class TestWriteEdi:
 # load_from_edi (roundtrip)
 # ──────────────────────────────────────────────────────────────
 
+
 class TestLoadFromEdi:
     def _make_logbook(self):
         lb = LogBook("HA5LA", "JN97TF", {})
-        lb.add(_qso(call="HA7NS",  band="2M", mode="SSB", nr_s=1, nr_r=1,  dist_km=38,  h=16, m=1))
-        lb.add(_qso(call="HA3KHB", band="2M", mode="CW",  nr_s=2, nr_r=14, dist_km=168, h=16, m=59,
-                    rst_s="599", rst_r="599"))
-        lb.add(_qso(call="HA7NS",  band="2M", mode="SSB", nr_s=3, nr_r=2,  dist_km=38,  h=17, m=5))
+        lb.add(
+            _qso(
+                call="HA7NS",
+                band="2M",
+                mode="SSB",
+                nr_s=1,
+                nr_r=1,
+                dist_km=38,
+                h=16,
+                m=1,
+            )
+        )
+        lb.add(
+            _qso(
+                call="HA3KHB",
+                band="2M",
+                mode="CW",
+                nr_s=2,
+                nr_r=14,
+                dist_km=168,
+                h=16,
+                m=59,
+                rst_s="599",
+                rst_r="599",
+            )
+        )
+        lb.add(
+            _qso(
+                call="HA7NS",
+                band="2M",
+                mode="SSB",
+                nr_s=3,
+                nr_r=2,
+                dist_km=38,
+                h=17,
+                m=5,
+            )
+        )
         return lb
 
     def test_roundtrip_preserves_qso_count(self, tmp_path):
@@ -420,9 +498,9 @@ class TestLoadFromEdi:
 
     def test_multiband_roundtrip(self, tmp_path):
         lb = LogBook("HA5LA", "JN97TF", {})
-        lb.add(_qso(call="HA7NS", band="2M",   mode="SSB", nr_s=1, h=16))
-        lb.add(_qso(call="HA7NS", band="70CM", mode="FM",  nr_s=1, h=17))
-        write_edi(lb, "2M",   "PUSKAS2026MAJUS", tmp_path)
+        lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_s=1, h=16))
+        lb.add(_qso(call="HA7NS", band="70CM", mode="FM", nr_s=1, h=17))
+        write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path)
         write_edi(lb, "70CM", "PUSKAS2026MAJUS", tmp_path)
         paths = sorted(tmp_path.glob("*.[Ee][Dd][Ii]"))
         lb2, _ = load_from_edi(paths, {})
@@ -455,9 +533,9 @@ class TestLoadFromEdi:
         stale = p.with_suffix(".EDI")
         stale.write_text(p.read_text())
         paths = sorted(tmp_path.glob("*.[Ee][Dd][Ii]"))
-        assert len(paths) == 2          # both files visible on Linux
+        assert len(paths) == 2  # both files visible on Linux
         lb2, _ = load_from_edi(paths, {})
-        assert len(lb2.qsos) == len(lb.qsos)   # no doubling
+        assert len(lb2.qsos) == len(lb.qsos)  # no doubling
 
     def test_write_edi_removes_uppercase_sibling(self, tmp_path):
         lb = self._make_logbook()
@@ -479,12 +557,13 @@ class TestLoadFromEdi:
 # QSO editing (inline edit logic from run())
 # ──────────────────────────────────────────────────────────────
 
+
 class TestQsoEdit:
     def _lb_with_qsos(self):
         lb = LogBook("HA5LA", "JN97TF", {"HA7NS": ["JN97WM"], "HA3KHB": ["JN86SR"]})
-        lb.add(_qso(call="HA7NS",  band="2M", mode="SSB", nr_s=1, nr_r=1,  h=16, m=1))
+        lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_s=1, nr_r=1, h=16, m=1))
         lb.add(_qso(call="HA3KHB", band="2M", mode="SSB", nr_s=2, nr_r=14, h=16, m=59))
-        lb.add(_qso(call="HA8RM",  band="2M", mode="SSB", nr_s=3, nr_r=12, h=17, m=4))
+        lb.add(_qso(call="HA8RM", band="2M", mode="SSB", nr_s=3, nr_r=12, h=17, m=4))
         return lb
 
     def _apply_edit(self, lb, edit_idx, parsed):
@@ -492,10 +571,16 @@ class TestQsoEdit:
         old = lb.qsos[real_idx]
         loc = parsed["loc"]  # mandatory
         lb.qsos[real_idx] = QSO(
-            dt=old.dt, band=old.band, mode=old.mode,
-            call=parsed["call"], rst_s=old.rst_s, nr_s=old.nr_s,
-            rst_r=parsed["rst_r"], nr_r=parsed["nr_r"],
-            loc=loc, dist_km=lb.dist(loc),
+            dt=old.dt,
+            band=old.band,
+            mode=old.mode,
+            call=parsed["call"],
+            rst_s=old.rst_s,
+            nr_s=old.nr_s,
+            rst_r=parsed["rst_r"],
+            nr_r=parsed["nr_r"],
+            loc=loc,
+            dist_km=lb.dist(loc),
         )
         lb.worked = {(q.call, q.band, q.mode) for q in lb.qsos}
 
@@ -511,26 +596,26 @@ class TestQsoEdit:
         lb = self._lb_with_qsos()
         original = lb.qsos[0]
         parsed = parse_input("HA7NS 59 002 JN97WM")
-        self._apply_edit(lb, 2, parsed)   # edit_idx=2 → first QSO
+        self._apply_edit(lb, 2, parsed)  # edit_idx=2 → first QSO
         edited = lb.qsos[0]
-        assert edited.dt    == original.dt
-        assert edited.band  == original.band
-        assert edited.mode  == original.mode
-        assert edited.nr_s  == original.nr_s
+        assert edited.dt == original.dt
+        assert edited.band == original.band
+        assert edited.mode == original.mode
+        assert edited.nr_s == original.nr_s
         assert edited.rst_s == original.rst_s
 
     def test_edit_middle_qso(self):
         lb = self._lb_with_qsos()
         parsed = parse_input("HA3KHB 59 015 JN86SR")
-        self._apply_edit(lb, 1, parsed)   # edit_idx=1 → middle QSO
+        self._apply_edit(lb, 1, parsed)  # edit_idx=1 → middle QSO
         assert lb.qsos[1].nr_r == 15
-        assert lb.qsos[0].call == "HA7NS"   # others unchanged
+        assert lb.qsos[0].call == "HA7NS"  # others unchanged
         assert lb.qsos[2].call == "HA8RM"
 
     def test_edit_rebuilds_worked_set(self):
         lb = self._lb_with_qsos()
         parsed = parse_input("HA5OO 59 012 JN96UW")
-        self._apply_edit(lb, 0, parsed)    # replace HA8RM with HA5OO
+        self._apply_edit(lb, 0, parsed)  # replace HA8RM with HA5OO
         assert ("HA5OO", "2M", "SSB") in lb.worked
         assert ("HA8RM", "2M", "SSB") not in lb.worked
 
@@ -538,7 +623,7 @@ class TestQsoEdit:
         lb = self._lb_with_qsos()
         # HA7NS is in worked; edit first QSO to change its callsign
         parsed = parse_input("HA5OO 59 001 JN96UW")
-        self._apply_edit(lb, 2, parsed)    # edit_idx=2 → first QSO
+        self._apply_edit(lb, 2, parsed)  # edit_idx=2 → first QSO
         # HA7NS should no longer be in worked (it was the only one)
         assert ("HA7NS", "2M", "SSB") not in lb.worked
         # Adding HA7NS now should not be a dup
@@ -555,12 +640,13 @@ class TestQsoEdit:
         write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path)
         lb2, _ = load_from_edi(list(tmp_path.glob("*.[Ee][Dd][Ii]")), {})
         assert lb2.qsos[2].call == "HA8RM"
-        assert lb2.qsos[2].loc  == "JN96UW"
+        assert lb2.qsos[2].loc == "JN96UW"
 
 
 # ──────────────────────────────────────────────────────────────
 # _band_summary
 # ──────────────────────────────────────────────────────────────
+
 
 class TestBandSummary:
     def test_no_qsos(self):
@@ -580,9 +666,9 @@ class TestBandSummary:
 
     def test_three_bands(self):
         lb = LogBook("HA5LA", "JN97TF", {})
-        lb.add(_qso(band="2M",   dist_km=100, nr_s=1, h=16))
+        lb.add(_qso(band="2M", dist_km=100, nr_s=1, h=16))
         lb.add(_qso(band="70CM", dist_km=200, nr_s=1, h=17))
-        lb.add(_qso(band="23CM", dist_km=50,  nr_s=1, h=18))
+        lb.add(_qso(band="23CM", dist_km=50, nr_s=1, h=18))
         s = _band_summary(lb)
         assert "2M:1q/100pt" in s
         assert "70CM:1q/200pt" in s
@@ -590,7 +676,9 @@ class TestBandSummary:
 
     def test_fits_in_header_width(self):
         lb = LogBook("HA5LA", "JN97TF", {})
-        for i, (band, km) in enumerate([("2M", 9999), ("70CM", 9999), ("23CM", 9999)], 1):
+        for i, (band, km) in enumerate(
+            [("2M", 9999), ("70CM", 9999), ("23CM", 9999)], 1
+        ):
             lb.add(_qso(band=band, dist_km=km, nr_s=i, h=16 + i))
         prefix = " PUSKÁS LOGGER  │  "
         full = prefix + _band_summary(lb)
@@ -600,6 +688,7 @@ class TestBandSummary:
 # ──────────────────────────────────────────────────────────────
 # _print_recent
 # ──────────────────────────────────────────────────────────────
+
 
 class TestPrintRecent:
     def _lb(self):
@@ -611,6 +700,7 @@ class TestPrintRecent:
     def _lines(self, lb, **kwargs):
         buf = io.StringIO()
         import sys
+
         old, sys.stdout = sys.stdout, buf
         try:
             _print_recent(lb, **kwargs)
@@ -623,11 +713,11 @@ class TestPrintRecent:
         lines = self._lines(lb, n=4)
         data = [line for line in lines if "HA" in line]
         assert len(data) == 4
-        assert "HA9AA" in data[-1]   # last QSO at bottom
+        assert "HA9AA" in data[-1]  # last QSO at bottom
 
     def test_focus_row_has_arrow_prefix(self):
         lb = self._lb()
-        focus = 5   # 6th QSO (0-indexed)
+        focus = 5  # 6th QSO (0-indexed)
         lines = self._lines(lb, n=8, focus=focus)
         focused = [line for line in lines if "HA5AA" in line]
         assert len(focused) == 1
@@ -643,7 +733,7 @@ class TestPrintRecent:
 
     def test_focus_shows_rows_after(self):
         lb = self._lb()
-        focus = 3   # middle of log
+        focus = 3  # middle of log
         lines = self._lines(lb, n=8, focus=focus)
         calls = [line for line in lines if "HA" in line]
         # QSO at index > focus must appear
@@ -657,7 +747,9 @@ class TestPrintRecent:
 
     def test_bearing_column_always_shown(self):
         lb = LogBook("HA5LA", "JN97TF", {})
-        lb.add(_qso(call="HA7NS", nr_s=1, h=14, loc="JN97WM", dist_km=lb.dist("JN97WM")))
+        lb.add(
+            _qso(call="HA7NS", nr_s=1, h=14, loc="JN97WM", dist_km=lb.dist("JN97WM"))
+        )
         lines = self._lines(lb, n=4)
         qso_line = next(line for line in lines if "HA7NS" in line)
         assert "°" in qso_line
@@ -668,7 +760,9 @@ class TestPrintRecent:
 
     def test_tx_rx_arrows_in_log_line(self):
         lb = LogBook("HA5LA", "JN97TF", {})
-        lb.add(_qso(call="HA7NS", nr_s=1, h=14, loc="JN97WM", dist_km=lb.dist("JN97WM")))
+        lb.add(
+            _qso(call="HA7NS", nr_s=1, h=14, loc="JN97WM", dist_km=lb.dist("JN97WM"))
+        )
         lines = self._lines(lb, n=4)
         qso_line = next(line for line in lines if "HA7NS" in line)
         # ↑ labels the sent RST/NR, ↓ labels the received RST/NR
@@ -679,10 +773,10 @@ class TestPrintRecent:
 
     def test_multiband_load_sorted_by_timestamp(self, tmp_path):
         lb = LogBook("HA5LA", "JN97TF", {})
-        lb.add(_qso(call="HA7NS",  band="2M",   mode="SSB", nr_s=1, h=14, m=0))
-        lb.add(_qso(call="HA3KHB", band="70CM",  mode="FM",  nr_s=1, h=14, m=10))
-        lb.add(_qso(call="HA8RM",  band="2M",   mode="SSB", nr_s=2, h=14, m=20))
-        write_edi(lb, "2M",   "T", tmp_path)
+        lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_s=1, h=14, m=0))
+        lb.add(_qso(call="HA3KHB", band="70CM", mode="FM", nr_s=1, h=14, m=10))
+        lb.add(_qso(call="HA8RM", band="2M", mode="SSB", nr_s=2, h=14, m=20))
+        write_edi(lb, "2M", "T", tmp_path)
         write_edi(lb, "70CM", "T", tmp_path)
         # Load in 70CM-first order to exercise sorting
         paths = sorted(tmp_path.glob("*.[Ee][Dd][Ii]"), reverse=True)
@@ -693,6 +787,7 @@ class TestPrintRecent:
 # ──────────────────────────────────────────────────────────────
 # _edi_qso_count
 # ──────────────────────────────────────────────────────────────
+
 
 class TestEdiQsoCount:
     def test_reads_count_from_header(self, tmp_path):
@@ -709,6 +804,7 @@ class TestEdiQsoCount:
 # ──────────────────────────────────────────────────────────────
 # _predict_nr
 # ──────────────────────────────────────────────────────────────
+
 
 class TestPredictNr:
     def _lb(self):
@@ -736,7 +832,7 @@ class TestPredictNr:
     def test_most_recent_cross_mode_wins(self):
         lb = self._lb()
         lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_r=10, dt=_dt(16, 0)))
-        lb.add(_qso(call="HA7NS", band="2M", mode="CW",  nr_r=20, dt=_dt(16, 1)))
+        lb.add(_qso(call="HA7NS", band="2M", mode="CW", nr_r=20, dt=_dt(16, 1)))
         # current mode FM, 4 min later: most recent cross-mode is CW/20 → predict 21
         assert _predict_nr(lb, "HA7NS", "2M", "FM", now=_dt(16, 4)) == 21
 
@@ -751,6 +847,7 @@ class TestPredictNr:
 # _merge_loc_sources
 # ──────────────────────────────────────────────────────────────
 
+
 class TestMergeLocSources:
     def test_single_source_returned_unchanged(self):
         src = {"HA7NS": ["JN97WM", "JN97AB"]}
@@ -758,13 +855,13 @@ class TestMergeLocSources:
 
     def test_high_priority_loc_appears_first(self):
         # edi (high) > puskas (low)
-        edi    = {"HA7NS": ["JN97TF"]}
+        edi = {"HA7NS": ["JN97TF"]}
         puskas = {"HA7NS": ["JN97MM"]}
         result = _merge_loc_sources(edi, puskas)
         assert result["HA7NS"] == ["JN97TF", "JN97MM"]
 
     def test_three_sources_correct_order(self):
-        edi    = {"HA7NS": ["JN97TF"]}
+        edi = {"HA7NS": ["JN97TF"]}
         on4kst = {"HA7NS": ["JN97WM"]}
         puskas = {"HA7NS": ["JN97MM"]}
         result = _merge_loc_sources(edi, on4kst, puskas)
@@ -772,13 +869,13 @@ class TestMergeLocSources:
 
     def test_duplicate_loc_kept_at_high_priority_position(self):
         # JN97TF appears in both edi and puskas; edi wins the position
-        edi    = {"HA7NS": ["JN97TF"]}
+        edi = {"HA7NS": ["JN97TF"]}
         puskas = {"HA7NS": ["JN97TF", "JN97MM"]}
         result = _merge_loc_sources(edi, puskas)
         assert result["HA7NS"] == ["JN97TF", "JN97MM"]
 
     def test_call_only_in_low_priority_source_is_included(self):
-        edi    = {"HA7NS": ["JN97TF"]}
+        edi = {"HA7NS": ["JN97TF"]}
         puskas = {"DL2ABC": ["JO50XY"]}
         result = _merge_loc_sources(edi, puskas)
         assert result["HA7NS"] == ["JN97TF"]
@@ -798,6 +895,7 @@ class TestMergeLocSources:
 # ──────────────────────────────────────────────────────────────
 # _update_loc_cache
 # ──────────────────────────────────────────────────────────────
+
 
 class TestUpdateLocCache:
     def test_new_call_is_added(self):
@@ -884,14 +982,14 @@ class TestRpromptBearing:
     def test_rprompt_path_jn97_to_io83(self):
         # Full path from loc_cache lookup through maidenhead → dist+bearing,
         # the exact computation _rprompt does before returning the HTML string.
-        my_loc   = "JN97TF"
-        his_loc  = "IO83RO"
+        my_loc = "JN97TF"
+        his_loc = "IO83RO"
         lat1, lon1 = maidenhead_to_latlon(my_loc)
         lat2, lon2 = maidenhead_to_latlon(his_loc)
         dist = int(haversine_km(lat1, lon1, lat2, lon2))
         bear = int(initial_bearing(lat1, lon1, lat2, lon2))
-        assert 1650 < dist < 1800   # roughly Budapest → Edinburgh
-        assert 290 < bear < 320     # northwest
+        assert 1650 < dist < 1800  # roughly Budapest → Edinburgh
+        assert 290 < bear < 320  # northwest
 
 
 class TestBearingArrow:
@@ -935,8 +1033,10 @@ class TestFormatCombos:
         assert _format_combos({"70CM": ["CW", "FM"]}) == "70CM:CW,FM"
 
     def test_multiple_bands_space_separated_in_order(self):
-        assert _format_combos({"2M": ["CW"], "23CM": ["SSB", "CW", "FM"]}) == \
-            "2M:CW 23CM:SSB,CW,FM"
+        assert (
+            _format_combos({"2M": ["CW"], "23CM": ["SSB", "CW", "FM"]})
+            == "2M:CW 23CM:SSB,CW,FM"
+        )
 
 
 class TestWebcamCaptureCmd:
@@ -968,6 +1068,7 @@ class TestWebcamCaptureCmd:
 # ──────────────────────────────────────────────────────────────
 # current_rot
 # ──────────────────────────────────────────────────────────────
+
 
 class TestCurrentRot:
     """current_rot() reflects _rot state; drives the ROT: toolbar segment."""
@@ -1006,6 +1107,7 @@ class TestCurrentRot:
 # Locator-only bearing path
 # ──────────────────────────────────────────────────────────────
 
+
 class TestLocatorOnlyBearing:
     """Pin the locator-only bearing lookup used for rotator pointing.
 
@@ -1034,7 +1136,7 @@ class TestLocatorOnlyBearing:
         lb = LogBook("HA5LA", "JN97TF", {})
         bear = lb.bearing("IO83RO")
         dist = lb.dist("IO83RO")
-        assert 290 < bear < 320    # northwest
+        assert 290 < bear < 320  # northwest
         assert 1650 < dist < 1800
 
 
@@ -1049,9 +1151,12 @@ class TestTelemetryRecord:
 
     def test_rig_and_rot_online(self):
         import json
+
         self._set_rig("144.174", "CW", online=True)
         self._set_rot(135.0, online=True)
-        rec = json.loads(_telemetry_record(datetime(2026, 7, 4, 9, 8, 15, tzinfo=timezone.utc)))
+        rec = json.loads(
+            _telemetry_record(datetime(2026, 7, 4, 9, 8, 15, tzinfo=timezone.utc))
+        )
         assert rec["t"] == "2026-07-04T09:08:15Z"
         assert rec["freq_hz"] == 144174000
         assert rec["mode"] == "CW"
@@ -1060,9 +1165,12 @@ class TestTelemetryRecord:
 
     def test_rig_offline_fields_are_null(self):
         import json
+
         self._set_rig(online=False)
         self._set_rot(online=False)
-        rec = json.loads(_telemetry_record(datetime(2026, 7, 4, 9, 8, 15, tzinfo=timezone.utc)))
+        rec = json.loads(
+            _telemetry_record(datetime(2026, 7, 4, 9, 8, 15, tzinfo=timezone.utc))
+        )
         assert rec["freq_hz"] is None
         assert "ptt" not in rec
         assert rec["mode"] is None
@@ -1086,6 +1194,7 @@ class TestInputLog:
 
     def test_writes_a_line_per_change(self, tmp_path):
         import json
+
         path = tmp_path / "input.jsonl"
         _input_log_open(path)
         _on_buffer_changed(self._Buf("H"))
@@ -1100,6 +1209,7 @@ class TestInputLog:
 
     def test_record_has_microsecond_timestamp(self, tmp_path):
         import json
+
         path = tmp_path / "input.jsonl"
         _input_log_open(path)
         _on_buffer_changed(self._Buf("HA7NS"))
@@ -1109,6 +1219,7 @@ class TestInputLog:
 
     def test_keystroke_event_is_tagged_text(self, tmp_path):
         import json
+
         path = tmp_path / "input.jsonl"
         _input_log_open(path)
         _on_buffer_changed(self._Buf("HA7NS"))
@@ -1120,15 +1231,28 @@ class TestInputLog:
         # unambiguous marker distinct from the keystroke stream, since
         # submit vs. abort can't be told apart at the buffer-changed level.
         import json
+
         path = tmp_path / "input.jsonl"
         _input_log_open(path)
-        pl._log_input_event({
-            "t": "2026-07-06T16:01:02.345678Z", "event": "qso",
-            "call": "HA3KHB", "band": "2M", "mode": "CW", "nr_s": 3, "dup": False,
-        })
+        pl._log_input_event(
+            {
+                "t": "2026-07-06T16:01:02.345678Z",
+                "event": "qso",
+                "call": "HA3KHB",
+                "band": "2M",
+                "mode": "CW",
+                "nr_s": 3,
+                "dup": False,
+            }
+        )
         pl._input_log_fh.close()
         rec = json.loads(path.read_text().splitlines()[0])
         assert rec == {
-            "t": "2026-07-06T16:01:02.345678Z", "event": "qso",
-            "call": "HA3KHB", "band": "2M", "mode": "CW", "nr_s": 3, "dup": False,
+            "t": "2026-07-06T16:01:02.345678Z",
+            "event": "qso",
+            "call": "HA3KHB",
+            "band": "2M",
+            "mode": "CW",
+            "nr_s": 3,
+            "dup": False,
         }

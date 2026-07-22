@@ -26,13 +26,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 MY_LOGS_DIR = Path("my-logs")
-PUSKAS_DIR    = Path.home() / ".puskas"
+PUSKAS_DIR = Path.home() / ".puskas"
 SEEN_STATIONS = PUSKAS_DIR / "puskas-seen-stations.json"
 
-RE_LOC = re.compile(r'^[A-R]{2}[0-9]{2}([A-X]{2})?$', re.IGNORECASE)
+RE_LOC = re.compile(r"^[A-R]{2}[0-9]{2}([A-X]{2})?$", re.IGNORECASE)
 
 BAND_COLORS = {
-    "2M":   "#2563eb",
+    "2M": "#2563eb",
     "70CM": "#16a34a",
     "23CM": "#dc2626",
 }
@@ -42,6 +42,7 @@ BEARING_RESOLUTION = 10
 # ──────────────────────────────────────────────────────────────
 # Geo
 # ──────────────────────────────────────────────────────────────
+
 
 def maidenhead_to_latlon(loc: str) -> tuple[float, float] | tuple[None, None]:
     try:
@@ -66,7 +67,10 @@ def maidenhead_to_latlon(loc: str) -> tuple[float, float] | tuple[None, None]:
 def haversine_km(lat1, lon1, lat2, lon2) -> float:
     R = 6371.0
     φ1, λ1, φ2, λ2 = map(math.radians, (lat1, lon1, lat2, lon2))
-    a = math.sin((φ2-φ1)/2)**2 + math.cos(φ1)*math.cos(φ2)*math.sin((λ2-λ1)/2)**2
+    a = (
+        math.sin((φ2 - φ1) / 2) ** 2
+        + math.cos(φ1) * math.cos(φ2) * math.sin((λ2 - λ1) / 2) ** 2
+    )
     return R * 2 * math.asin(math.sqrt(a))
 
 
@@ -89,8 +93,10 @@ def color_for_band(band: str) -> str:
 # Data loading
 # ──────────────────────────────────────────────────────────────
 
+
 def load_seen_stations() -> dict[str, dict]:
     import json
+
     if not SEEN_STATIONS.exists():
         print(f"[!] {SEEN_STATIONS} not found — run puskas_harvester.py first")
         sys.exit(1)
@@ -121,8 +127,9 @@ def load_my_info() -> tuple[str, str, set[tuple[str, str]]]:
                     my_loc = line[6:].strip().upper()
                 elif line.startswith("PBand="):
                     raw = line[6:].strip()
-                    band = {"145 MHz": "2M", "435 MHz": "70CM",
-                            "1296 MHz": "23CM"}.get(raw, "")
+                    band = {"145 MHz": "2M", "435 MHz": "70CM", "1296 MHz": "23CM"}.get(
+                        raw, ""
+                    )
                 elif line.startswith("[QSORecords"):
                     in_qso = True
                 elif in_qso and ";" in line:
@@ -142,8 +149,10 @@ def load_my_info() -> tuple[str, str, set[tuple[str, str]]]:
 # Analysis
 # ──────────────────────────────────────────────────────────────
 
-def analyze(stations: dict[str, dict], my_lat: float, my_lon: float,
-            my_call: str) -> list[dict]:
+
+def analyze(
+    stations: dict[str, dict], my_lat: float, my_lon: float, my_call: str
+) -> list[dict]:
     result = []
     for call, info in stations.items():
         if call.upper() == my_call.upper():
@@ -156,15 +165,17 @@ def analyze(stations: dict[str, dict], my_lat: float, my_lon: float,
         dist = haversine_km(my_lat, my_lon, lat, lon)
         bands = info.get("bands", []) or ["?"]
         for band in bands:
-            result.append({
-                "callsign": call,
-                "wwl": wwl,
-                "band": band,
-                "lat": round(lat, 5),
-                "lon": round(lon, 5),
-                "bearing": round(brng, 1),
-                "distance_km": round(dist, 1),
-            })
+            result.append(
+                {
+                    "callsign": call,
+                    "wwl": wwl,
+                    "band": band,
+                    "lat": round(lat, 5),
+                    "lon": round(lon, 5),
+                    "bearing": round(brng, 1),
+                    "distance_km": round(dist, 1),
+                }
+            )
     return result
 
 
@@ -172,8 +183,15 @@ def analyze(stations: dict[str, dict], my_lat: float, my_lon: float,
 # Map
 # ──────────────────────────────────────────────────────────────
 
-def make_map(analyzed: list[dict], missed: set[tuple[str, str]],
-             my_lat: float, my_lon: float, my_call: str, my_loc: str):
+
+def make_map(
+    analyzed: list[dict],
+    missed: set[tuple[str, str]],
+    my_lat: float,
+    my_lon: float,
+    my_call: str,
+    my_loc: str,
+):
     m = folium.Map(location=[my_lat, my_lon], zoom_start=7, tiles="CartoDB positron")
     folium.Marker(
         [my_lat, my_lon],
@@ -186,7 +204,7 @@ def make_map(analyzed: list[dict], missed: set[tuple[str, str]],
         by_band[s["band"]].append(s)
 
     for band, stations in sorted(by_band.items()):
-        fg  = folium.FeatureGroup(name=f"Band: {band}")
+        fg = folium.FeatureGroup(name=f"Band: {band}")
         col = color_for_band(band)
         for s in stations:
             is_missed = (s["callsign"], s["band"]) in missed
@@ -226,6 +244,7 @@ def make_map(analyzed: list[dict], missed: set[tuple[str, str]],
 # Polar
 # ──────────────────────────────────────────────────────────────
 
+
 def make_polar(analyzed: list[dict], my_call: str, my_loc: str):
     data = [s for s in analyzed if s["band"] != "?"]
     if not data:
@@ -236,19 +255,28 @@ def make_polar(analyzed: list[dict], my_call: str, my_loc: str):
     ax.set_theta_direction(-1)
     ax.set_title(
         f"Puskás URH Kupa – stations by direction and distance\n{my_call} @ {my_loc}",
-        pad=20, fontsize=13,
+        pad=20,
+        fontsize=13,
     )
 
     for band in sorted(set(s["band"] for s in data)):
-        bs     = [s for s in data if s["band"] == band]
+        bs = [s for s in data if s["band"] == band]
         angles = [math.radians(s["bearing"]) for s in bs]
-        dists  = [s["distance_km"] for s in bs]
+        dists = [s["distance_km"] for s in bs]
         labels = [s["callsign"] for s in bs]
-        color  = color_for_band(band)
+        color = color_for_band(band)
         ax.scatter(angles, dists, label=band, s=55, alpha=0.8, color=color, zorder=3)
         for a, d, lbl in zip(angles, dists, labels):
-            ax.annotate(lbl, (a, d), fontsize=6, ha="center", va="bottom",
-                        color=color, xytext=(0, 4), textcoords="offset points")
+            ax.annotate(
+                lbl,
+                (a, d),
+                fontsize=6,
+                ha="center",
+                va="bottom",
+                color=color,
+                xytext=(0, 4),
+                textcoords="offset points",
+            )
 
     ax.set_xticks(np.radians([0, 45, 90, 135, 180, 225, 270, 315]))
     ax.set_xticklabels(["N", "NE", "E", "SE", "S", "SW", "W", "NW"])
@@ -265,6 +293,7 @@ def make_polar(analyzed: list[dict], my_call: str, my_loc: str):
 # Main
 # ──────────────────────────────────────────────────────────────
 
+
 def main():
     print("Puskás URH Kupa – Visualizer")
     print("─" * 40)
@@ -276,7 +305,7 @@ def main():
     # CLI overrides
     if len(sys.argv) >= 3:
         my_call = sys.argv[1].upper()
-        my_loc  = sys.argv[2].upper()
+        my_loc = sys.argv[2].upper()
     elif len(sys.argv) == 2:
         print("Usage: puskas_visualizer.py [CALLSIGN LOCATOR]")
         sys.exit(1)
