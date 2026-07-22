@@ -1,12 +1,18 @@
 # Contest recording and video production
 
-Notes from the URH Országos Bajnokság 2026-07-04 session (first test run).
+Started as notes from the URH Országos Bajnokság 2026-07-04 session (first
+test run) — kept up to date since as `contest_video.py` gained features.
+See CLAUDE.md's `contest_video.py` section for the full design history and
+rationale; this file is the practical "how to actually use it" companion,
+with real numbers from real sessions where available.
 
 ## Recording setup
 
-- **Radio**: Icom IC-9700
-- **Software**: something that splits audio on PTT/RX-TX switching and names
-  segments `YYYYMMDD_HHMMSS*.wav` in local time
+- **Radio**: Icom IC-9700, using its built-in "Voice Recorder" mode — the radio itself
+  splits audio on every RX/TX switch and names segments `YYYYMMDD_HHMMSS*.wav` in local
+  time, no separate recording software involved. Each file also carries the radio's own
+  frequency/mode/RX-TX metadata in its WAV `title` tag (see `contest_video.py`'s
+  `parse_wav_title`/`read_wav_metadata` in CLAUDE.md).
 - **Format**: 16 kHz mono PCM WAV, one file per transmission (RX or TX)
 - **Segments are contiguous**: sub-second gaps between files; total duration of
   all WAVs equals the session length
@@ -17,24 +23,49 @@ The matching EDI log lives next to it (`urhob2026cw/260704-HA5LA-2M.edi`).
 ## Video production
 
 ```
-uv run contest_video.py RECORDING_DIR EDI_FILE [-o OUT.mp4] [--skip-gaps] [--res 720p|1080p]
+uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4] [options]
 ```
+Pass more than one EDI file to merge multiple bands worked in one recording
+(e.g. a 2M + 70CM session) into a single timeline — a WAV segment carries no
+band field, so this only matters for merging QSO lists, not for rendering.
 
 | Option | Effect |
 |---|---|
-| `--skip-gaps` | Trim listening/CQ gaps between QSOs to 3 s each (42 min → 7.6 min for this session) |
-| `--res 720p` | Render at 1280×720 instead of 1920×1080 — ~2.5× faster, good for preview |
-| `--pitch HZ` | CW tone frequency (default 600 Hz, matches IC-9700 sidetone default) |
-| `--keep-ass` | Keep intermediate `.ass` and `.concat.wav` for inspection |
-| `--telemetry FILE` | `*-telemetry.jsonl` from `puskas_logger.py` — adds a top-left RX/TX indicator |
+| `-o/--out` | Output path (default `contest_video.mp4`) |
+| `--res 720p\|1080p` | Render resolution (default 1080p) — 720p is ~2.5× faster, good for preview |
+| `--pitch HZ` | CW tone fallback (default 600 Hz) — only used if `_detect_pitch` finds nothing at all in a segment; normally auto-detected per segment |
+| `--skip-gaps` | Trim listening/CQ gaps between QSOs to `GAP_KEEP_S` (3 s) each |
+| `--duration SECONDS` | Chronological preview: trim to the first `SECONDS` of real session time, skip CW-decoding past the cutoff (a 10-minute preview of a 2-hour session decodes ~12× less audio) |
+| `--telemetry FILE` | `*-telemetry.jsonl` — optional; the WAV files' own metadata already gives RX/TX plus starting QRG/mode, this only adds mode-gating for the CW ticker/long-segment recovery (see below) |
+| `--input-log FILE` | `*-input.jsonl` — optional; gives exact (not audio-structure-heuristic) QSO start/end times for chapters/captions where the operator logged the QSO during this recording |
+| `--seed-input-log OUT.jsonl` | Write a hand-editable QSO-timestamp skeleton from the EDI(s) and exit without rendering — for a recording made before `--input-log` existed |
+| `--cast FILE` | asciinema `.cast` recording of the logger/irssi tmux session, shown as a large picture-in-picture |
+| `--webcam FILE` | Webcam/selfie clip, shown as a small picture-in-picture bottom-right |
+| `--webcam-offset SECONDS` | Manual fallback sync correction for `--webcam`, bypassing automatic sync entirely |
+| `--keep-ass` | Keep intermediate `.ass`/`.wav` files for inspection |
+| `--contest TEXT` | Contest name text (default `"URH OB 2026 - CW"`) |
 
-Render speed at 720p with `--skip-gaps`: ~1.4× realtime (7.6 min video in ~5 min).
-Render speed at 1080p without `--skip-gaps`: ~0.28× realtime (~2.5 h for 42 min).
+Render speed measured on the first (badge+ticker only, no PiPs) session:
+720p + `--skip-gaps`: ~1.4× realtime. 1080p, no `--skip-gaps`: ~0.28× realtime
+(~2.5 h for a 42-minute session). Adding `--cast`/`--webcam` costs more —
+compositing extra picture-in-picture streams in the same ffmpeg pass — but
+hasn't been benchmarked separately from the above numbers.
 
 ### CW decoder behaviour
 
 - Works per-segment: each WAV is one over at one speed — adaptive dit estimation
-  is robust per file.
+  is robust per file. Segments longer than `MAX_OVER_S` (35 s) are skipped before
+  any signal processing at all, since they'd be rejected on duration alone
+  regardless of decode quality.
+- **A segment we only listened to can still hide CW between *other* stations**
+  if it runs past `MAX_OVER_S` (e.g. we followed someone else's whole
+  exchange without ever transmitting). `decode_long_segment`/`cw_subranges`
+  recover this: they find telemetry-confirmed CW-mode sub-ranges inside the
+  long segment and decode just those, without the duration gate (the
+  sub-range's own length isn't suspicious the way an unexplained long
+  segment is — telemetry mode confirmation is already stronger evidence of
+  genuine CW than length). Needs `--telemetry`; without it, nothing inside
+  an over-length segment is ever recovered.
 - **CW tone is auto-detected per segment**, not assumed to be 600 Hz (IC-9700
   sidetone default) for the whole session — `--pitch` is now only a fallback
   for the rare case `_detect_pitch` finds nothing (e.g. true silence). Found
@@ -47,10 +78,10 @@ Render speed at 1080p without `--skip-gaps`: ~0.28× realtime (~2.5 h for 42 min
   across several real TX segments from two different QSOs), so always
   auto-detecting is strictly better than only doing it conditionally.
 - **Trust gate**: a segment's decode is shown in the ticker only if it is
-  short (< `MAX_OVER_S`, 35 s), has high SNR (≥ 20 dB), word-shaped text
-  (≥ 50% multi-char tokens), and not a chopped carrier (no single character
-  > 40% of all chars *once there's enough text for that pattern to mean
-  anything* — see `MIN_CHARS_FOR_DOMINANCE` below). This keeps all real
+  short (< `MAX_OVER_S`, 35 s), has high SNR (≥ `MIN_SNR_DB` = 20 dB), word-shaped text
+  (`MIN_QUALITY` ≥ 0.5, i.e. ≥ 50% multi-char tokens), and not a chopped carrier (no single
+  character > `MAX_DOMINANCE` = 40% of all chars *once there's enough text for that pattern to mean
+  anything* — `MIN_CHARS_FOR_DOMINANCE` = 5, see below). This keeps all real
   exchanges and drops band noise / listening stretches.
   - `MAX_OVER_S` was raised from 30s to 35s after a real, correctly
     transcribable 32.5-second exchange (a full report + locator handoff)
@@ -230,30 +261,56 @@ displayed clock to be correct), but this timing fix no longer depends on
 the radio and PC agreeing to the second the way the old EDI-time-minus-lead
 calculation implicitly did.
 
-### RX/TX + rig/rotator overlay
+**`--input-log` removes the audio-structure guesswork where it's available**,
+rather than replacing it entirely. `puskas_logger.py` writes one `'qso'`
+event per logged QSO to `*-input.jsonl`, timestamped at the exact moment
+the operator hit Enter — `match_qso_times` pairs each EDI QSO to its event
+by callsign, in chronological order (not by exact minute — an edited seed
+log, see `--seed-input-log`, can freely move a timestamp across a minute
+boundary). `qso_windows()` then uses that exact time instead of the EDI's
+minute-truncated one as the anchor into `_snap_to_cluster`, and uses it
+directly (not the next QSO's start) as the window's *end* wherever known —
+the moment logging finished, not whenever the next over happens to begin.
+Falls back to the plain audio-structure heuristics above wherever a QSO has
+no matching event (no input log, an older recording, or a `--duration` cut
+that excludes it). `--seed-input-log OUT.jsonl` bootstraps one for a
+recording made before this file was ever produced: it writes one event per
+EDI QSO with a placeholder minute-truncated timestamp, exits without
+rendering, and you hand-edit each `t` against the audio before passing the
+result back in as `--input-log`.
 
-`--telemetry 260704-HA5LA-telemetry.jsonl` adds, top-left:
+### RX/TX badge
 
-```
-● TX
-144.174 MHz  CW  ROT 135°
-```
+The only overlay `contest_video.py` still burns into the video itself
+(besides the CW ticker) is a small top-left `● TX` / `● RX` indicator —
+everything the video used to render on its own (timestamp, QSO panels,
+running score, band/mode/callsign text, what was typed) is now visible
+directly in the terminal-session picture-in-picture (`--cast`, see below),
+which shows the actual logger UI live rather than a reconstruction of it.
+The badge used to also show a QRG/mode/rotator-bearing line underneath the
+dot; that line was dropped as redundant once the terminal PiP existed (the
+same info is legible in the logger's own toolbar there) and because its
+second line overlapped the cast box at 720p.
 
-(`● TX` red, `● RX` green). It needs the telemetry fields `puskas_logger.py`
-has been recording since it started polling rigctld's `get_ptt` alongside
-freq/mode/az — recordings made before that change won't have `ptt`, and the
-whole overlay is simply omitted for any segment with no `ptt` in its aligned
-state rather than guessing. `freq_hz`/`mode` are shown if known; a missing
-`az` falls back to `ROT ---`, same as the logger's own toolbar.
+RX/TX state comes from the WAV files' own IC-9700 metadata (see Recording
+setup above) — the one thing the terminal PiP *can't* show, since
+`puskas_logger` has no way to know the rig's actual PTT state until the WAV
+files are pulled off the SD card and read back after the session.
+`--telemetry` is no longer needed for the badge itself; its remaining jobs
+are internal to the ticker rather than anything displayed:
+- **Mode-gating**: a segment's decoded text is only trusted as CW in the
+  ticker if telemetry's own mode for that stretch agrees (or telemetry
+  wasn't available) — the decoder runs blind on every segment since there's
+  no way to know the mode in advance, and a strong tone in voice audio can
+  occasionally slip past the trust gate otherwise.
+- **Recovering CW from long listened-to segments** — see
+  `decode_long_segment` above, which needs telemetry to confirm a sub-range
+  really was CW mode.
 
-The interesting part is reconciling two different precisions: telemetry is
-sampled once a second, but the WAV segment splits happen *exactly* on the
-real PTT transitions (that's what triggers a new file). So the overlay's
-on/off times in the video are the segment boundaries, not the telemetry
-timestamps — `align_telemetry_to_segments` only uses the telemetry to decide
-*which* state each already-precisely-bounded segment is in: `ptt`/`freq_hz`/
-`mode` by majority vote of the samples that fall inside it (or the nearest
-sample if the segment is shorter than 1 s), `az` by median.
+Rotator bearing (`az`) is still computed internally from telemetry (median
+per segment) but isn't displayed anywhere in the current design — dead
+weight kept around rather than actively used, now that the line it fed is
+gone.
 
 ### YouTube navigation: chapters + captions
 
@@ -263,18 +320,74 @@ the mp4, so you can find a QSO without scrubbing:
 - **`.chapters.txt`** — paste into the YouTube video description. YouTube turns
   these into clickable seek-bar chapter markers. Format: `M:SS Title` per line,
   first line always `0:00 Start` (YouTube requires the first chapter at 0:00).
-  QSOs less than 10 s after the previous chapter are dropped from this list
+  QSOs less than `MIN_CHAPTER_GAP_S` (10 s) after the previous chapter are dropped from this list
   (YouTube ignores chapters closer together than that) — they still get an SRT
   cue, just no separate marker.
 - **`.srt`** — upload as a captions track (YouTube Studio → Subtitles). This
   gives a clickable, timestamped transcript in the sidebar — a second way to
   jump to a QSO, independent of chapters and of whether CC is toggled on. Each
-  cue is capped to 8 s so it reads as a normal caption rather than persisting
+  cue is capped to `CAPTION_DUR_S` (8 s) so it reads as a normal caption rather than persisting
   on screen until the next QSO.
 
 Both are derived from the same start/end window used for the on-screen QSO
 panel, via `qso_windows()`, so all three (panel, chapter, caption) agree on
-timing.
+timing — and both get the `--input-log` precision improvement described
+above wherever a matching event exists, not just the audio-structure fallback.
+
+## Terminal-session picture-in-picture (`--cast`)
+
+`--cast FILE` takes an [asciinema](https://asciinema.org/) (cast v2)
+recording of the tmux session running irssi + `puskas_logger.py` during the
+contest, and shows it as a large picture-in-picture — the dominant visual
+element, since the terminal session is most of what there is to watch. It
+replaces what used to be separate QSO panels, running-score header, UTC
+clock, and typewriter overlay, all of which are just visible directly in the
+real logger UI now.
+
+Sync is exact: the cast file's header carries a real Unix-epoch start
+timestamp (`parse_cast_header`), so there's no filename-parsing or
+whole-hour-rounding ambiguity the way there is for an independent webcam
+device (below). Rendering the cast is its own pipeline stage
+(`render_cast_video`, using `pyte` to replay the terminal escape codes and
+Pillow to draw them), producing a standalone intermediate mp4 before the
+main waterfall/ASS pass.
+
+See CLAUDE.md's "Recording the logger session" section for how to actually
+make the recording (`run-recorded-contest-session.sh` does this
+automatically now), and its `--cast` section for the tmux/pyte
+implementation details (dirty-row-only redraw for render speed, the
+DECSLRM/SU/SD terminal-emulation fixes needed because the recording is made
+*inside* tmux, and the PiP's aspect-ratio/layout constants).
+
+## Webcam picture-in-picture (`--webcam`)
+
+`--webcam FILE` adds a small, muted picture-in-picture in the bottom-right
+corner. Two different sync paths exist depending on how the clip was made:
+
+- **Recorded via `puskas_logger.py`'s own Alt+V capture** (same machine as
+  the logger, same `datetime.now(timezone.utc)` clock as every QSO/keystroke):
+  exact sync, no cross-correlation needed. `webcam_start_from_log` reads the
+  precise frame-0 wallclock straight from the `*-webcam.log` ffmpeg capture
+  log (or `webcam_start_wall` from the `*-input.jsonl` `webcam_start` event
+  as a close second choice) — the same idea as the cast's exact Unix-epoch
+  sync above, for the same reason: no second physical device clock to
+  reconcile.
+- **An independent recording (e.g. a phone propped up separately)**: the
+  phone has its own clock convention, not necessarily the WAV recorder's —
+  in the first real use of this path the WAV recorder stamped filenames in
+  plain UTC while the phone stamped its own in local wall time.
+  `sync_webcam_start` derives the phone's whole-hour offset from its
+  filename timestamp; `refine_webcam_start` then corrects both a residual
+  sub-hour offset *and* a linear clock-drift rate by cross-correlating the
+  operator's own voice between the two devices' audio tracks (confirmed
+  against a real ~2h session: 2.73s off with the coarse offset alone, 0.07s
+  off after the rate correction). `--webcam-offset SECONDS` bypasses all of
+  this with a fixed manual correction — for a clip with no audio track, or
+  wherever cross-correlation finds no confident match.
+
+Puskás Kupa sessions should prefer the Alt+V logger-recorded path now that
+it exists — it's simpler and exactly synced by construction; the phone path
+remains for older recordings or if Alt+V wasn't used.
 
 ## Telemetry file
 
@@ -292,10 +405,14 @@ one JSON line per second:
 | `mode` | `"SSB"` / `"CW"` / `"FM"` | `null` when rigctld offline |
 | `az` | float degrees | `null` when rotctld offline |
 
-Size: ~70 bytes/line × 3600 lines/hour ≈ **250 KB/hour**. Keep it.
+No `ptt` field: it used to be recorded here too, but the WAV files' own
+IC-9700 metadata already carries RX/TX with zero polling lag (see Recording
+setup above), so a separate 1 Hz-polled copy was just reconstructing the
+same thing with more latency — removed rather than kept for redundancy.
 
-`contest_video.py` does not yet use this file; the video overlay for frequency,
-mode, and rotator bearing is the next planned feature.
+Size: ~70 bytes/line × 3600 lines/hour ≈ **250 KB/hour**. Keep it — it's
+optional for `contest_video.py` (mode-gating the ticker and recovering CW
+from long listened-to segments, see "RX/TX badge" above), not required.
 
 ## IC-9700 clock sync via rigctld
 
@@ -337,11 +454,14 @@ than trusting the toolbar's "synced" message alone.
 
 ```
 ~/contest-dir/
-  recording/               ← WAV segments from the radio
-    20260704_110713A.wav
-    20260704_110716A.wav
-    ...
-  260704-HA5LA-2M.edi      ← QSO log (written by puskas_logger)
-  260704-HA5LA-telemetry.jsonl  ← rig/rotator telemetry (written by puskas_logger)
-  urhob2026cw_annotated.mp4    ← rendered video (written by contest_video)
+  recording/                    ← WAV segments from the radio (IC-9700 Voice Recorder)
+  260704-HA5LA-2M.edi           ← QSO log (written by puskas_logger)
+  260704-HA5LA-telemetry.jsonl  ← rig/rotator telemetry (written by puskas_logger, optional input)
+  260704-HA5LA-input.jsonl      ← keystroke + QSO + webcam start/stop events (written by puskas_logger)
+  260704-HA5LA.cast             ← asciinema recording of the logger/irssi tmux session
+  260704-HA5LA-webcam.mp4       ← Alt+V webcam capture (written by puskas_logger, optional)
+  260704-HA5LA-webcam.log       ← ffmpeg capture log for the above (exact sync timestamp)
+  urhob2026cw_annotated.mp4     ← rendered video (written by contest_video.py)
+  urhob2026cw_annotated.mp4.chapters.txt  ← paste into the YouTube description
+  urhob2026cw_annotated.mp4.srt           ← upload as a YouTube captions track
 ```
