@@ -197,7 +197,8 @@ Run the contest tools from a contest directory:
 ```
 mkdir ~/contest-2026 && cd ~/contest-2026
 puskas-harvester     # fetch ~/.puskas/puskas-seen-stations.json
-puskas-logger        # log QSOs; writes *.EDI here
+./run-recorded-contest-session.sh   # right before the round: irssi + logger (recorded),
+                                     # hamlib_supervisor.py + bridge in a background window
 puskas-visualizer    # generate map/polar from ~/.puskas/puskas-seen-stations.json + my-logs/
 ```
 
@@ -956,6 +957,26 @@ video's timeline. Plain `script(1)` capture was considered and rejected for
 the same reason recordmydesktop was: no per-event timestamps, so it can't be
 replayed frame-accurately or synced to the audio at all.
 
+**`run-recorded-contest-session.sh` is the entrypoint** — run right before a
+contest round begins, nothing before that. It wraps exactly this recording
+command in one `tmux new-session`, so starting/stopping the tmux session is
+also what starts/stops everything else for the round:
+- Window 0 (recorded): irssi | `puskas_logger.py`, side by side
+  (`select-layout even-horizontal`) — this is the layout `contest_video.py
+  --cast` expects.
+- Window 1 (`bg`, **not** recorded — created with `new-window -d`, so the
+  client's attached window never leaves window 0 and none of this appears
+  in the cast): `hamlib_supervisor.py` on top, `on4kst_irc_bridge.py` split
+  below it. Both are here rather than in a `systemd --user` unit
+  specifically because they should only run for the duration of a contest
+  round, not persistently — killing the tmux session (end of round) tears
+  down both along with everything else, no separate stop step. Attach with
+  `tmux attach -t <session>` (or `tmux select-window -t bg`) to check on
+  either — `on4kst_irc_bridge.py` prints `[KST] Connecting …` / `[KST]
+  Connection lost …` / `[KST] Reconnecting in N s …` etc. directly to
+  stdout, so KST connect/drop events are visible there live, not just
+  inferable from IRC-side symptoms.
+
 ## puskas_logger.py – UX requirements (non-negotiable)
 
 These requirements must be preserved across all future changes:
@@ -1261,11 +1282,17 @@ EDI export: one file per band, `[REG1TEST;1]` format compatible with bb.mrasz.hu
 
 ## Running
 ```
-uv run hamlib_supervisor.py   # keep running: starts/stops rigctld+rotctld on USB replug
+uv run puskas_harvester.py          # build ~/.puskas/puskas-seen-stations.json before a contest
+./run-recorded-contest-session.sh   # the contest round itself — see "Recording the logger
+                                     # session" above for what this actually starts
+uv run puskas_visualizer.py         # generate map and polar after the contest
+```
+Each piece also runs standalone when not tied to a contest round (general ON4KST chat
+outside a round, debugging one component, etc.):
+```
 uv run on4kst_irc_bridge.py   # IRC bridge (then connect irssi to localhost:6667)
-uv run puskas_harvester.py    # build ~/.puskas/puskas-seen-stations.json before a contest
-uv run puskas_logger.py       # log QSOs during the contest
-uv run puskas_visualizer.py   # generate map and polar after the contest
+uv run puskas_logger.py       # log QSOs
+uv run hamlib_supervisor.py   # starts/stops rigctld+rotctld on USB replug
 ```
 
 ## Testing

@@ -24,7 +24,11 @@ number is exactly what changes across a replug.
 
 Usage:
     uv run hamlib_supervisor.py
-    (run permanently, e.g. from tmux or a systemd --user unit)
+    Run for the duration of a contest round only, not as a persistent
+    service — see run-recorded-contest-session.sh, which starts this in
+    a tmux window alongside the logger/bridge and tears it down with the
+    rest of the session. Handles SIGHUP as well as SIGTERM/SIGINT so
+    killing that tmux window/session stops rigctld/rotctld cleanly too.
 """
 from __future__ import annotations
 
@@ -201,6 +205,10 @@ def main() -> None:
 
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
+    # Killing the tmux window/session this runs in delivers SIGHUP (pty
+    # hangup), not SIGTERM — without this, rigctld/rotctld could be left
+    # running orphaned instead of stopped via Daemon.stop().
+    signal.signal(signal.SIGHUP, shutdown)
 
     reconcile_initial_state(daemons)
 
