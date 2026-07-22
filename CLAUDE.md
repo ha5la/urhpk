@@ -1264,11 +1264,10 @@ uv run hamlib_supervisor.py   # starts/stops rigctld+rotctld on USB replug
 ```
 
 ## Testing
-```
-uv run pytest tests/ -v     # 365 tests: parsing, IRC protocol, logger, harvester, integration
-uv run ruff check .         # linting: E/F/W/I rules; E501 and E701 intentionally ignored
-```
-CI runs both on every push via GitHub Actions (`test.yml`).
+Enforced by `pre-commit`, not a checklist here to follow by hand — one-time setup per
+clone: `uv run pre-commit install`. What actually runs is defined in
+`.pre-commit-config.yaml`, the only source of truth for it; CI (`test.yml`) runs the
+same config rather than a separately maintained list of steps.
 
 **Ruff policy**: `ruff check` only — no `ruff format`. The formatter strips intentional
 aligned-assignment style (e.g. `RIGCTLD_HOST   = "localhost"`) that aids readability in

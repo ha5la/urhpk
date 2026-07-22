@@ -19,11 +19,8 @@ jobs:
         with:
           version: "latest"
 
-      - name: Lint with ruff
-        run: uv run ruff check .
-
-      - name: Run tests
-        run: uv run pytest tests/ -v
+      - name: Run pre-commit checks (lint + tests)
+        run: uv run pre-commit run --all-files
 
       - name: Upload coverage report
         uses: actions/upload-pages-artifact@v3
