@@ -16,6 +16,17 @@ Amateur radio contest toolset for the Puskás URH Kupa, plus a general-purpose
 | `puskas_visualizer.py` | Map and polar diagram from `puskas-seen-stations.json` |
 | `contest_video.py` | Annotated CW contest video from a timestamped recording + EDI log |
 | `hamlib_supervisor.py` | Starts/stops rigctld and rotctld based on USB device presence (inotify, no polling) |
+| `run-recorded-contest-session.sh` | The contest-round entrypoint — recorded irssi + logger, plus rig/rotator supervision and the bridge in a background window |
+
+## Quick start — contest session
+
+```
+uv run puskas_harvester.py          # once, before the round
+./run-recorded-contest-session.sh   # right before the round starts
+uv run puskas_visualizer.py         # after the round
+```
+
+See [CLAUDE.md](CLAUDE.md) for what `run-recorded-contest-session.sh` actually starts.
 
 ## Quick start — IRC bridge
 
@@ -37,9 +48,14 @@ Credentials are read from `~/.netrc` (`machine www.on4kst.info login <call> pass
 
 ## Testing
 
+Enforced by `pre-commit`, not a manual step — one-time setup per clone:
+
 ```
-uv run pytest tests/ -v
+uv run pre-commit install
 ```
+
+Runs automatically on every commit after that (see `.pre-commit-config.yaml`).
+To run everything ad hoc: `uv run pre-commit run --all-files`.
 
 ## Developer notes
 
