@@ -151,55 +151,23 @@ Reload: `tmux source ~/.tmux.conf`. Complements (doesn't replace) the
 taskbar-flash chain above — this one catches it even without ever leaving the
 tmux session.
 
-## Raspberry Pi deployment
-The bridge runs permanently on a Raspberry Pi (Debian trixie, Python 3.13) with irssi
-in tmux. It is distributed as a `.deb` package built by GitHub Actions.
+## File layout
 
-**To release a new version:**
-```
-git tag v1.2.3
-git push origin v1.2.3
-```
-The `release.yml` workflow builds `on4kst-irc-bridge_1.2.3_all.deb` and attaches it to
-a GitHub Release automatically.
-
-**To install / upgrade on the Pi:**
-```
-wget https://github.com/ha5la/urhpk/releases/latest/download/on4kst-irc-bridge_VERSION_all.deb
-sudo dpkg -i on4kst-irc-bridge_VERSION_all.deb
-```
-postinst enables and starts both services; prerm stops irssi first, then the bridge, before upgrade/removal.
-
-**Service details:**
-- `on4kst-irc-bridge.service` — the bridge; script at `/usr/lib/on4kst-irc-bridge/on4kst_irc_bridge.py`
-- `irssi.service` — runs irssi in a tmux session (`tmux new-session -d -s irssi irssi`); `Type=oneshot RemainAfterExit=yes` because tmux daemonizes
-- Both unit files are checked into the repo and installed to `/lib/systemd/system/`
-- Both run as `User=pi` — `~/.netrc` must exist for that user
-- No runtime dependency on `uv` for the bridge; the bridge script is pure stdlib, run directly with `/usr/bin/python3`
-- Bridge logs: `journalctl -u on4kst-irc-bridge -f`
-- To change the service user without losing it on upgrade: `sudo systemctl edit on4kst-irc-bridge`
-
-**Contest tools on the Pi:**
-The package also installs `puskas_harvester.py`, `puskas_logger.py`, and
-`puskas_visualizer.py` to `/usr/lib/on4kst-irc-bridge/`, with wrapper scripts in
-`/usr/local/bin/` (`puskas-harvester`, `puskas-logger`, `puskas-visualizer`).
-These require `uv` on the Pi — install once with:
-```
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-File locations follow a simple rule: **global databases live in `~`, per-session files live in CWD**.
+The whole stack (bridge, logger, harvester, visualizer, hamlib supervisor) runs on the
+same laptop during the contest — no separate always-on host. File locations follow a
+simple rule: **global databases live in `~`, per-session files live in CWD**.
 - `~/.puskas/puskas-seen-stations.json` — harvested Puskás station database (all rounds, accumulates)
-- `~/.puskas/on4kst-seen-stations.json` — ON4KST session database (written by the bridge service)
+- `~/.puskas/on4kst-seen-stations.json` — ON4KST session database (written by the bridge)
 - `.puskas_cache/` — API response cache (CWD, delete to force a fresh fetch)
 - `*.edi` — contest QSO logs (CWD, one file per band per session)
 
 Run the contest tools from a contest directory:
 ```
 mkdir ~/contest-2026 && cd ~/contest-2026
-puskas-harvester     # fetch ~/.puskas/puskas-seen-stations.json
+uv run puskas_harvester.py     # fetch ~/.puskas/puskas-seen-stations.json
 ./run-recorded-contest-session.sh   # right before the round: irssi + logger (recorded),
                                      # hamlib_supervisor.py + bridge in a background window
-puskas-visualizer    # generate map/polar from ~/.puskas/puskas-seen-stations.json + my-logs/
+uv run puskas_visualizer.py    # generate map/polar from ~/.puskas/puskas-seen-stations.json + my-logs/
 ```
 
 ## puskas_harvester.py – Pre-contest station harvester
