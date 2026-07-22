@@ -366,12 +366,20 @@ corner. Two different sync paths exist depending on how the clip was made:
 
 - **Recorded via `puskas_logger.py`'s own Alt+V capture** (same machine as
   the logger, same `datetime.now(timezone.utc)` clock as every QSO/keystroke):
-  exact sync, no cross-correlation needed. `webcam_start_from_log` reads the
-  precise frame-0 wallclock straight from the `*-webcam.log` ffmpeg capture
-  log (or `webcam_start_wall` from the `*-input.jsonl` `webcam_start` event
-  as a close second choice) — the same idea as the cast's exact Unix-epoch
-  sync above, for the same reason: no second physical device clock to
-  reconcile.
+  exact sync, no cross-correlation needed. The file itself is renamed on
+  stop with a µs-precise UTC timestamp baked into the filename (e.g.
+  `foo-webcam.mp4` -> `foo-webcam-20260706T160037.123456Z.mp4`) —
+  `parse_webcam_precise_filename` reads it straight off the filename, no
+  extra file needed. This was chosen over tagging the timestamp into the
+  mp4's own container metadata after capture: that was tested against a
+  real ~2h/3GB file and does work (a 15s stream-copy remux), but needs a
+  full second copy of the file on disk at the same time — too risky right
+  when a session ends and disk space is tightest. A rename needs none of
+  that (verified: 0.006s on a 3GB file, a directory-entry update
+  independent of size). Falls back to `webcam_start_from_log` (the same
+  precision, parsed from the `*-webcam.log` ffmpeg capture log) or
+  `webcam_start_wall` (the `*-input.jsonl` `webcam_start` event, ~1s early)
+  for a recording made before the rename existed.
 - **An independent recording (e.g. a phone propped up separately)**: the
   phone has its own clock convention, not necessarily the WAV recorder's —
   in the first real use of this path the WAV recorder stamped filenames in

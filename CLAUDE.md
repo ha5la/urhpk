@@ -533,6 +533,18 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
   cross-correlation entirely (no rate compensation) — for a webcam clip
   with no audio track, or wherever cross-correlation can't find a
   confident match.
+  **For a logger-recorded webcam (Alt+V, same machine — see
+  puskas_logger.py's own Webcam capture notes), none of the above
+  cross-correlation/rate-fitting machinery is needed at all**: since Alt+V's
+  stop handler now renames the file with a µs-precise timestamp,
+  `parse_webcam_precise_filename` reads it straight from the filename —
+  preferred over `webcam_start_from_log` (the `*-webcam.log` sidecar, same
+  precision but depends on that file surviving alongside the video) and
+  `webcam_start_wall` (the logged `webcam_start` event, ~1s early), in that
+  order, both kept as fallbacks for recordings made before the rename
+  existed. The independent-device cross-correlation/drift-rate path above is
+  only ever reached for the phone-clip case, where there genuinely are two
+  unrelated clocks to reconcile.
 - **`--cast PATH` for a terminal-session picture-in-picture**, replacing what
   used to be separate QSO panels, a running-score header, a UTC clock, and a
   typewriter overlay of what was typed. `PATH` is an asciinema (cast v2)
@@ -1210,7 +1222,8 @@ rather than kept for redundancy.
   minute-only precision let `_snap_to_cluster` occasionally pick the wrong
   neighbouring burst.
 
-**Webcam capture** (`YYMMDD-CALL-webcam.mp4`, Alt+V to start/stop, off by default):
+**Webcam capture** (`YYMMDD-CALL-webcam.mp4` while recording, renamed on stop — see
+below — Alt+V to start/stop, off by default):
 - Replaces an earlier approach that recorded the operator with a phone propped up
   separately, requiring `contest_video.py` to sync two *independent* device clocks
   after the fact (see its own webcam-sync notes) -- error-prone even with audio
@@ -1231,6 +1244,23 @@ rather than kept for redundancy.
   triggered automatically on exit (`_webcam_stop_if_running`, both the normal
   Ctrl-D path and the crash-handler path in `main()`) so a still-running capture
   is never left orphaned or its output file unfinalized.
+- **Renamed on stop with a µs-precise timestamp** (`_webcam_precise_start` +
+  `_webcam_precise_name`), e.g. `260706-HA5LA-webcam.mp4` ->
+  `260706-HA5LA-webcam-20260706T160037.123456Z.mp4`. Investigated and rejected two
+  alternatives first, both for real, measured reasons: `-metadata creation_time=...`
+  can't be passed to ffmpeg up front, since the true frame-0 wallclock isn't known
+  until the camera has actually opened (~1s, variable, after the process spawns) --
+  and tagging it in *after* capture (`ffmpeg -c copy -metadata ...`) was tested
+  against a real ~2h/3GB capture and does work (15s, stream-copy, no re-encode), but
+  needs a full second copy of the file on disk simultaneously -- too risky right at
+  the point in a session (end of a multi-hour recording) where free disk space is
+  most likely to be tight. A rename needs none of that: verified on a real 3GB file
+  at 0.006s, a directory-entry update on the same filesystem, independent of file
+  size. `contest_video.py`'s `parse_webcam_precise_filename` now prefers this over
+  parsing the `*-webcam.log` sidecar (`webcam_start_from_log`, kept as a fallback for
+  recordings made before this existed, or if the rename didn't happen for some
+  reason) -- same precision either way, but self-contained in the filename, no
+  dependency on the `.log` file surviving alongside the video.
 - Logs `"event": "webcam_start"` / `"webcam_stop"` to the same `*-input.jsonl` as
   everything else (see **Input-box logging** above) rather than a separate file —
   one more consumer of the same already-precise event log, not a new format.

@@ -772,6 +772,27 @@ def parse_webcam_wall(path: str) -> datetime:
     return datetime.strptime(m.group(1), "%Y%m%d_%H%M%S")
 
 
+_WEBCAM_PRECISE_RE = re.compile(r"-webcam-(\d{8}T\d{6}\.\d+Z)\.")
+
+
+def parse_webcam_precise_filename(path: str) -> datetime | None:
+    """Parse the exact, µs-precise UTC timestamp puskas_logger._webcam_toggle
+    bakes into the filename on stop (e.g.
+    `foo-webcam-20260722T121101.868307Z.mp4`), read from the ffmpeg capture
+    log's own frame-0 wallclock at the time (see _webcam_precise_start in
+    puskas_logger.py). Preferred over webcam_start_from_log/webcam_start_wall
+    below: same precision, but self-contained in the filename itself -- no
+    dependency on the sidecar `.log` file surviving alongside the video, and
+    a rename is free (no second copy of the video data, unlike tagging the
+    file's own container metadata after the fact -- see CLAUDE.md). Returns
+    None for a recording made before this existed, or the coarse phone-clip
+    filename convention (parse_webcam_wall) instead."""
+    m = _WEBCAM_PRECISE_RE.search(os.path.basename(path))
+    if not m:
+        return None
+    return datetime.strptime(m.group(1), "%Y%m%dT%H%M%S.%fZ")
+
+
 def sync_webcam_start(
     cam_wall: datetime,
     cam_dur: float,
@@ -2250,13 +2271,21 @@ def main() -> None:
     webcam_rate = 0.0
     webcam_exact = False
     if args.webcam:
-        # Prefer the ffmpeg log's frame-0 wallclock (µs-precise) over the
-        # logger's webcam_start event (~1s early, stamped before ffmpeg
-        # spawned) -- see webcam_start_from_log. Both are same-machine, so
-        # placement is exact either way, no cross-correlation.
-        log_path = os.path.splitext(args.webcam)[0] + ".log"
-        cam_wall = webcam_start_from_log(log_path) if os.path.exists(log_path) else None
-        src = "ffmpeg frame-0 wallclock"
+        # Prefer, in order: the exact timestamp baked into the filename
+        # itself (parse_webcam_precise_filename -- self-contained, no
+        # sidecar file needed); then the ffmpeg log's frame-0 wallclock
+        # (µs-precise, but depends on the *-webcam.log surviving alongside
+        # the video); then the logger's webcam_start event (~1s early,
+        # stamped before ffmpeg spawned). All three are same-machine, so
+        # placement is exact either way, no cross-correlation needed.
+        cam_wall = parse_webcam_precise_filename(args.webcam)
+        src = "exact timestamp in filename"
+        if cam_wall is None:
+            log_path = os.path.splitext(args.webcam)[0] + ".log"
+            cam_wall = (
+                webcam_start_from_log(log_path) if os.path.exists(log_path) else None
+            )
+            src = "ffmpeg frame-0 wallclock"
         if cam_wall is None and args.input_log:
             cam_wall = webcam_start_wall(args.input_log)
             src = "logged webcam_start event"

@@ -2,6 +2,7 @@
 
 import io
 from datetime import datetime, timezone
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -28,6 +29,9 @@ from puskas_logger import (
     _telemetry_record,
     _update_loc_cache,
     _webcam_capture_cmd,
+    _webcam_precise_name,
+    _webcam_precise_start,
+    _webcam_toggle,
     current_rot,
     haversine_km,
     initial_bearing,
@@ -1063,6 +1067,110 @@ class TestWebcamCaptureCmd:
         assert cmd[i + 1] == "1"
         # before the camera's own -i /dev/video0 (an input option)
         assert i < cmd.index("/dev/video0") - 1
+
+
+class TestWebcamPreciseStart:
+    def test_parses_video_input_start_time(self, tmp_path):
+        log = tmp_path / "x.log"
+        log.write_text(
+            "Input #0, video4linux2,v4l2, from '/dev/video0':\n"
+            "  Duration: N/A, start: 1784722261.868307, bitrate: 147456 kb/s\n"
+            "Input #1, pulse, from 'default':\n"
+            "  Duration: N/A, start: 1784722261.854603, bitrate: 1536 kb/s\n"
+        )
+        assert _webcam_precise_start(str(log)) == datetime(
+            2026, 7, 22, 12, 11, 1, 868307
+        )
+
+    def test_falls_back_to_audio_when_no_video_input(self, tmp_path):
+        log = tmp_path / "x.log"
+        log.write_text(
+            "Input #0, pulse, from 'default':\n"
+            "  Duration: N/A, start: 1784722261.854603, bitrate: 1536 kb/s\n"
+        )
+        assert _webcam_precise_start(str(log)) == datetime(
+            2026, 7, 22, 12, 11, 1, 854603
+        )
+
+    def test_returns_none_when_no_start_line(self, tmp_path):
+        log = tmp_path / "x.log"
+        log.write_text("ffmpeg version 7.1.5\nsome unrelated output\n")
+        assert _webcam_precise_start(str(log)) is None
+
+    def test_returns_none_for_missing_file(self, tmp_path):
+        assert _webcam_precise_start(str(tmp_path / "nope.log")) is None
+
+    def test_ignores_uptime_style_start_not_a_real_epoch(self, tmp_path):
+        # Without -use_wallclock_as_timestamps, v4l2 reports CLOCK_MONOTONIC
+        # (a small number, uptime) rather than a real epoch -- must not be
+        # mistaken for one (real epochs are always > 1e9).
+        log = tmp_path / "x.log"
+        log.write_text(
+            "Input #0, video4linux2,v4l2, from '/dev/video0':\n"
+            "  Duration: N/A, start: 123.456789, bitrate: 147456 kb/s\n"
+        )
+        assert _webcam_precise_start(str(log)) is None
+
+
+class TestWebcamPreciseName:
+    def test_inserts_timestamp_before_extension(self):
+        start = datetime(2026, 7, 22, 12, 11, 1, 868307)
+        assert (
+            _webcam_precise_name("foo-webcam.mp4", start)
+            == "foo-webcam-20260722T121101.868307Z.mp4"
+        )
+
+    def test_preserves_directory_prefix(self):
+        start = datetime(2026, 7, 22, 12, 11, 1, 868307)
+        assert (
+            _webcam_precise_name("/a/b/foo-webcam.mp4", start)
+            == "/a/b/foo-webcam-20260722T121101.868307Z.mp4"
+        )
+
+
+class TestWebcamToggleRename:
+    """_webcam_toggle's stop branch, with a mocked ffmpeg process so this
+    doesn't need real webcam hardware -- only the rename logic (the part
+    this feature actually added) is under test."""
+
+    def _run_stop(self, out_path, log_path):
+        fake_proc = MagicMock()
+        fake_proc.wait.return_value = 0
+        pl._webcam_proc = fake_proc
+        pl._webcam_out_path = str(out_path)
+        pl._webcam_log_path = str(log_path)
+        pl._webcam_log_fh = None
+        try:
+            return _webcam_toggle("")
+        finally:
+            pl._webcam_proc = None
+            pl._webcam_out_path = None
+            pl._webcam_log_path = None
+
+    def test_renames_file_using_precise_log_timestamp(self, tmp_path):
+        out_path = tmp_path / "prefix-webcam.mp4"
+        out_path.write_bytes(b"fake mp4 data")
+        log_path = tmp_path / "prefix-webcam.log"
+        log_path.write_text(
+            "Input #0, video4linux2,v4l2, from '/dev/video0':\n"
+            "  Duration: N/A, start: 1784722261.868307, bitrate: 147456 kb/s\n"
+        )
+        msg = self._run_stop(out_path, log_path)
+        assert msg == "recording stopped"
+        assert not out_path.exists()
+        renamed = tmp_path / "prefix-webcam-20260722T121101.868307Z.mp4"
+        assert renamed.exists()
+        assert renamed.read_bytes() == b"fake mp4 data"
+
+    def test_leaves_file_unrenamed_when_log_has_no_start_time(self, tmp_path):
+        out_path = tmp_path / "prefix-webcam.mp4"
+        out_path.write_bytes(b"fake mp4 data")
+        log_path = tmp_path / "prefix-webcam.log"
+        log_path.write_text("no useful lines here\n")
+        msg = self._run_stop(out_path, log_path)
+        assert msg == "recording stopped"
+        assert out_path.exists()
+        assert out_path.read_bytes() == b"fake mp4 data"
 
 
 # ──────────────────────────────────────────────────────────────

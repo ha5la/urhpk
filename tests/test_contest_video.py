@@ -54,6 +54,7 @@ from contest_video import (
     parse_cast_header,
     parse_edi,
     parse_wav_title,
+    parse_webcam_precise_filename,
     parse_webcam_wall,
     qso_windows,
     read_wav_metadata,
@@ -1942,6 +1943,24 @@ class TestWebcamStartFromLog:
 
     def test_none_when_log_missing(self, tmp_path):
         assert webcam_start_from_log(str(tmp_path / "nope.log")) is None
+
+
+class TestParseWebcamPreciseFilename:
+    def test_parses_the_timestamp_puskas_logger_bakes_in_on_stop(self):
+        assert parse_webcam_precise_filename(
+            "260706-HA5LA-webcam-20260706T160037.123456Z.mp4"
+        ) == datetime(2026, 7, 6, 16, 0, 37, 123456)
+
+    def test_works_with_a_full_path(self):
+        assert parse_webcam_precise_filename(
+            "/home/op/contest/260706-HA5LA-webcam-20260706T160037.123456Z.mp4"
+        ) == datetime(2026, 7, 6, 16, 0, 37, 123456)
+
+    def test_none_for_a_plain_webcam_mp4_not_yet_renamed(self):
+        assert parse_webcam_precise_filename("260706-HA5LA-webcam.mp4") is None
+
+    def test_none_for_the_coarse_phone_clip_convention(self):
+        assert parse_webcam_precise_filename("VID_20260706_180003.mp4") is None
 
 
 class TestMatchQsoTimes:
