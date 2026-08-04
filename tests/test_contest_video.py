@@ -515,6 +515,31 @@ class TestRenderWebcamSync:
         fchain = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
         cast_chain = fchain.split("[1:v]")[1].split("[castpip]")[0]
         assert f"colorchannelmixer=aa={cv.CAST_PIP_ALPHA}" in cast_chain
+
+    def test_cast_pip_stretches_timeline_by_cast_rate(self, monkeypatch, tmp_path):
+        # The cast recording (asciinema) and the webcam capture are both
+        # timestamped by the same laptop system clock, so the same clock-
+        # drift rate measured against the webcam's own audio (see
+        # refine_webcam_start / main()) is applied to the cast PiP's own
+        # timeline too, the same way as the webcam branch.
+        captured = {}
+        monkeypatch.setattr(
+            cv.subprocess, "run", lambda cmd, check=True: captured.update(cmd=cmd)
+        )
+        cv.render(
+            str(tmp_path / "a.wav"),
+            str(tmp_path / "a.ass"),
+            str(tmp_path / "out.mp4"),
+            1280,
+            720,
+            cast=str(tmp_path / "cast.mp4"),
+            cast_start=5.0,
+            cast_rate=0.0005,
+        )
+        fchain = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
+        cast_chain = fchain.split("[1:v]")[1].split("[castpip]")[0]
+        assert cast_chain.startswith("setpts=PTS/0.9995")
+        assert cast_chain.index("setpts=") < cast_chain.index(f"fps={cv.RENDER_FPS}")
         assert 0.0 < cv.CAST_PIP_ALPHA < 1.0  # actually transparent, not opaque
 
 
@@ -1034,6 +1059,43 @@ class TestTerminalCast:
         screen = _CastScreen(20, 4)
         _CastStream(screen).feed(b"\x1b[s")
         assert screen.margins_lr is None
+
+    def _build_two_pane_screen(self, cls):
+        # 20 cols x 4 rows: row0 is a full-width header (must stay outside
+        # the vertical scroll margins); rows1-3 hold distinct left-pane
+        # (cols0-9) and right-pane (cols10-19) content, like irssi | logger.
+        screen = cls(20, 4)
+        stream = pyte.ByteStream(screen) if cls is pyte.Screen else _CastStream(screen)
+        stream.feed(b"\x1b[1;1H" + b"H" * 20)
+        stream.feed(b"\x1b[2;1H0000000000")
+        stream.feed(b"\x1b[3;1H1111111111")
+        stream.feed(b"\x1b[4;1H2222222222")
+        stream.feed(b"\x1b[2;11HAAAAAAAAAA")
+        stream.feed(b"\x1b[3;11HBBBBBBBBBB")
+        stream.feed(b"\x1b[4;11HCCCCCCCCCC")
+        return screen, stream
+
+    def test_stock_pyte_plain_linefeed_drags_the_other_pane_too(self):
+        # The bug this fixes: a plain '\n' hitting the bottom margin uses
+        # pyte's stock index(), which swaps whole row *objects*
+        # (buffer[y] = buffer[y+1]) -- ignoring margins_lr entirely, unlike
+        # the explicit-SU path _scroll already handles. Found from the real
+        # cast: irssi filling its pane and auto-scrolling on a plain
+        # linefeed dragged the logger's pane (outside DECSLRM) up with it.
+        screen, stream = self._build_two_pane_screen(pyte.Screen)
+        stream.feed(b"\x1b[2;4r\x1b[1;10s")  # DECSTBM rows1-3, DECSLRM cols0-9
+        stream.feed(b"\x1b[4;1H\n")  # cursor at bottom margin, plain LF
+        # right pane (untouched by DECSLRM) wrongly scrolled too
+        assert screen.display[1][10:] == "BBBBBBBBBB"
+
+    def test_cast_screen_plain_linefeed_only_scrolls_its_own_pane(self):
+        screen, stream = self._build_two_pane_screen(_CastScreen)
+        stream.feed(b"\x1b[2;4r\x1b[1;10s")  # DECSTBM rows1-3, DECSLRM cols0-9
+        stream.feed(b"\x1b[4;1H\n")  # cursor at bottom margin, plain LF
+        assert screen.display[0] == "H" * 20  # header untouched
+        assert screen.display[1] == "1111111111AAAAAAAAAA"  # left scrolled...
+        assert screen.display[2] == "2222222222BBBBBBBBBB"  # ...right didn't
+        assert screen.display[3] == "          CCCCCCCCCC"
 
 
 class TestSkipGaps:

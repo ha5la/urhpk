@@ -980,10 +980,33 @@ def refine_webcam_start(
             corrections.append(correction)
     if not corrections:
         return webcam_start, 0.0, 0
-    if len(corrections) == 1:
+    n = len(corrections)
+    if n == 1:
         return webcam_start + corrections[0], 0.0, 1
-    rate, intercept = np.polyfit(audio_ts, corrections, 1)
-    return webcam_start + float(intercept), float(rate), len(corrections)
+    fit_t = np.array(audio_ts)
+    fit_c = np.array(corrections)
+    # A few spurious correlation peaks (confidence >= min_confidence but a
+    # wildly inconsistent correction -- e.g. another voice briefly matching
+    # by chance) can skew a single least-squares fit substantially. Found
+    # on a real ~2h same-machine webcam recording: one naive fit put the
+    # whole-session drift at +3.4s; iteratively rejecting outliers (>1.5
+    # std from the running fit) and refitting converged to +5.1s with the
+    # residual std dropping from ~2.6s to ~0.1s -- the robust fit is the
+    # trustworthy one. Only attempted with >=4 points; fewer than that
+    # can't reliably tell an outlier from real curvature.
+    if n >= 4:
+        for _ in range(4):
+            rate, intercept = np.polyfit(fit_t, fit_c, 1)
+            resid = fit_c - (rate * fit_t + intercept)
+            std = resid.std()
+            if std == 0:
+                break
+            keep = np.abs(resid) < 1.5 * std
+            if keep.sum() == len(fit_t) or keep.sum() < 4:
+                break
+            fit_t, fit_c = fit_t[keep], fit_c[keep]
+    rate, intercept = np.polyfit(fit_t, fit_c, 1)
+    return webcam_start + float(intercept), float(rate), n
 
 
 # ---------------------------------------------------------------------------
@@ -1130,6 +1153,32 @@ class _CastScreen(pyte.Screen):
 
     def scroll_down(self, count: int = 0, **kwargs) -> None:
         self._scroll(count, down=True)
+
+    def index(self) -> None:
+        # Stock pyte's index()/reverse_index() (used for a *plain* linefeed
+        # that lands on the bottom/top margin row -- not just explicit SU/SD)
+        # replace the whole row object (`self.buffer[y] = self.buffer[y+1]`),
+        # ignoring margins_lr entirely. Found from the real cast: irssi's
+        # pane fills up and a plain '\n' at its own bottom margin auto-
+        # scrolled -- and dragged the *logger's* pane (outside DECSLRM)
+        # up with it, eventually scrolling its title off screen. Confirmed
+        # by direct reproduction: with stock pyte's index(), a bottom-margin
+        # linefeed restricted to the left pane's columns (via DECSLRM) still
+        # shifted the right pane's rows. Delegating to our own _scroll (which
+        # already respects margins_lr, see scroll_up/scroll_down above) fixes
+        # both the explicit-SU and the plain-linefeed paths the same way.
+        top, bottom = self.margins if self.margins else (0, self.lines - 1)
+        if self.cursor.y == bottom:
+            self._scroll(1, down=False)
+        else:
+            self.cursor_down()
+
+    def reverse_index(self) -> None:
+        top, bottom = self.margins if self.margins else (0, self.lines - 1)
+        if self.cursor.y == top:
+            self._scroll(1, down=True)
+        else:
+            self.cursor_up()
 
 
 class _CastStream(pyte.ByteStream):
@@ -2022,6 +2071,7 @@ def render(
     webcam_rate: float = 0.0,
     cast: str | None = None,
     cast_start: float = 0.0,
+    cast_rate: float = 0.0,
 ) -> None:
     ass_esc = ass.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
     # Full-screen scrolling waterfall, dimmed to ~half luma so it reads as an
@@ -2037,13 +2087,16 @@ def render(
     cur = "v0"
     if cast:
         # cast is our own render_cast_video output -- a synthetic, constant-
-        # framerate file we just encoded, not an independent physical device
-        # with its own clock, so (unlike the webcam) there's no drift-rate
-        # to correct: fps=RENDER_FPS is a plain resample onto the shared
-        # clock, and itsoffset positions its own t=0 (the moment the logger
-        # session started) at cast_start in the output timeline. tpad clones
-        # its last frame so a cast shorter than the session can't truncate
-        # the shared filtergraph, same reasoning as the webcam branch below.
+        # framerate file we just encoded, so no drift *of its own* -- but
+        # its internal timestamps came from asciinema's real-time capture
+        # on the same laptop as the webcam, so the same laptop-clock-vs-
+        # audio-clock drift measured via the webcam (see main(), cast_rate)
+        # applies here too: setpts stretches its timeline the same way the
+        # webcam branch's does, before the fps=RENDER_FPS resample. itsoffset
+        # positions its own t=0 (the moment the logger session started) at
+        # cast_start in the output timeline. tpad clones its last frame so a
+        # cast shorter than the session can't truncate the shared filtergraph,
+        # same reasoning as the webcam branch below.
         cast_w = round(W * CAST_PIP_WIDTH_FRAC)
         cast_x = round(W * CAST_PIP_X_FRAC)
         cast_y = round(H * CAST_PIP_Y_FRAC)
@@ -2052,7 +2105,7 @@ def render(
         # overlay blends it over the waterfall (a little transparency, not a
         # wash) -- overlay honours the top input's own alpha channel.
         fchain += (
-            f";[1:v]scale={cast_w}:-2,fps={RENDER_FPS},"
+            f";[1:v]setpts=PTS/{1 - cast_rate:.8f},scale={cast_w}:-2,fps={RENDER_FPS},"
             f"format=yuva420p,colorchannelmixer=aa={CAST_PIP_ALPHA},"
             f"tpad=stop_mode=clone:stop_duration=99999[castpip]"
             f";[{cur}][castpip]overlay=x={cast_x}:y={cast_y}:"
@@ -2258,13 +2311,14 @@ def main() -> None:
     print(f"{mycall} {mywwl}: {len(qsos_all)} QSOs, UTC+{offset_h} local")
 
     cast_start = None
+    cast_rate = 0.0
     if args.cast:
         cast_wall, cast_cols, cast_rows = parse_cast_header(args.cast)
         cast_start = audio_time_for(cast_wall + timedelta(hours=offset_h), segs)
         print(
             f"  cast: {cast_cols}x{cast_rows} terminal, synced to start at "
-            f"{cast_start:.0f}s in the output (exact -- Unix-epoch timestamp, "
-            f"no whole-hour rounding needed)"
+            f"{cast_start:.0f}s in the output (exact -- Unix-epoch timestamp; "
+            f"see below for a clock-drift correction shared with --webcam, if given)"
         )
 
     webcam_start = None
@@ -2317,16 +2371,7 @@ def main() -> None:
     known_wav = sum(1 for s in segs if s.ptt is not None)
     print(f"  WAV metadata: {known_wav}/{len(segs)} segments have IC-9700 rig tags")
 
-    if args.webcam and webcam_start is not None and webcam_exact:
-        # Exact placement already -- only a manual nudge can apply, and there
-        # is no separate device clock to have drifted, so no rate correction.
-        if args.webcam_offset is not None:
-            webcam_start += args.webcam_offset
-            print(
-                f"  webcam: manual offset {args.webcam_offset:+.2f}s applied -> "
-                f"starts at {webcam_start:.2f}s"
-            )
-    elif args.webcam and webcam_start is not None:
+    if args.webcam and webcam_start is not None:
         if args.webcam_offset is not None:
             webcam_start += args.webcam_offset
             print(
@@ -2335,22 +2380,54 @@ def main() -> None:
                 f"pass no --webcam-offset to use automatic cross-correlation instead)"
             )
         else:
+            # Even an exact filename/log-derived start only fixes the
+            # constant offset -- the webcam capture (this machine's system
+            # clock, via gettimeofday) and the radio recording (the WAV
+            # sample clock, an independent crystal in the IC-9700) still
+            # aren't ticking at exactly the same *rate*. Confirmed on a real
+            # ~2h same-machine Alt+V recording: cross-correlation anchors
+            # showed a consistent, low-noise linear drift (~-1.2s intercept,
+            # residual std ~0.1s after outlier rejection) growing to ~+5s by
+            # the end -- not measurement noise, and large enough to be
+            # audible/visible. So refine_webcam_start always runs regardless
+            # of webcam_exact; the exact start is still a much better seed
+            # for the correlation search than the coarse whole-hour one.
             refined, rate, n = refine_webcam_start(args.webcam, segs, webcam_start)
             if n:
+                intercept = refined - webcam_start
                 print(
                     f"  webcam: audio cross-correlation refined start by "
-                    f"{refined - webcam_start:+.2f}s and found a "
+                    f"{intercept:+.2f}s and found a "
                     f"{rate * 3600:+.3f}s/hour clock-drift rate using {n} anchor(s) "
                     f"-> starts at {refined:.2f}s"
                 )
                 webcam_start = refined
                 webcam_rate = rate
+                # The webcam capture and the cast recording (asciinema, also
+                # on this machine) are timestamped by the *same* laptop
+                # system clock -- so the same intercept/rate correction
+                # measured against the webcam's own audio (the only stream
+                # with anything to cross-correlate against the radio's WAV
+                # audio) applies to the cast PiP too. Confirmed needed from
+                # a real report: the operator saw the logger's own on-screen
+                # mode change happen visibly before the audio caught up with
+                # it, late in the same session this webcam drift was found
+                # in -- consistent with one shared laptop-clock drift, not
+                # two unrelated bugs.
+                if args.cast and cast_start is not None:
+                    cast_start += intercept
+                    cast_rate = rate
+                    print(
+                        f"  cast: applying the same clock-drift correction "
+                        f"({intercept:+.2f}s, {rate * 3600:+.3f}s/hour) -> "
+                        f"starts at {cast_start:.2f}s"
+                    )
             else:
                 print(
                     "  webcam: audio cross-correlation found no confident match "
                     "(no audio track, or no TX segments long enough) -- using "
-                    "coarse whole-hour sync only; pass --webcam-offset to "
-                    "fine-tune manually"
+                    f"{'exact' if webcam_exact else 'coarse whole-hour'} sync only; "
+                    "pass --webcam-offset to fine-tune manually"
                 )
 
     if args.duration:
@@ -2477,6 +2554,7 @@ def main() -> None:
         webcam_rate=webcam_rate,
         cast=cast_video,
         cast_start=cast_start or 0.0,
+        cast_rate=cast_rate,
     )
 
     if not args.keep_ass:
