@@ -17,11 +17,13 @@ Amateur radio contest toolset for the Puskás URH Kupa, plus a general-purpose
 | `contest_video.py` | Annotated CW contest video from a timestamped recording + EDI log |
 | `hamlib_supervisor.py` | Starts/stops rigctld and rotctld based on USB device presence (inotify, no polling) |
 | `run-recorded-contest-session.sh` | The contest-round entrypoint — recorded irssi + logger, plus rig/rotator supervision and the bridge in a background window |
+| `sync-clock.sh` | Forces an immediate chrony resync (offset + drift rate) right before a round starts |
 
 ## Quick start — contest session
 
 ```
 uv run puskas_harvester.py          # once, before the round
+./sync-clock.sh                     # right before the round starts
 ./run-recorded-contest-session.sh   # right before the round starts
 uv run puskas_visualizer.py         # after the round
 ```
