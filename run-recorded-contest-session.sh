@@ -1,6 +1,6 @@
 #!/bin/sh
 
-d=$(dirname $0)
+d=$(dirname "$0")
 
 # Preflight: contest_video.py's audio/webcam/cast sync assumes this
 # machine's system clock rate is trustworthy for the whole session. Real

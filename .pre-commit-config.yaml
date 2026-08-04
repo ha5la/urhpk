@@ -19,3 +19,8 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      - id: shellcheck
+        name: shellcheck
+        entry: shellcheck
+        language: system
+        files: \.sh$
