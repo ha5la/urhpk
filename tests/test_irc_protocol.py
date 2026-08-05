@@ -8,7 +8,7 @@ import asyncio
 import pytest
 
 from on4kst_irc_bridge import CHANNEL
-from tests.helpers import CALLSIGN, MockBridge, make_irc_pair
+from tests.helpers import CALLSIGN, MockBridge, make_irc_pair, wait_until
 
 # ============================================================
 # Fixture: a factory that yields (task, client, bridge) tuples
@@ -32,7 +32,11 @@ async def make_registered():
         task = asyncio.create_task(session.handle_loop())
         tasks.append(task)
         await client.register(nick)
-        await client.drain()  # consume NICK-change + auto-join output
+        # register() stops at 376; the bridge always follows with an
+        # optional NICK-change, JOIN, and NAMES, unconditionally terminated
+        # by numeric 366 — so recv_until is exact, not a "wait for quiet"
+        # guess.
+        await client.recv_until("366")
         return task, client, bridge
 
     yield _factory
@@ -103,23 +107,21 @@ class TestCAPNegotiation:
 
 class TestRegistration:
     async def test_welcome_numerics_present(self, make_registered):
-        _, client, _ = await make_registered()
-        await client.drain()
-        # drain() comes after register() which already consumed up to 376,
-        # so just check the already-received lines via register()'s return
-        # value.  Re-register to get a fresh view:
-        # (We trust register() consumed 001…376 correctly.)
+        # make_registered() already drives register(), which itself
+        # asserts (via recv_until) that 001…376 all arrive — nothing
+        # further to check here.
+        await make_registered()
 
     async def test_nick_forced_to_callsign(self, make_registered):
         _, client, _ = await make_registered(nick="TESTNICK")
-        # drain() was called inside make_registered; the NICK change message
-        # was already consumed.  Re-run from scratch to observe it:
+        # make_registered() already consumed the NICK change message via
+        # recv_until("366"). Re-run from scratch to observe it:
         bridge = MockBridge()
         session, client2 = await make_irc_pair(bridge)
         task = asyncio.create_task(session.handle_loop())
         try:
             lines = await client2.register(nick="TESTNICK")
-            lines += await client2.drain()
+            lines += await client2.recv_until("366")
             nick_change = [line for line in lines if f"NICK {CALLSIGN}" in line]
             assert nick_change, "Bridge must send NICK change to ON4KST callsign"
         finally:
@@ -131,7 +133,7 @@ class TestRegistration:
         task = asyncio.create_task(session.handle_loop())
         try:
             lines = await client.register(nick=CALLSIGN)
-            lines += await client.drain()
+            lines += await client.recv_until("366")
             # No NICK command should appear (the join has the nick but as
             # part of a JOIN line, not a NICK line)
             nick_cmds = [
@@ -147,7 +149,7 @@ class TestRegistration:
         task = asyncio.create_task(session.handle_loop())
         try:
             lines = await client.register()
-            lines += await client.drain()
+            lines += await client.recv_until("366")
             joined = [line for line in lines if "JOIN" in line and CHANNEL in line]
             assert joined, "Bridge must auto-join #on4kst after welcome"
         finally:
@@ -162,7 +164,7 @@ class TestRegistration:
         task = asyncio.create_task(session.handle_loop())
         try:
             lines = await client.register()
-            lines += await client.drain()
+            lines += await client.recv_until("366")
             assert any("353" in line for line in lines), "Must send NAMES (353)"
             assert any("366" in line for line in lines), "Must send end-of-NAMES (366)"
             assert any("G6DDN" in line for line in lines)
@@ -302,11 +304,11 @@ class TestMessaging:
     async def test_channel_privmsg_forwarded_to_bridge(self, make_registered):
         _, client, bridge = await make_registered()
         await client.send(f"PRIVMSG {CHANNEL} :Hello everyone")
-        await asyncio.sleep(0.05)
-        assert (CHANNEL, "Hello everyone") in bridge.irc_messages
+        assert await wait_until(
+            lambda: (CHANNEL, "Hello everyone") in bridge.irc_messages
+        )
 
     async def test_pm_to_callsign_forwarded_to_bridge(self, make_registered):
         _, client, bridge = await make_registered()
         await client.send("PRIVMSG G6DDN :Sked?")
-        await asyncio.sleep(0.05)
-        assert ("G6DDN", "Sked?") in bridge.irc_messages
+        assert await wait_until(lambda: ("G6DDN", "Sked?") in bridge.irc_messages)

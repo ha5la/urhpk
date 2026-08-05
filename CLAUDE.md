@@ -12,6 +12,12 @@ Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
 - When adding or removing components, update the components table in **README.md**
 
 ## Development principles
+- **Succinct code comments**: prefer explaining identifiers over comments (Robert C.
+  Martin) — a well-named variable/function usually makes a comment unnecessary. When
+  the *why* genuinely needs explaining (a hidden constraint, a non-obvious tradeoff, a
+  bug's root cause), write a succinct comment, not an essay. Applies going forward;
+  this file's existing long-form comments predate the rule and document real debugging
+  history, so they're not being retroactively trimmed.
 - **Kent Beck's simplicity rule**: always implement the simplest thing that works.
   Prefer decremental development — remove code that isn't needed rather than keeping
   it "just in case". Dead code is technical debt.
@@ -45,6 +51,29 @@ Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
   Time is an input — pin it like any other. Production code that needs the current time
   accepts an optional `now: datetime | None = None` parameter (defaulting to
   `datetime.now(timezone.utc)`) so tests can inject a fixed value via `_dt(h, m)`.
+- **Tests don't sleep a guessed duration — they wait for the real condition**: the same
+  "time is an input" rule applies to async/background-task synchronization, not just
+  wall-clock timestamps. `await asyncio.sleep(0.1); assert X` (sleep a hand-picked
+  duration, hope it was enough, then check) is both slow (every test pays the full
+  guessed duration even when the real work finishes in microseconds) and fragile (too
+  short → flaky on a loaded machine; too long → wastes time and can still be wrong).
+  Fix: poll the actual predicate — `tests/helpers.py`'s `wait_until`/`wait_until_sync`
+  return the instant the condition holds, with a generous `timeout` as a safety net for
+  genuine failure only, not the expected wait. Prefer an even stronger fix where the
+  output has a deterministic terminator: `on4kst_irc_bridge.py`'s IRC registration flow
+  always ends in numeric 366, so tests `recv_until("366")` instead of draining on a
+  "quiet for N ms" heuristic — zero guessing at all, not just a tighter guess. Only
+  genuine negative assertions ("nothing arrives") still need a real bounded sleep, since
+  there's no true condition to poll for proving an absence.
+  Cut the full test suite from ~29s to ~3.5s (pytest alone: ~26s → ~3.2s) — found while
+  investigating why `pre-commit` felt slow; `tests/test_integration.py` (~18s) and
+  `tests/test_irc_protocol.py` (~7s) were almost entirely blind `asyncio.sleep()` calls
+  synchronizing against the bridge's background tasks. Removing the guesswork also
+  surfaced one real, previously-masked race: `test_exclamation_not_forwarded_to_kst`
+  snapshotted `kst_server.received` right after connecting, racing the connect-triggered
+  `/SET HERE` send (a separate task) — the old 0.3s drain timeout had enough slack to
+  hide it by accident. Fixed by explicitly `wait_until`-ing for `/SET HERE` before taking
+  the baseline, rather than re-adding a sleep.
 - **No visual glitches**: the logger UI must look professional at all times. Transient
   incorrect states (e.g. a dup highlight flashing for one frame during a state transition)
   are bugs. The root cause is usually a final prompt_toolkit render that fires between a

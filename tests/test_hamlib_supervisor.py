@@ -1,5 +1,4 @@
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -12,17 +11,9 @@ from hamlib_supervisor import (  # noqa: E402
     reconcile_initial_state,
     route_event,
 )
+from tests.helpers import wait_until_sync as _wait_until  # noqa: E402
 
 SLEEP_CMD = [sys.executable, "-c", "import time; time.sleep(5)"]
-
-
-def _wait_until(predicate, timeout=2.0):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if predicate():
-            return True
-        time.sleep(0.01)
-    return predicate()
 
 
 # ──────────────────────────────────────────────────────────────

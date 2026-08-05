@@ -14,6 +14,7 @@ from tests.helpers import (
     PASSWORD,
     IRCClientHelper,
     MockKSTServer,
+    wait_until,
 )
 
 # ============================================================
@@ -54,8 +55,10 @@ async def bridge_env():
 
     kst_task = asyncio.create_task(run_kst())
     await kst_server.wait_ready()
-    # Give fetch_locator + first /SHow USer time to complete
-    await asyncio.sleep(0.15)
+    # bridge.kst is set right after fetch_locator() returns, immediately
+    # before read_loop() starts — that's the true readiness signal, not a
+    # guessed duration for "fetch_locator + first /SHow USer to complete".
+    assert await wait_until(lambda: bridge.kst is not None)
 
     yield bridge, kst_server, irc_port
 
@@ -65,16 +68,25 @@ async def bridge_env():
     except (asyncio.CancelledError, asyncio.TimeoutError):
         pass
     irc_server.close()
-    await asyncio.sleep(0.1)  # let active sessions drain; skip wait_closed()
+    # Not gating an assertion (teardown only) — a short grace period for
+    # any still-in-flight session write to finish before closing the mock
+    # KST server out from under it, not a correctness wait.
+    await asyncio.sleep(0.02)
     await kst_server.stop()
 
 
 async def irc_connect(irc_port: int, nick: str = "TESTNICK"):
-    """Connect an IRC client, register, and drain auto-join output."""
+    """Connect an IRC client, register, and consume auto-join output.
+
+    register() stops at 376 (end of MOTD); the bridge always follows with
+    an optional NICK-change, JOIN, and NAMES, unconditionally terminated
+    by numeric 366 — so recv_until("366") consumes exactly that, with no
+    "wait for quiet" timeout guess involved.
+    """
     r, w = await asyncio.open_connection("127.0.0.1", irc_port)
     client = IRCClientHelper(r, w)
     await client.register(nick)
-    await client.drain()
+    await client.recv_until("366")
     return client, w
 
 
@@ -124,8 +136,12 @@ class TestKSTToIRC:
         client, w = await irc_connect(irc_port)
         try:
             await kst_server.inject(f"0712Z {CALLSIGN} HA5LA JN97MX> Testing 1 2 3")
+            # Proving a negative (nothing arrives) can't be turned into a
+            # wait_until poll — there's no true condition to wait for. The
+            # bound just needs to comfortably clear real loopback latency
+            # (sub-ms), not "feel safe" as a guessed processing duration.
             with pytest.raises(TimeoutError):
-                await client.recv(timeout=0.3)
+                await client.recv(timeout=0.05)
         finally:
             w.close()
 
@@ -153,8 +169,7 @@ class TestIRCToKST:
         client, w = await irc_connect(irc_port)
         try:
             await client.send(f"PRIVMSG {CHANNEL} :CQ de {CALLSIGN}")
-            await asyncio.sleep(0.1)
-            assert kst_server.was_sent(f"CQ de {CALLSIGN}")
+            assert await wait_until(lambda: kst_server.was_sent(f"CQ de {CALLSIGN}"))
         finally:
             w.close()
 
@@ -163,8 +178,7 @@ class TestIRCToKST:
         client, w = await irc_connect(irc_port)
         try:
             await client.send("PRIVMSG G6DDN :Sked?")
-            await asyncio.sleep(0.1)
-            assert kst_server.was_sent("/CQ G6DDN Sked?")
+            assert await wait_until(lambda: kst_server.was_sent("/CQ G6DDN Sked?"))
         finally:
             w.close()
 
@@ -179,8 +193,7 @@ class TestPresence:
         _, kst_server, irc_port = bridge_env
         client, w = await irc_connect(irc_port)
         try:
-            await asyncio.sleep(0.1)
-            assert kst_server.was_sent("/SET HERE")
+            assert await wait_until(lambda: kst_server.was_sent("/SET HERE"))
         finally:
             w.close()
 
@@ -188,16 +201,14 @@ class TestPresence:
         _, kst_server, irc_port = bridge_env
         client, w = await irc_connect(irc_port)
         w.close()
-        await asyncio.sleep(0.2)
-        assert kst_server.was_sent("/UNSET HERE")
+        assert await wait_until(lambda: kst_server.was_sent("/UNSET HERE"))
 
     async def test_away_command_sends_unset_here(self, bridge_env):
         _, kst_server, irc_port = bridge_env
         client, w = await irc_connect(irc_port)
         try:
             await client.send("AWAY :Eating dinner")
-            await asyncio.sleep(0.1)
-            assert kst_server.was_sent("/UNSET HERE")
+            assert await wait_until(lambda: kst_server.was_sent("/UNSET HERE"))
         finally:
             w.close()
 
@@ -206,12 +217,14 @@ class TestPresence:
         client, w = await irc_connect(irc_port)
         try:
             await client.send("AWAY :Gone")
-            await asyncio.sleep(0.05)
-            await client.send("AWAY")  # bare AWAY = back
-            await asyncio.sleep(0.1)
-            sent = kst_server.received
-            set_here_count = sum(1 for c in sent if "/SET HERE" == c)
-            assert set_here_count >= 2  # once on connect, once on back
+            await client.send("AWAY")  # bare AWAY = back; TCP preserves order,
+            # no delay needed between the two sends for the bridge to see them
+            # in sequence
+
+            def set_here_count():
+                return sum(1 for c in kst_server.received if c == "/SET HERE")
+
+            assert await wait_until(lambda: set_here_count() >= 2)  # connect + back
         finally:
             w.close()
 
@@ -270,11 +283,13 @@ class TestSkedCommands:
         client, w = await irc_connect(irc_port)
         try:
             pre = len(kst_server.received)
+
+            def new_sent():
+                return " ".join(kst_server.received[pre:])
+
             await client.send("PRIVMSG G6DDN :sked")
-            await asyncio.sleep(0.1)
-            new_sent = " ".join(kst_server.received[pre:])
-            assert "/CQ G6DDN" in new_sent
-            assert "sked?" in new_sent
+            assert await wait_until(lambda: "/CQ G6DDN" in new_sent())
+            assert "sked?" in new_sent()
         finally:
             w.close()
 
@@ -289,9 +304,10 @@ class TestSkedCommands:
         client, w = await irc_connect(irc_port)
         try:
             await client.send("PRIVMSG G6DDN :sked")
-            lines = await client.drain()
-            notice = next((line for line in lines if "NOTICE" in line), None)
-            assert notice is not None, "Bridge must echo a NOTICE after PM sked"
+            # Exactly one NOTICE line is echoed for a PM sked — no variable
+            # trailing output to wait out, so a single recv() suffices.
+            notice = await client.recv()
+            assert "NOTICE" in notice
             assert "/CQ G6DDN" in notice
             assert "sked?" in notice
         finally:
@@ -302,10 +318,12 @@ class TestSkedCommands:
         client, w = await irc_connect(irc_port)
         try:
             pre = len(kst_server.received)
+
+            def new_sent():
+                return " ".join(kst_server.received[pre:])
+
             await client.send("PRIVMSG G6DDN :Hello there")
-            await asyncio.sleep(0.1)
-            new_sent = " ".join(kst_server.received[pre:])
-            assert "/CQ G6DDN Hello there" in new_sent
+            assert await wait_until(lambda: "/CQ G6DDN Hello there" in new_sent())
         finally:
             w.close()
 
@@ -320,9 +338,16 @@ class TestLocalCommands:
         _, kst_server, irc_port = bridge_env
         client, w = await irc_connect(irc_port)
         try:
+            # irc_connect() only guarantees the IRC-facing registration
+            # output; the connect-triggered "/SET HERE" to KST runs on a
+            # separate task and can still be in flight. Wait for it before
+            # taking the baseline, so the negative check below isn't racing
+            # against the very connection setup it's trying to exclude.
+            assert await wait_until(lambda: kst_server.was_sent("/SET HERE"))
             pre = len(kst_server.received)
             await client.send(f"PRIVMSG {CHANNEL} :!help")
-            await asyncio.sleep(0.1)
+            # Proving a negative — see test_own_message_not_echoed above.
+            await asyncio.sleep(0.05)
             assert kst_server.received[pre:] == []
         finally:
             w.close()
@@ -379,8 +404,9 @@ class TestLocalCommands:
         client, w = await irc_connect(irc_port)
         try:
             await client.send(f"PRIVMSG {CHANNEL} :!bogus")
-            lines = await client.drain()
-            assert any("NOTICE" in line and "bogus" in line for line in lines)
+            # Exactly one NOTICE line for an unknown command.
+            line = await client.recv()
+            assert "NOTICE" in line and "bogus" in line
         finally:
             w.close()
 
@@ -443,10 +469,10 @@ class TestRigctld:
         client, w = await irc_connect(irc_port)
         try:
             await client.send("PRIVMSG G6DDN :sked")
-            await asyncio.sleep(0.1)
-            new_sent = " ".join(kst_server.received)
-            assert "144.174 MHz" in new_sent
-            assert "USB" in new_sent
+            assert await wait_until(
+                lambda: "144.174 MHz" in " ".join(kst_server.received)
+            )
+            assert "USB" in " ".join(kst_server.received)
         finally:
             w.close()
 
@@ -463,7 +489,8 @@ class TestRigctld:
         client, w = await irc_connect(irc_port)
         try:
             await client.send("PRIVMSG G6DDN :sked")
-            await asyncio.sleep(0.1)
+            # Proving a negative — see test_own_message_not_echoed above.
+            await asyncio.sleep(0.05)
             new_sent = " ".join(kst_server.received)
             assert "MHz" not in new_sent
         finally:
@@ -476,7 +503,7 @@ class TestRigctld:
         orig_host, orig_port = bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT
         orig_poll = bridge_module.RIGCTLD_POLL_S
         bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT = "127.0.0.1", rig.port
-        bridge_module.RIGCTLD_POLL_S = 0.1
+        bridge_module.RIGCTLD_POLL_S = 0.01
         notices = []
 
         async def fake_notify_status(text):
@@ -485,8 +512,7 @@ class TestRigctld:
         bridge._notify_status = fake_notify_status
         task = asyncio.create_task(bridge_module._rig_poller(bridge))
         try:
-            await asyncio.sleep(0.4)
-            assert any("Connected" in n for n in notices)
+            assert await wait_until(lambda: any("Connected" in n for n in notices))
             assert any("144.174" in n for n in notices)
         finally:
             task.cancel()
@@ -506,7 +532,7 @@ class TestRigctld:
         orig_host, orig_port = bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT
         orig_poll = bridge_module.RIGCTLD_POLL_S
         bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT = "127.0.0.1", rig.port
-        bridge_module.RIGCTLD_POLL_S = 0.1
+        bridge_module.RIGCTLD_POLL_S = 0.01
         notices = []
 
         async def fake_notify_status(text):
@@ -515,10 +541,9 @@ class TestRigctld:
         bridge._notify_status = fake_notify_status
         task = asyncio.create_task(bridge_module._rig_poller(bridge))
         try:
-            await asyncio.sleep(0.3)  # let it connect
+            assert await wait_until(lambda: any("Connected" in n for n in notices))
             await rig.stop()
-            await asyncio.sleep(0.4)  # let it detect disconnect
-            assert any("Disconnected" in n for n in notices)
+            assert await wait_until(lambda: any("Disconnected" in n for n in notices))
         finally:
             task.cancel()
             try:

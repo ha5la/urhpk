@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import time
 
 from on4kst_irc_bridge import IRCSession
 
@@ -11,6 +12,39 @@ CALLSIGN = "HA5LA"
 PASSWORD = "testpass"
 # A minimal chat-prompt line that satisfies RE_CHAT and contains a locator
 CHAT_PROMPT = b"1234Z HA5LA HA5LA JN97MX chat >\r\n"
+
+
+# ============================================================
+# Clock-independent waiting
+#
+# Time is an input like any other — a test must not guess how long an
+# async background task needs to run. `wait_until`/`wait_until_sync` poll
+# a predicate instead of sleeping a fixed, hand-picked duration: they
+# return the instant the condition is true (usually within a millisecond
+# on loopback/in-process work) and only burn the full `timeout` when the
+# condition is genuinely never met, i.e. a real failure.
+# ============================================================
+
+
+async def wait_until(predicate, timeout: float = 2.0, interval: float = 0.005) -> bool:
+    """Poll `predicate()` until true, without assuming how long it takes."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not predicate():
+        if loop.time() >= deadline:
+            return predicate()
+        await asyncio.sleep(interval)
+    return True
+
+
+def wait_until_sync(predicate, timeout: float = 2.0, interval: float = 0.01) -> bool:
+    """Sync counterpart of `wait_until`, for non-asyncio tests."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return predicate()
 
 
 # ============================================================
@@ -160,8 +194,16 @@ class IRCClientHelper:
             line, self._buf = self._buf.split("\n", 1)
             return line.rstrip("\r")
 
-    async def drain(self, n: int = 30, timeout: float = 0.3) -> list[str]:
-        """Read up to n lines until quiet for timeout seconds."""
+    async def drain(self, n: int = 30, timeout: float = 0.05) -> list[str]:
+        """Read up to n lines until quiet for timeout seconds.
+
+        Only for genuinely variable, unterminated output (no numeric/marker
+        to recv_until on). The "quiet" signal is itself real elapsed time,
+        which can't be replaced by a predicate — but on a loopback/
+        socketpair connection in the same process, real propagation is
+        sub-millisecond, so 50ms is already a large safety margin, not a
+        tuned-to-be-"long enough" guess.
+        """
         lines = []
         for _ in range(n):
             try:
