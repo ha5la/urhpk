@@ -2083,6 +2083,10 @@ SCOPE_AMP_MAX = (
     160  # icom_net.py's own SCOPE_AMP_MAX -- raw linear scope units, not dBm
 )
 
+SCOPE_WATERFALL_SPAN_S = 10.0  # seconds of history the canvas height represents,
+# matching the real IC-9700 display: a signal takes ~4-5s to
+# scroll through half the physical waterfall's height there.
+
 # Same gradient as scope_preview.py -- kept as a separate copy rather than a
 # shared import, since scope_preview.py is a standalone preview tool with no
 # other dependency on contest_video.py's own rendering conventions (RENDER_FPS,
@@ -2118,17 +2122,36 @@ def _resize_scope_row(pixels: np.ndarray, width: int) -> np.ndarray:
 
 
 def render_scope_video(
-    scope_path: str, out_path: str, W: int, H: int, fps: int = RENDER_FPS
+    scope_path: str,
+    out_path: str,
+    W: int,
+    H: int,
+    fps: int = RENDER_FPS,
+    span_s: float = SCOPE_WATERFALL_SPAN_S,
 ) -> None:
     """Render a .scope recording into a standalone full-canvas waterfall
-    clip, scrolling one row per *real* sweep (held static between sweeps to
-    fill real elapsed time at fps, not resampled to a constant per-sweep
-    rate) -- so the clip's own internal duration equals the recording's real
-    elapsed capture time, and its t=0 is exactly the first sweep's own
-    timestamp. That's what lets render() position it with a plain -itsoffset
-    the same way render_cast_video's output is positioned: both carry real,
-    absolute timestamps from the moment they were captured, unlike the
-    webcam branch's independent, drifting camera clock.
+    clip, whose t=0 is exactly the first sweep's own timestamp -- that's
+    what lets render() position it with a plain -itsoffset the same way
+    render_cast_video's output is positioned: both carry real, absolute
+    timestamps from the moment they were captured, unlike the webcam
+    branch's independent, drifting camera clock.
+
+    Rows scroll on a fixed real-time clock (one new row every span_s/H
+    seconds), *not* one row per real sweep -- an earlier version did the
+    latter, which meant the canvas height represented however many seconds
+    happened to fit at whatever the recording's actual sweep rate was
+    (288s for a 720-row canvas at one real synthetic-test sweep every
+    0.4s), not a fixed, chosen span. Reported by directly comparing a
+    rendered preview against the radio's own physical display: a signal
+    there takes ~4-5s to cross half the waterfall's height, i.e. the full
+    height is a ~10s window -- span_s defaults to that. Each row shows
+    whichever sweep was most recent as of that row's own point on the
+    fixed time grid: this naturally compresses periods where sweeps
+    arrived faster than the row rate (only the latest-before-the-tick one
+    is shown, the rest are skipped) and holds the display steady
+    (duplicating the last row) through any stretch slower than the row
+    rate or where sweeps stop arriving entirely -- the same way a real
+    waterfall display behaves when its input momentarily stalls.
     """
     records = read_scope_records(scope_path)
     if len(records) < 2:
@@ -2140,6 +2163,7 @@ def render_scope_video(
     canvas = np.zeros((H, W, 3), dtype=np.uint8)
     t0 = records[0][0]
     duration = records[-1][0] - t0
+    row_dt = span_s / H
 
     cmd = [
         "ffmpeg",
@@ -2172,14 +2196,24 @@ def render_scope_video(
         frame_dt = 1.0 / fps
         idx = 0
         n = len(records)
+        next_row_t = 0.0
         t = 0.0
+        last_idx = -1
+        row = None
         while t <= duration:
-            while idx < n and records[idx][0] - t0 <= t:
-                pixels = np.frombuffer(records[idx][3], dtype=np.uint8)
-                row = lut[_resize_scope_row(pixels, W)]
-                canvas[1:] = canvas[:-1]  # scroll down; newest sweep enters at the top
-                canvas[0] = row
-                idx += 1
+            while next_row_t <= t:
+                while idx + 1 < n and records[idx + 1][0] - t0 <= next_row_t:
+                    idx += 1
+                if records[idx][0] - t0 <= next_row_t:
+                    if idx != last_idx:
+                        pixels = np.frombuffer(records[idx][3], dtype=np.uint8)
+                        row = lut[_resize_scope_row(pixels, W)]
+                        last_idx = idx
+                    canvas[1:] = canvas[
+                        :-1
+                    ]  # scroll down; newest row enters at the top
+                    canvas[0] = row
+                next_row_t += row_dt
             proc.stdin.write(canvas.tobytes())
             t += frame_dt
     finally:

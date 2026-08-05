@@ -14,7 +14,7 @@ would look like in contest_video.py, before wiring it in for real. Not
 synced to any audio/QSO timeline; just the waterfall on its own.
 
 Usage:
-    uv run scope_preview.py RECORDING.scope [-o out.mp4] [--scale N] [--rows N]
+    uv run scope_preview.py RECORDING.scope [-o out.mp4] [--scale N] [--rows N] [--span S]
 """
 
 from __future__ import annotations
@@ -28,6 +28,12 @@ import numpy as np
 from icom_net import read_scope_records
 
 SCOPE_AMP_MAX = 160
+SCOPE_WATERFALL_SPAN_S = 10.0  # seconds of history the canvas height represents --
+# matches the real IC-9700 display (a signal takes ~4-5s to
+# cross half its physical waterfall's height). Keep this in
+# sync with contest_video.py's own SCOPE_WATERFALL_SPAN_S --
+# duplicated rather than imported (see render()'s docstring
+# for why), so it won't update itself automatically.
 
 # Classic SDR waterfall gradient: black -> blue -> cyan -> green -> yellow -> red.
 _COLORMAP_STOPS = [
@@ -56,18 +62,33 @@ def read_sweeps(path: Path) -> list[tuple[float, int, int, np.ndarray]]:
     ]
 
 
-def render(scope_path: Path, out_path: Path, scale: int, rows: int) -> None:
+def render(
+    scope_path: Path,
+    out_path: Path,
+    scale: int,
+    rows: int,
+    span_s: float = SCOPE_WATERFALL_SPAN_S,
+    fps: float = 30.0,
+) -> None:
+    """Rows scroll on a fixed real-time clock (one new row every span_s/rows
+    seconds), not one row per real sweep -- an earlier version did the
+    latter, which made the canvas height represent however many seconds
+    happened to fit at whatever the recording's actual sweep rate was,
+    rather than a fixed, chosen span matching the radio's own display. Each
+    row shows whichever sweep was most recent as of that row's point on the
+    fixed time grid -- compressing periods where sweeps arrived faster than
+    the row rate, holding the display steady through any stretch slower
+    than it (or where sweeps stop arriving entirely). See
+    contest_video.py's render_scope_video, which this mirrors."""
     sweeps = read_sweeps(scope_path)
     if len(sweeps) < 2:
         raise SystemExit(f"need at least 2 sweeps in {scope_path}, found {len(sweeps)}")
 
     npix = len(sweeps[0][3])
     width = npix * scale
-    # Real sweep arrival isn't evenly spaced -- fps is just the recording's
-    # own average rate, clamped to a sane playback range. Fine for a preview;
-    # frame-accurate timing only matters once this feeds a synced render.
-    dt = (sweeps[-1][0] - sweeps[0][0]) / (len(sweeps) - 1)
-    fps = max(1.0, min(30.0, 1.0 / dt)) if dt > 0 else 10.0
+    t0 = sweeps[0][0]
+    duration = sweeps[-1][0] - t0
+    row_dt = span_s / rows
 
     lut = _build_colormap()
     canvas = np.zeros((rows, width, 3), dtype=np.uint8)
@@ -100,18 +121,36 @@ def render(scope_path: Path, out_path: Path, scale: int, rows: int) -> None:
     ]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     try:
-        for _, _, _, pixels in sweeps:
-            row = np.repeat(lut[pixels], scale, axis=0)  # (npix, 3) -> (width, 3)
-            canvas[1:] = canvas[:-1]  # scroll down; newest sweep enters at the top
-            canvas[0] = row
+        frame_dt = 1.0 / fps
+        idx = 0
+        n = len(sweeps)
+        next_row_t = 0.0
+        t = 0.0
+        last_idx = -1
+        row = None
+        while t <= duration:
+            while next_row_t <= t:
+                while idx + 1 < n and sweeps[idx + 1][0] - t0 <= next_row_t:
+                    idx += 1
+                if sweeps[idx][0] - t0 <= next_row_t:
+                    if idx != last_idx:
+                        row = np.repeat(lut[sweeps[idx][3]], scale, axis=0)
+                        last_idx = idx
+                    canvas[1:] = canvas[
+                        :-1
+                    ]  # scroll down; newest row enters at the top
+                    canvas[0] = row
+                next_row_t += row_dt
             proc.stdin.write(canvas.tobytes())
+            t += frame_dt
     finally:
         proc.stdin.close()
         proc.wait()
 
     start_hz0, end_hz0 = sweeps[0][1], sweeps[0][2]
     print(
-        f"wrote {out_path}: {len(sweeps)} sweeps, {fps:.2f} fps, "
+        f"wrote {out_path}: {len(sweeps)} sweeps over {duration:.1f}s, "
+        f"{span_s:.0f}s/{rows}rows waterfall, "
         f"{start_hz0 / 1e6:.3f}-{end_hz0 / 1e6:.3f} MHz, {width}x{rows}"
     )
 
@@ -134,8 +173,15 @@ def main() -> None:
         default=400,
         help="waterfall history depth in rows (default: 400)",
     )
+    ap.add_argument(
+        "--span",
+        type=float,
+        default=SCOPE_WATERFALL_SPAN_S,
+        help=f"seconds of history the full canvas height represents "
+        f"(default: {SCOPE_WATERFALL_SPAN_S:.0f}, matching the real IC-9700 display)",
+    )
     args = ap.parse_args()
-    render(args.scope_file, args.out, args.scale, args.rows)
+    render(args.scope_file, args.out, args.scale, args.rows, args.span)
 
 
 if __name__ == "__main__":

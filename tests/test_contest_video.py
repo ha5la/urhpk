@@ -63,12 +63,14 @@ from contest_video import (
     read_wav_metadata,
     refine_webcam_start,
     remap_audio_t,
+    render_scope_video,
     scope_freq_periods,
     sync_webcam_start,
     trim_to_duration,
     webcam_start_from_log,
     webcam_start_wall,
 )
+from icom_net import write_scope_record
 
 SR = 16000
 PITCH = 600.0
@@ -2339,6 +2341,71 @@ class TestScopeFreqLabelInAss:
         segs = [Segment("a", datetime(2026, 7, 4, 11, 0, 0), 60.0, 0.0)]
         ass = build_ass(segs, 1920, 1080)
         assert ass.count("ScopeFreq") == 1  # just the style def, no Dialogue lines
+
+
+class TestRenderScopeVideoTiming:
+    def test_rows_scroll_on_fixed_time_grid_not_per_sweep(self, monkeypatch, tmp_path):
+        # Regression test for a real reported issue: rows used to scroll one
+        # per real sweep, so the canvas height represented however many
+        # seconds happened to fit at the recording's actual sweep rate
+        # (hundreds of seconds in one real synthetic test), not the radio's
+        # own ~10s-per-screen-height waterfall speed. Verifies the fix
+        # directly: a slow sweep rate (1/s here) against a faster row rate
+        # (rows/span_s = 4/2 = 2/s) must hold each row on screen for
+        # multiple output frames (compression/holding), not scroll a fresh
+        # row in on every single output frame regardless of real data rate.
+        # Pixel values deliberately avoid 0: lut[0] is pure black (0,0,0),
+        # identical to an untouched canvas row -- using it here would make a
+        # "held-over" row indistinguishable from "never reached yet",
+        # silently defeating the one assertion below that actually tells
+        # the fixed and buggy behaviour apart.
+        scope_path = tmp_path / "t.scope"
+        with open(scope_path, "wb") as f:
+            write_scope_record(f, 1000.0, 144_000_000, 146_000_000, bytes([40]))
+            write_scope_record(f, 1001.0, 144_000_000, 146_000_000, bytes([160]))
+
+        frames = []
+
+        class FakeStdin:
+            def write(self, data):
+                frames.append(np.frombuffer(data, dtype=np.uint8).reshape(4, 2, 3))
+
+            def close(self):
+                pass
+
+        class FakeProc:
+            stdin = FakeStdin()
+
+            def wait(self):
+                return 0
+
+        monkeypatch.setattr(cv.subprocess, "Popen", lambda cmd, stdin=None: FakeProc())
+        render_scope_video(
+            str(scope_path), str(tmp_path / "out.mp4"), W=2, H=4, fps=2, span_s=2.0
+        )
+
+        assert len(frames) == 3  # t=0.0, 0.5, 1.0 -- duration=1.0s, frame_dt=0.5s
+        lut = _scope_colormap()
+
+        first = frames[0]
+        assert (first[0] == lut[40]).all()
+        assert (first[1:] == 0).all()  # canvas not yet filled below the first row
+
+        last = frames[-1]
+        assert (last[0] == lut[160]).all()  # newest row (sweep @ t=1.0) enters at top
+        # The key assertion: row 2 must ALSO show the held-over sweep@40
+        # value, not still be untouched black -- the row-rate here (2/s) is
+        # faster than the real sweep rate (1/s), so the fixed time grid
+        # must duplicate the same sweep across two physical canvas rows
+        # (indices 1 and 2) to keep scrolling at a constant rate. The old,
+        # buggy per-sweep scrolling only ever pushed two rows total for
+        # these two sweeps, leaving row 2 untouched (black) at this point --
+        # confirmed by temporarily reverting to that logic and observing
+        # this exact assertion fail (row 2 was 0, not lut[40]) before
+        # restoring the fix.
+        assert (last[1] == lut[40]).all()
+        assert (last[2] == lut[40]).all()
+        assert (last[3] == 0).all()  # canvas still not fully filled by t=1.0
 
 
 class TestRenderScopeBackground:
