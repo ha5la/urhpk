@@ -172,6 +172,77 @@ def band_from_hz(hz: int) -> str:
 
 
 # ============================================================
+# Scope (spectrum waterfall) frames
+#
+# Not a separate socket/port -- confirmed against real hardware that the
+# IC-9700's own SET > Network menu only exposes three LAN ports (Control/
+# CI-V/Audio; ScopeLANPort=50004 in wfview's client config is a vestige of
+# its Yaesu support, never used for Icom radios). Scope sweeps are CI-V
+# command 0x27 frames on the same CI-V socket already used for freq/mode,
+# turned on with two ordinary CI-V "set" commands (see enable_scope below)
+# rather than any connection-level negotiation.
+# ============================================================
+
+CIV_CMD_SCOPE = 0x27
+CIV_SCOPE_ON_OFF = 0x10
+CIV_SCOPE_DATA_OUTPUT = 0x11
+SCOPE_MODE_CENTER = 0x00
+
+
+def _bcd_byte(b: int) -> int:
+    return (b >> 4) * 10 + (b & 0x0F)
+
+
+def parse_scope_frame(frame: bytes) -> dict | None:
+    """Parse one CI-V scope-wave-data frame body (cmd 0x27, sub 0x00 0x00;
+    frame is as returned by split_civ_frames, i.e. sans FE FE/FD). Always
+    returns 'sequence'/'sequence_max'/'pixels' (this frame's own slice);
+    the first frame of a sweep (sequence==1) additionally carries
+    'start_hz'/'end_hz'/'out_of_range'. None if not a scope-wave frame.
+
+    Byte layout confirmed directly against a real IC-9700 packet capture
+    (not just from source reading): frame[7]=mode, frame[8:13]/[13:18]=
+    start/end frequency as 5-byte BCD, frame[18]=out-of-range flag,
+    frame[19:]=pixel bytes -- decoding a real captured frame with this
+    layout gave a sane 145.11-146.11 MHz sweep (2M band, 1 MHz span); an
+    earlier reading with oor before the frequency fields instead of after
+    decoded to a nonsensical ~1.45 MHz "center" and was wrong.
+    """
+    if (
+        len(frame) < 7
+        or frame[2] != CIV_CMD_SCOPE
+        or frame[3] != 0x00
+        or frame[4] != 0x00
+    ):
+        return None
+    sequence = _bcd_byte(frame[5])
+    sequence_max = _bcd_byte(frame[6])
+    if sequence == 1:
+        if len(frame) < 19:
+            return None
+        mode = frame[7]
+        raw_start = bcd_decode_freq(frame[8:13])
+        raw_end = bcd_decode_freq(frame[13:18])
+        out_of_range = bool(frame[18])
+        if mode == SCOPE_MODE_CENTER:
+            # Transmitted fields are center frequency and half-span, not edges.
+            start_hz = raw_start - raw_end
+            end_hz = start_hz + 2 * raw_end
+        else:
+            start_hz, end_hz = raw_start, raw_end
+        return {
+            "sequence": sequence,
+            "sequence_max": sequence_max,
+            "mode": mode,
+            "out_of_range": out_of_range,
+            "start_hz": start_hz,
+            "end_hz": end_hz,
+            "pixels": frame[19:],
+        }
+    return {"sequence": sequence, "sequence_max": sequence_max, "pixels": frame[7:]}
+
+
+# ============================================================
 # Wire packet layer
 #
 # All packets share a 16-byte outer envelope (len/type/seq LE, then
@@ -459,6 +530,13 @@ class IcomNetRig:
         self.mode: str | None = None
         self._listeners: list = []
 
+        self.scope_start_hz: int | None = None
+        self.scope_end_hz: int | None = None
+        self.scope_pixels: bytes | None = None
+        self._scope_listeners: list = []
+        self._scope_pending_range: tuple[int, int] | None = None
+        self._scope_buf = bytearray()
+
         self._stop = threading.Event()
         self._ctrl_sock: socket.socket | None = None
         self._civ_sock: socket.socket | None = None
@@ -487,6 +565,46 @@ class IcomNetRig:
         for cb in self._listeners:
             try:
                 cb(freq_hz, mode, band)
+            except Exception:
+                pass
+
+    def on_scope(self, callback) -> None:
+        """callback(start_hz, end_hz, pixels: bytes) fires on each complete
+        scope sweep. pixels is one raw byte per bin, 0-160 (Icom's own linear
+        scope unit, not dBm) -- already a ready-to-colormap waterfall row."""
+        self._scope_listeners.append(callback)
+
+    def enable_scope(self) -> None:
+        """Turn on the radio's scope sweep + unsolicited data output (CI-V
+        0x27 0x10/0x11). Off by default -- a much heavier stream than plain
+        freq/mode transceive frames, so only requested if the caller wants
+        it, unlike connect()'s automatic freq/mode priming."""
+        self._send_civ_command(CIV_CMD_SCOPE, bytes([CIV_SCOPE_ON_OFF, 0x01]))
+        self._send_civ_command(CIV_CMD_SCOPE, bytes([CIV_SCOPE_DATA_OUTPUT, 0x01]))
+
+    def _apply_scope_frame(self, parsed: dict) -> None:
+        if parsed["sequence"] == 1:
+            self._scope_pending_range = (parsed["start_hz"], parsed["end_hz"])
+            self._scope_buf = bytearray(parsed["pixels"])
+        elif self._scope_pending_range is not None:
+            self._scope_buf += parsed["pixels"]
+        else:
+            return  # sequence 1 of this sweep was lost -- nothing usable yet
+        if parsed["sequence"] != parsed["sequence_max"]:
+            return
+        start_hz, end_hz = self._scope_pending_range
+        pixels = bytes(self._scope_buf)
+        with self._lock:
+            self.scope_start_hz, self.scope_end_hz, self.scope_pixels = (
+                start_hz,
+                end_hz,
+                pixels,
+            )
+        self._scope_pending_range = None
+        self._scope_buf = bytearray()
+        for cb in self._scope_listeners:
+            try:
+                cb(start_hz, end_hz, pixels)
             except Exception:
                 pass
 
@@ -655,8 +773,8 @@ class IcomNetRig:
             raise IcomNetError("radio never sent CI-V data after opening the stream")
 
         # Prime current state rather than waiting for the next front-panel change.
-        self._send_civ_query(0x03)
-        self._send_civ_query(0x04)
+        self._send_civ_command(0x03)
+        self._send_civ_command(0x04)
 
     def _recv_len(self, sock: socket.socket, length: int, timeout: float) -> bytes:
         deadline = time.monotonic() + timeout
@@ -670,8 +788,8 @@ class IcomNetRig:
                 return data
         raise IcomNetError(f"no {length}-byte reply from radio within {timeout}s")
 
-    def _send_civ_query(self, cmd: int) -> None:
-        frame = civ_frame(self._civ_addr, CIV_CONTROLLER_ADDR, cmd)
+    def _send_civ_command(self, cmd: int, data: bytes = b"") -> None:
+        frame = civ_frame(self._civ_addr, CIV_CONTROLLER_ADDR, cmd, data)
         pkt = civ_data_packet(
             self._civ_seq,
             self._civ_local_id,
@@ -743,6 +861,10 @@ class IcomNetRig:
                         self._civ_ready.set()
                     last_data = time.monotonic()
                     for frame in split_civ_frames(payload):
+                        scope = parse_scope_frame(frame)
+                        if scope is not None:
+                            self._apply_scope_frame(scope)
+                            continue
                         update = parse_civ_update(frame)
                         if update is not None:
                             self._apply_update(*update)
@@ -800,7 +922,7 @@ class IcomNetRig:
                     # radio-initiated. Waiting to hear something before speaking
                     # first was a deadlock. Send a real query alongside every
                     # open attempt so the radio always has something to answer.
-                    self._send_civ_query(0x03)
+                    self._send_civ_command(0x03)
                     opened_once = True
                     last_reopen = now
 
@@ -836,12 +958,31 @@ def _load_netrc_credentials(host: str) -> tuple[str, str]:
     return login, password
 
 
+def write_scope_record(f, ts: float, start_hz: int, end_hz: int, pixels: bytes) -> None:
+    """Append one sweep to a scope recording: <f8 ts><u4 start_hz><u4 end_hz>
+    <u2 npixels><npixels raw bytes>, repeated per sweep. A simple, appendable
+    binary format sized for a multi-hour contest session -- JSON per sweep
+    would balloon file size at scope refresh rates for no benefit, since
+    pixel values are already byte-quantized 0-160 with nothing gained from
+    text encoding (same reasoning as the WAV recorder storing raw samples
+    rather than a JSON array per sample)."""
+    f.write(struct.pack("<dIIH", ts, start_hz, end_hz, len(pixels)))
+    f.write(pixels)
+
+
 def main() -> None:
     if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} <radio-ip>")
+        print(f"Usage: {sys.argv[0]} <radio-ip> [--scope [outfile.scope]]")
         sys.exit(1)
     host = sys.argv[1]
     username, password = _load_netrc_credentials(host)
+
+    scope_enabled = "--scope" in sys.argv
+    scope_out = None
+    if scope_enabled:
+        idx = sys.argv.index("--scope")
+        if idx + 1 < len(sys.argv) and not sys.argv[idx + 1].startswith("-"):
+            scope_out = sys.argv[idx + 1]
 
     rig = IcomNetRig(host, username, password)
 
@@ -850,8 +991,25 @@ def main() -> None:
         print(f"[icom] {band or '--'}  {f}  {mode or '--'}", flush=True)
 
     rig.on_update(on_change)
+
+    scope_file = open(scope_out, "wb") if scope_out else None
+    if scope_enabled:
+
+        def on_scope(start_hz, end_hz, pixels):
+            print(
+                f"[icom] scope {start_hz / 1e6:.6f}-{end_hz / 1e6:.6f} MHz  "
+                f"{len(pixels)}px  peak={max(pixels)}",
+                flush=True,
+            )
+            if scope_file is not None:
+                write_scope_record(scope_file, time.time(), start_hz, end_hz, pixels)
+
+        rig.on_scope(on_scope)
+
     print(f"[icom] connecting to {host} ...", flush=True)
     rig.connect()
+    if scope_enabled:
+        rig.enable_scope()
     print("[icom] connected -- waiting for live updates (Ctrl-C to quit)", flush=True)
     try:
         while True:
@@ -860,6 +1018,8 @@ def main() -> None:
         pass
     finally:
         rig.close()
+        if scope_file is not None:
+            scope_file.close()
 
 
 if __name__ == "__main__":

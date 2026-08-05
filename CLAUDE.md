@@ -427,14 +427,95 @@ entirely with instant, event-driven state.
   whatever the client sends can't reproduce — those needed the real IC-9700.
 - **Not yet implemented / explicitly out of scope for this first pass**: audio
   streaming (conninfo currently requests `rxenable=0`/`txenable=0` — CI-V status only),
-  spectrum-scope data (a separate UDP port, `scopeLANPort`, untouched here), transmit
-  control, and general-purpose retransmit-*request* compliance (resending a specific
-  buffered packet on demand — the project's research concluded, and real-hardware
-  testing confirmed for steady-state traffic, that this is skippable on a clean LAN;
-  what *isn't* skippable, per the bugs above, is getting the initial seq numbering and
-  handshake ordering exactly right). Not yet wired into `puskas_logger.py` in place of
-  `rigctld` — this file is currently a standalone client with its own CLI test harness
-  (`uv run icom_net.py <radio-ip>`), proven against real hardware but not yet integrated.
+  transmit control, and general-purpose retransmit-*request* compliance (resending a
+  specific buffered packet on demand — the project's research concluded, and
+  real-hardware testing confirmed for steady-state traffic, that this is skippable on a
+  clean LAN; what *isn't* skippable, per the bugs above, is getting the initial seq
+  numbering and handshake ordering exactly right). Not yet wired into `puskas_logger.py`
+  in place of `rigctld` — this file is currently a standalone client with its own CLI
+  test harness (`uv run icom_net.py <radio-ip>`), proven against real hardware but not
+  yet integrated.
+
+### Scope (spectrum waterfall) data
+
+Goal: match the exact waterfall the radio's own front-panel display shows in
+`contest_video.py`'s rendered background, instead of a waterfall reconstructed from the
+recorded audio (`showspectrum` — see that section above) — the audio-based waterfall can
+only ever show what the receiver actually demodulated, not the true RF passband the
+operator was watching, including signals never within earshot.
+
+- **The obvious assumption — a separate "scope port" (`ScopeLANPort`, default 50004,
+  present as a real key in wfview's own config) — is wrong for Icom radios, confirmed
+  two independent ways before writing any code**: first empirically, by running a real
+  wfview session against this radio with `dumpcap` capturing 100% of UDP traffic to/from
+  it (not filtered to one port) while wfview's window visibly showed a live spectrum
+  matching the radio's own screen — zero packets ever appeared on port 50004, and the
+  user independently reproduced the same result with Wireshark, additionally noting the
+  radio's own `SET > Network` menu only exposes three configurable LAN ports (Control/
+  CI-V/Audio), no fourth scope port at all. Second, from wfview's own source: `conninfo_
+  packet` (the packet that negotiates ports with the radio at login) has exactly two
+  port fields, `civport` and `audioport` — there is no third port field anywhere in that
+  struct, so the radio is structurally never told about a separate scope socket.
+  `ScopeLANPort`/50004 in wfview's config turned out to be a vestige of its *Yaesu*
+  support (`src/radio/yaesuudpcontrol.cpp`/`yaesucommander.cpp` are its only consumers)
+  — dead weight for any Icom session, misleading precisely because it's a real,
+  populated config key that looks Icom-relevant.
+- **Real mechanism: scope sweeps are ordinary CI-V command `0x27` frames on the same
+  CI-V socket already used for freq/mode** (port 50002) — not a separate stream, not
+  separately negotiated. Turned on with two plain CI-V "set" commands sent after the
+  CI-V socket is open, exactly like any other CI-V write: `27 10 01` (scope on), `27 11
+  01` (scope data output on) — `IcomNetRig.enable_scope()`. Off by default (`connect()`
+  never calls it) since it's a much heavier stream than freq/mode transceive frames —
+  opt in explicitly, matching `--scope` on the CLI harness.
+- **Frame layout — confirmed by decoding a real captured sweep byte-for-byte, not just
+  from source reading**, which caught a real ordering mistake: after the `27 00 00`
+  scope-wave-data marker, `sequence`/`sequence_max` (single BCD bytes — the IC-9700 over
+  LAN always sends `sequence == sequence_max == 1`, the whole 475-pixel sweep in one UDP
+  datagram, unlike the old multi-packet serial-CI-V framing), then for `sequence == 1`:
+  `mode`(1 byte, `0x00`=Center) → `start_freq`(5-byte BCD) → `end_freq`(5-byte BCD) →
+  `out_of_range`(1 byte) → pixel bytes. An initial reading with `out_of_range` placed
+  *before* the two frequency fields instead of after decoded a real captured frame to a
+  nonsensical ~1.45 MHz "center frequency"; swapping to oor-after-frequencies decoded
+  the same bytes to 145.11–146.11 MHz — sane 2M-band, 1 MHz-span, matching what the
+  radio was actually showing. In Center mode the transmitted fields are center-frequency
+  and half-span, not edges — `start_hz = raw_start - raw_end; end_hz = start_hz + 2 *
+  raw_end` recovers the true sweep edges. Pixel bytes are each a raw `0`–`160` linear
+  scope unit (`SpectrumAmpMax`), not dBm — no rescaling needed, already a
+  ready-to-colormap waterfall row, one byte per bin, 475 bins for the IC-9700.
+- **Reassembly is defensive, not just a pass-through**: `IcomNetRig._apply_scope_frame`
+  buffers pixels across `sequence` 1..`sequence_max` and only fires `on_scope()` /
+  updates `scope_pixels` once a sweep is complete, even though the IC-9700's own LAN
+  behavior makes this a same-frame no-op in practice (sequence_max is always 1) — this
+  is what a hypothetical multi-packet sweep (older serial-CI-V-style framing, or a
+  different rig model) would need, and it's essentially free to support since the state
+  machine is trivial; `tests/test_icom_net.py`'s
+  `test_parse_scope_frame_multi_sequence_reassembly` exercises that path with a
+  synthetic two-packet sweep since real hardware here never takes it.
+- **Test fixture is a real captured frame, not hand-built**: `tests/test_icom_net.py`'s
+  `_REAL_SCOPE_SWEEP_HEX` is the literal bytes of one CI-V scope-wave datagram, extracted
+  from a `dumpcap` capture with a ~30-line pure-stdlib pcap parser (Ethernet+IP+UDP
+  header math, no `dpkt`/`scapy` — neither was installed and the format is simple enough
+  not to need them) rather than transcribed by hand from a hex dump — manual hex
+  transcription of a 497-byte payload turned out to be genuinely error-prone in practice
+  (a mis-typed nibble slipped into an early draft of this exact fixture and was only
+  caught by re-deriving the hex programmatically and diffing) and a real captured frame
+  exercises the actual byte layout, not just whatever assumptions were baked into a
+  synthetic one.
+- **Recording format for `contest_video.py`'s eventual use**: `write_scope_record`
+  appends one binary record per sweep — `<f8 timestamp><u4 start_hz><u4 end_hz><u2
+  npixels><npixels raw bytes>` — to a plain file, no JSON. Deliberately not JSONL like
+  the telemetry/input-log recorders: those are ~1 record/second and human-debuggability
+  matters more than size; scope sweeps arrive several times a second, each already
+  byte-quantized (0-160 per pixel, nothing to gain from text encoding), so JSON overhead
+  would balloon a multi-hour recording for no benefit — same reasoning as the WAV
+  recorder storing raw samples rather than one JSON number per sample. Verified against
+  real hardware: `uv run icom_net.py <radio-ip> --scope out.scope` produces a file whose
+  records read back byte-exact (timestamp/frequency-range/pixel-count/pixel-values all
+  round-tripped correctly) against ~33 real sweeps over a 15 s session.
+- **Not yet done**: nothing in `contest_video.py` consumes this recording yet — this is
+  currently just the capture side (parse + record), proven end-to-end against real
+  hardware. Rendering a scope-based waterfall in place of (or alongside) the audio-based
+  `showspectrum` one is a separate future step.
 
 ## contest_video.py – Annotated CW contest video
 
