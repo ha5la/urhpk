@@ -7,6 +7,8 @@ Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
 - `puskas_harvester.py` – pre-contest data collector; fetches all stations → `~/.puskas/puskas-seen-stations.json`
 - `puskas_visualizer.py` – map and polar diagram from `~/.puskas/puskas-seen-stations.json`
 - `hamlib_supervisor.py` – starts/stops rigctld and rotctld based on USB device presence (inotify)
+- `icom_net.py` – direct Ethernet CI-V client for Icom radios (IC-9700), bypassing rigctld; instant
+  push freq/mode updates instead of polling
 
 ## Housekeeping reminders
 - When adding or removing components, update the components table in **README.md**
@@ -291,6 +293,148 @@ Run permanently (tmux, or a `systemd --user` unit) alongside the contest tools.
   it live for basic CAT (freq/mode read) regardless — Puskás Kupa is VHF/UHF-only so
   this rig isn't part of this project's workflow either way, noted here only because it
   came up while investigating the IC-9700.
+
+## icom_net.py – Direct Icom Ethernet CI-V client
+
+Problem this solves: the IC-9700 is reachable over Ethernet (this network's radio is at
+a fixed LAN IP), but `rigctld` only speaks CI-V over a serial/USB link — there is no
+plain "CI-V over TCP" port on the radio itself. The only way to control it over Ethernet
+is Icom's own network-remote-control protocol (the one RS-BA1 and wfview speak), which is
+UDP-based, authenticated, and stateful. `icom_net.py` implements a minimal client for it
+directly, in pure stdlib Python (no external deps, matching `on4kst_irc_bridge.py`'s
+style) — first step toward eventually replacing `rigctld`+polling in `puskas_logger.py`
+entirely with instant, event-driven state.
+
+- **Why this is worth it over polling**: CI-V has a "Transceive" mode (`SET > CONNECTORS
+  > CI-V > CI-V Transceive: ON`) where the radio pushes frequency/mode changes
+  unsolicited the instant they happen (front-panel or otherwise), rather than waiting to
+  be asked. `rigctld`'s Hamlib backend for the IC-9700 doesn't take advantage of this
+  (see `hamlib_supervisor.py`'s notes above on `async_data_supported`), so
+  `puskas_logger.py` today only ever sees rig state up to `RIGCTLD_POLL_S` (1s) stale.
+  A direct client can just listen — no polling loop at all.
+- **Protocol reverse-engineered from two independent implementations**, not from any
+  official Icom spec (there isn't a public one): wfview (C++,
+  gitlab.com/eliggett/wfview) and kappanhang (Go, github.com/nonoo/kappanhang, credited
+  by wfview's own source as its basis). Every packet layout in this file is transcribed
+  byte-for-byte from `packettypes.h` and the actual field-assignment code in
+  `icomudphandler.cpp`, cross-checked between the two, not guessed from prose
+  descriptions — several real discrepancies between what secondhand descriptions imply
+  and what the code (and the radio) actually require turned up during implementation
+  (see below), so treat any *future* protocol change here the same way: verify against
+  source or a real packet capture, don't infer from memory.
+- **Credentials**: read from `~/.netrc` (`machine <radio-ip> login <user> password
+  <pass>`), same convention as `on4kst_irc_bridge.py`. Requires `SET > Network > Network
+  Control: ON` and a LAN username/password set in the radio's own `SET > Network` menu
+  first — this applies even for a same-subnet, non-relay connection; Icom's login step
+  isn't WAN-only.
+- **Username/password are obfuscated on the wire**, not sent plaintext: a fixed
+  substitution table keyed by `(character_value + position_index)`, byte-identical
+  between wfview and kappanhang (`passcode()`, credited by kappanhang to W6EL). Not a
+  real cipher, just enough that credentials aren't sitting in cleartext UDP frames.
+- **BCD frequency encoding**: standard Icom 5-byte little-endian BCD
+  (`bcd_encode_freq`/`bcd_decode_freq`), verified against the worked example in Icom's
+  own CI-V documentation (144.300.000 Hz → `00 00 30 44 01`) before ever touching real
+  hardware — this caught a base-16-vs-base-10 typo (`int(x, 16-6)` instead of `int(x,
+  16)`) and a nibble-order bug in the decoder, both via a red-before-green unit test
+  against that known example, per this project's testing philosophy.
+- **Three real bugs found only by testing against the actual radio** — the protocol
+  research (byte layouts, packet field meanings) was solid, but none of these were
+  discoverable from source reading or the fake-radio integration test alone, since a
+  mock server just mirrors back whatever assumptions were baked into it:
+  1. **Outer transport `seq` numbering**: the are-you-there(seq=0)/are-you-ready(seq=1)
+     handshake is *not* part of the same counter as subsequent tracked packets
+     (login/token/conninfo) — the first tracked packet also starts at seq=1, not 2 as a
+     naive "keep incrementing" reading would suggest. Confirmed directly: sending login
+     at seq=2 got a real retransmit-request packet back (type=0x01, "resend seq=1") from
+     the radio, and switching to seq=1 got an immediate, correct login response. The
+     radio validates this strictly — it is not a "nice to have, ignorable on a clean
+     LAN" part of the protocol the way general retransmit-*request compliance* is (see
+     next point).
+  2. **`threading.Lock` self-deadlock**: `IcomNetRig._apply_update` held `self._lock`
+     while also reading `self.band`, whose own property getter re-acquires the same
+     lock — silently wedges the one background thread that processes all incoming CI-V
+     data, forever, on the very first update. Symptom was confusing: `freq_hz` updated
+     once and then froze, `mode` never updated at all, no exception, no crash — the
+     thread was just gone. Root-caused with a small standalone debug script logging
+     `freq_hz`/`mode`/`band` every 100ms after connect(), which showed exactly one
+     update then silence. Fixed by switching to `threading.RLock()`.
+  3. **The control socket must be kept alive with idle packets *during* the CI-V-socket
+     open handshake, not just after everything is fully connected**: the original
+     structure did login→token→conninfo→(then, still synchronously) CI-V rendezvous→CI-V
+     open-retry-loop, with the control socket's keepalive thread only starting at the
+     very end. On real hardware this left the control socket silent for several seconds
+     while the CI-V open was being retried, and the radio silently dropped the
+     just-registered conninfo session — CI-V data never arrived, even though the
+     low-level are-you-there/ready responder (session-independent) kept answering the
+     whole time, which made this look like a CI-V-specific problem rather than a control
+     socket one. Fixed by starting `_ctrl_loop` (idle every ~100ms, reauth every 60s)
+     immediately after conninfo succeeds, before doing any CI-V-socket work at all.
+- **The CI-V "open" retry cadence is deliberately much slower than wfview's own
+  documented behavior, and for a specific, tested reason**: wfview's watchdog resends
+  the open request every 100ms once no CI-V data has been seen for 2s. Implementing that
+  literally — a new tracked `seq` on every 100ms retry, since this client doesn't
+  implement retransmit-*request* compliance (resending a specific requested packet on
+  demand) — made the radio's own receive-sequence tracker lose sync entirely: it started
+  sending retransmit requests for a huge, nonsensical `seq` range (`0xff82`–`0xffff`)
+  that grew with every retry, and CI-V data never flowed. Spacing retries at `CIV_STALE_S`
+  (2s) instead — giving each attempt time to land before the next is sent — fixed it.
+  Diagnosed by tracing raw packet hex from the client's own retry loop, not by capturing
+  wfview traffic (that capture only became necessary for the next bug).
+- **The real deadlock, found only by comparing a live wfview packet capture against our
+  own traffic**: this client wasn't sending anything past the "open" request until it
+  had first *received* real CI-V data, on the theory that receiving data was the signal
+  the stream was live. But the radio never sends CI-V data unprompted just because the
+  stream is open — confirmed from a clean wfview session capture (`dumpcap`, no sudo
+  needed since the invoking user is in the `wireshark` group — `dumpcap` has
+  `cap_net_raw`/`cap_net_admin` via file capabilities, unlike plain `tcpdump` which
+  needed `sudo`) against this same radio: wfview's own first real CI-V traffic is a
+  *client-initiated* query (`FE FE 00 E1 19 00 FD`, a broadcast "read transceiver
+  address"), not anything radio-initiated. Two sides both waiting to hear from the other
+  first is a deadlock. Fixed by sending a real CI-V query (`cmd 0x03`, read frequency)
+  alongside every open attempt, rather than gating that first query on already having
+  received data — matches wfview's actual behavior of speaking first.
+- **wfview's own outer-`seq` sequence has no second `token(0x05)` renewal between
+  register and conninfo**, contrary to an earlier assumption in this file's own history:
+  captured directly from the wfview trace, outer `seq` goes login=1, token(register)=2,
+  conninfo=3, with nothing in between. This client originally sent an extra
+  token(`0x05`) request there (seq=3) before conninfo (pushing conninfo to seq=4) — removed
+  to match the real, working sequence exactly, on the theory (consistent with bug #1
+  above) that this radio's session state machine cares about more than raw seq
+  continuity: an extra tracked packet a real client never sends is exactly the kind of
+  thing that could desync it, even if the seq numbers themselves stay technically
+  sequential.
+- **A capture-driven debugging session needs a cooldown between real-hardware
+  attempts**: repeated rapid reconnect attempts against the same radio during this
+  debugging session caused failures to shift to different, earlier steps across
+  successive runs (login one time, conninfo the next) with no code change in between —
+  strong evidence of session-slot exhaustion from prior attempts that were never cleanly
+  logged out (the process just exited on error, abandoning the UDP session from the
+  radio's perspective). Two fixes: `IcomNetRig.connect()` now sends a best-effort
+  token-deregister (`requesttype=0x01`) and closes sockets on any failure partway
+  through, so a failed attempt doesn't linger; and empirically, a real fresh attempt
+  needs on the order of tens of seconds of quiet since the last one before the radio's
+  own session state reliably resets.
+- **Test coverage**: `tests/test_icom_net.py` covers the pure, hardware-independent
+  functions (passcode scrambling, BCD codec, CI-V frame parsing) with no mocking needed.
+  `tests/test_icom_net_integration.py` runs the full `connect()` handshake against an
+  in-process fake UDP radio (`FakeIcomRadio`) implementing just enough of the real
+  protocol to exercise every branch, then injects an unsolicited CI-V Transceive frame
+  and asserts `IcomNetRig.freq_hz`/`.mode`/`.band` update with no polling — this is what
+  caught the `RLock` deadlock (bug #2 above) in CI, well before real-hardware testing.
+  Note what this test suite *can't* catch: the sequencing/timing bugs (#1, #3, and the
+  retry-cadence and deadlock findings above) are all about how a real radio's own
+  session/sequence tracking behaves, which a fake server that just mirrors back
+  whatever the client sends can't reproduce — those needed the real IC-9700.
+- **Not yet implemented / explicitly out of scope for this first pass**: audio
+  streaming (conninfo currently requests `rxenable=0`/`txenable=0` — CI-V status only),
+  spectrum-scope data (a separate UDP port, `scopeLANPort`, untouched here), transmit
+  control, and general-purpose retransmit-*request* compliance (resending a specific
+  buffered packet on demand — the project's research concluded, and real-hardware
+  testing confirmed for steady-state traffic, that this is skippable on a clean LAN;
+  what *isn't* skippable, per the bugs above, is getting the initial seq numbering and
+  handshake ordering exactly right). Not yet wired into `puskas_logger.py` in place of
+  `rigctld` — this file is currently a standalone client with its own CLI test harness
+  (`uv run icom_net.py <radio-ip>`), proven against real hardware but not yet integrated.
 
 ## contest_video.py – Annotated CW contest video
 
