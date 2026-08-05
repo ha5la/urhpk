@@ -970,6 +970,25 @@ def write_scope_record(f, ts: float, start_hz: int, end_hz: int, pixels: bytes) 
     f.write(pixels)
 
 
+def read_scope_records(path) -> list[tuple[float, int, int, bytes]]:
+    """Read back a recording written by write_scope_record: a list of
+    (timestamp, start_hz, end_hz, pixels) tuples, one per sweep. The sole
+    reader for the format -- contest_video.py and scope_preview.py both
+    import this rather than each re-parsing the binary layout themselves."""
+    records = []
+    with open(path, "rb") as f:
+        while True:
+            header = f.read(18)
+            if len(header) < 18:
+                break
+            ts, start_hz, end_hz, npix = struct.unpack("<dIIH", header)
+            pixels = f.read(npix)
+            if len(pixels) < npix:
+                break
+            records.append((ts, start_hz, end_hz, pixels))
+    return records
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         print(f"Usage: {sys.argv[0]} <radio-ip> [--scope [outfile.scope]]")

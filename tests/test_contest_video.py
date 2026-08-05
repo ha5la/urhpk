@@ -6,7 +6,7 @@ the test is fully reproducible (fixed WPM, pitch, sample rate)."""
 import json
 import struct
 import wave
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 import pyte
@@ -18,6 +18,7 @@ from contest_video import (
     CAST_BG,
     GAP_KEEP_S,
     MAX_OVER_S,
+    SCOPE_AMP_MAX,
     CharEvent,
     InputLogEvent,
     Qso,
@@ -32,7 +33,9 @@ from contest_video import (
     _eff,
     _find_offset_correction,
     _quality,
+    _resize_scope_row,
     _rms_envelope,
+    _scope_colormap,
     _srt_time,
     _wrap,
     _yt_time,
@@ -60,6 +63,7 @@ from contest_video import (
     read_wav_metadata,
     refine_webcam_start,
     remap_audio_t,
+    scope_freq_periods,
     sync_webcam_start,
     trim_to_duration,
     webcam_start_from_log,
@@ -2248,3 +2252,164 @@ class TestQsoWindowsPreciseAnchor:
         (s1, e1), (s2, e2) = windows
         assert e1 == s2
         assert e2 < 31.0
+
+
+def _epoch(y, mo, d, h, mi, s):
+    return datetime(y, mo, d, h, mi, s, tzinfo=timezone.utc).timestamp()
+
+
+class TestScopeFreqPeriods:
+    def _segs(self):
+        return [
+            Segment("a", datetime(2026, 7, 4, 11, 0, 0), 60.0, 0.0),
+            Segment("b", datetime(2026, 7, 4, 11, 1, 0), 60.0, 60.0),
+        ]
+
+    def test_single_constant_range_spans_last_sweep_only(self):
+        records = [
+            (_epoch(2026, 7, 4, 11, 0, 5), 144_000_000, 146_000_000, b""),
+            (_epoch(2026, 7, 4, 11, 0, 10), 144_000_000, 146_000_000, b""),
+        ]
+        periods = scope_freq_periods(records, self._segs(), offset_h=0)
+        assert periods == [(5.0, 10.0, 144_000_000, 146_000_000)]
+
+    def test_range_change_splits_into_two_periods(self):
+        # Real usage: the operator QSYs or changes span mid-recording -- the
+        # label must track that, not just show whatever the first sweep had.
+        records = [
+            (_epoch(2026, 7, 4, 11, 0, 0), 144_000_000, 146_000_000, b""),
+            (_epoch(2026, 7, 4, 11, 0, 30), 144_000_000, 146_000_000, b""),
+            (_epoch(2026, 7, 4, 11, 1, 0), 432_000_000, 434_000_000, b""),
+            (_epoch(2026, 7, 4, 11, 1, 30), 432_000_000, 434_000_000, b""),
+        ]
+        periods = scope_freq_periods(records, self._segs(), offset_h=0)
+        assert periods == [
+            (0.0, 30.0, 144_000_000, 146_000_000),
+            (60.0, 90.0, 432_000_000, 434_000_000),
+        ]
+
+    def test_last_period_does_not_extend_past_its_own_last_sweep(self):
+        # Regression test for a real bug caught only by rendering an actual
+        # end-to-end video and inspecting the frames: an earlier version
+        # extended the last period to the video's full duration so the label
+        # wouldn't "vanish" once the recording stopped -- but the scope
+        # *background* itself doesn't persist past its own last sweep either
+        # (see render()'s enable='between(scope_start,scope_end)'), so that
+        # extension made the label show a stale frequency range over what
+        # was actually the fallback audio-spectrum background. Neither this
+        # function's own unit tests nor render()'s filter_complex string
+        # checks caught it in isolation -- the bug was in how the two
+        # independently-correct pieces combined.
+        records = [
+            (_epoch(2026, 7, 4, 11, 0, 0), 144_000_000, 146_000_000, b""),
+            (_epoch(2026, 7, 4, 11, 0, 5), 144_000_000, 146_000_000, b""),
+        ]
+        periods = scope_freq_periods(records, self._segs(), offset_h=0)
+        assert periods[-1][1] == 5.0
+
+    def test_empty_records_returns_empty(self):
+        assert scope_freq_periods([], self._segs(), offset_h=0) == []
+
+
+class TestScopeColormap:
+    def test_colormap_shape_and_endpoints(self):
+        lut = _scope_colormap()
+        assert lut.shape == (SCOPE_AMP_MAX + 1, 3)
+        assert tuple(int(c) for c in lut[0]) == (0, 0, 0)
+        assert tuple(int(c) for c in lut[SCOPE_AMP_MAX]) == (255, 0, 0)
+
+    def test_resize_scope_row_preserves_length_and_endpoints(self):
+        pixels = np.array([10, 50, 90], dtype=np.uint8)
+        resized = _resize_scope_row(pixels, 6)
+        assert len(resized) == 6
+        assert resized[0] == 10
+        assert resized[-1] == 90
+
+
+class TestScopeFreqLabelInAss:
+    def test_scope_periods_produce_dialogue_lines(self):
+        segs = [Segment("a", datetime(2026, 7, 4, 11, 0, 0), 60.0, 0.0)]
+        ass = build_ass(
+            segs, 1920, 1080, scope_periods=[(0.0, 30.0, 144_100_000, 146_100_000)]
+        )
+        assert "144.100-146.100 MHz" in ass
+        assert ass.count("ScopeFreq") >= 2  # style def + at least one Dialogue
+
+    def test_no_scope_periods_omits_scopefreq_dialogue(self):
+        segs = [Segment("a", datetime(2026, 7, 4, 11, 0, 0), 60.0, 0.0)]
+        ass = build_ass(segs, 1920, 1080)
+        assert ass.count("ScopeFreq") == 1  # just the style def, no Dialogue lines
+
+
+class TestRenderScopeBackground:
+    def test_scope_branch_overlays_before_subtitles(self, monkeypatch, tmp_path):
+        captured = {}
+
+        def fake_run(cmd, check=True):
+            captured["cmd"] = cmd
+
+        monkeypatch.setattr(cv.subprocess, "run", fake_run)
+        cv.render(
+            str(tmp_path / "a.wav"),
+            str(tmp_path / "a.ass"),
+            str(tmp_path / "out.mp4"),
+            1920,
+            1080,
+            scope=str(tmp_path / "scope.mp4"),
+            scope_start=5.0,
+            scope_end=50.0,
+        )
+        fchain = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
+        assert "[1:v]scale=1920:1080" in fchain
+        assert "enable='between(t,5.000,50.000)'" in fchain
+        # subtitles must be applied to the scope-overlaid background, not
+        # directly to the raw showspectrum output -- otherwise the scope
+        # image would be drawn on top of (covering) the ticker/badge text.
+        assert "[bg2]subtitles=" in fchain
+
+    def test_scope_shifts_cast_and_webcam_input_indices(self, monkeypatch, tmp_path):
+        captured = {}
+
+        def fake_run(cmd, check=True):
+            captured["cmd"] = cmd
+
+        monkeypatch.setattr(cv.subprocess, "run", fake_run)
+        cv.render(
+            str(tmp_path / "a.wav"),
+            str(tmp_path / "a.ass"),
+            str(tmp_path / "out.mp4"),
+            1920,
+            1080,
+            scope=str(tmp_path / "scope.mp4"),
+            scope_start=0.0,
+            scope_end=10.0,
+            cast=str(tmp_path / "cast.mp4"),
+            cast_start=1.0,
+            webcam=str(tmp_path / "cam.mp4"),
+            webcam_start=2.0,
+        )
+        fchain = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
+        # scope=input 1, cast=input 2, webcam=input 3 -- confirms indices
+        # shift correctly to make room for scope ahead of the existing ones.
+        assert "[1:v]scale=1920:1080" in fchain
+        assert "[2:v]setpts=" in fchain
+        assert "[3:v]setpts=" in fchain
+
+    def test_no_scope_keeps_subtitles_directly_on_showspectrum(
+        self, monkeypatch, tmp_path
+    ):
+        captured = {}
+
+        def fake_run(cmd, check=True):
+            captured["cmd"] = cmd
+
+        monkeypatch.setattr(cv.subprocess, "run", fake_run)
+        cv.render(
+            str(tmp_path / "a.wav"),
+            str(tmp_path / "a.ass"),
+            str(tmp_path / "out.mp4"),
+            1920,
+            1080,
+        )
+        fchain = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
+        assert "[specbg]subtitles=" in fchain

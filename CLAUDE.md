@@ -8,7 +8,8 @@ Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
 - `puskas_visualizer.py` – map and polar diagram from `~/.puskas/puskas-seen-stations.json`
 - `hamlib_supervisor.py` – starts/stops rigctld and rotctld based on USB device presence (inotify)
 - `icom_net.py` – direct Ethernet CI-V client for Icom radios (IC-9700), bypassing rigctld; instant
-  push freq/mode updates instead of polling
+  push freq/mode updates instead of polling, plus real spectrum-scope sweep capture
+- `scope_preview.py` – standalone preview: renders a `.scope` recording into a waterfall video
 
 ## Housekeeping reminders
 - When adding or removing components, update the components table in **README.md**
@@ -512,10 +513,11 @@ operator was watching, including signals never within earshot.
   real hardware: `uv run icom_net.py <radio-ip> --scope out.scope` produces a file whose
   records read back byte-exact (timestamp/frequency-range/pixel-count/pixel-values all
   round-tripped correctly) against ~33 real sweeps over a 15 s session.
-- **Not yet done**: nothing in `contest_video.py` consumes this recording yet — this is
-  currently just the capture side (parse + record), proven end-to-end against real
-  hardware. Rendering a scope-based waterfall in place of (or alongside) the audio-based
-  `showspectrum` one is a separate future step.
+- **Consumed by `contest_video.py`'s `--scope`** (see that section below) and previewable
+  standalone via `scope_preview.py` (`uv run scope_preview.py RECORDING.scope -o out.mp4`
+  — a quick non-integrated look at a recording's waterfall, useful before committing to a
+  full contest_video.py render). Both read the format via `icom_net.read_scope_records`,
+  the format's single owner — `contest_video.py` doesn't reimplement the parser.
 
 ## contest_video.py – Annotated CW contest video
 
@@ -1149,6 +1151,65 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
     for those QSOs. This is what `match_qso_times`'s call+order (not
     call+minute) matching exists for — a seed's timestamps are expected to
     move freely across minute boundaries once hand-edited.
+- **`--scope PATH` for a real-spectrum waterfall background**, replacing (wherever the
+  recording covers) the audio-derived `showspectrum` reconstruction with the radio's own
+  actual scope sweeps — see icom_net.py's own "Scope (spectrum waterfall) data" section
+  above for where `PATH` (a `.scope` recording) comes from and the wire format.
+  - **Sync is exact, the same way `--cast` is**: each sweep's timestamp in the recording
+    is real `time.time()`, so `render()` positions the rendered scope clip with a plain
+    `-itsoffset`, no drift-rate correction needed (unlike the webcam's independent,
+    drifting camera clock).
+  - **Drawn as a full-frame layer *under* the subtitles pass**, not as a PiP on top of it
+    like `--cast`/`--webcam` — it needs to actually replace the background, and the
+    ticker/badge text still needs to render on top of it. `render_scope_video` first
+    renders the `.scope` file into its own standalone clip (same
+    `render_cast_video`-style separate-stage-then-composite pattern used throughout this
+    file), scrolling one row per *real* sweep — held static between sweeps to fill real
+    elapsed time at `RENDER_FPS`, not resampled to a constant per-sweep rate — so the
+    clip's own duration equals the recording's real elapsed capture time. `render()` then
+    overlays that clip onto the existing `showspectrum` layer with
+    `enable='between(t,scope_start,scope_end)'` — the same gating idiom already proven
+    for `--cast`/`--webcam`'s own start gate, reused here for the *end* gate too, rather
+    than introducing a second mechanism (`eof_action=pass`) for what's really the same
+    class of problem. Falling back to the audio-based waterfall for any stretch the
+    recording doesn't cover (not started yet, stopped early, or outside a `--duration`
+    cut) comes for free from this: the old layer is simply never covered there.
+  - **Input-index bookkeeping generalized, not special-cased**: `render()` used to assume
+    cast was always input 1 (if present) and webcam was 2-if-cast-else-1. Adding a third
+    optional video input made that assumption break, so all three (scope, cast, webcam)
+    now get their input index computed up front from which ones are actually present,
+    in a fixed order (scope, cast, webcam), and each branch references its own
+    precomputed index rather than guessing it from what came before.
+  - **The on-screen frequency-range label** (top-right, e.g. `144.100-146.100 MHz`) is a
+    separate ASS overlay (`build_ass`'s `scope_periods` parameter, new `ScopeFreq`
+    style), not baked into the rendered waterfall image — added because the operator can
+    QSY or change span mid-recording, which the label needs to track.
+    `scope_freq_periods` walks the recording's own sweeps and emits one period per
+    stretch the frequency range stayed constant. **A real bug here was only caught by
+    rendering an actual small end-to-end video and inspecting real frames, not by either
+    layer's own unit tests**: an early version extended the *last* period's end to the
+    video's full duration, reasoning that the label "shouldn't vanish" if the recording
+    stopped before the session did — but the scope *background* itself doesn't persist
+    past its own last sweep either (same `between(scope_start,scope_end)` gate above), so
+    that extension left the label showing a stale frequency range over what had already
+    fallen back to the audio-spectrum background. `scope_freq_periods`'s own unit tests
+    (checking the function in isolation) and `render()`'s filter_complex string-matching
+    tests (checking the overlay chain in isolation) both looked correct on their own —
+    the bug only existed in how the two independently-correct pieces combined, which
+    string/unit assertions can't see and only an actual rendered frame exposed. Fixed by
+    simply not extending past the last real sweep at all — matches `scope_end` exactly,
+    since both are derived from the same underlying last-sweep timestamp.
+  - **The real end-to-end smoke test** that caught the above bug used fully synthetic
+    fixtures (a short synthesized WAV, a one-QSO EDI, and a hand-built `.scope` file with
+    a deliberately fast, visually-distinctive drifting "signal" — not a real radio
+    capture), specifically so it could be constructed with exact, known-in-advance timing
+    (session start, QSY point, scope start/end) to check against, and run in seconds
+    rather than needing a real multi-minute recording. This is a one-off manual
+    verification technique worth reusing for future contest_video.py changes that are
+    hard to unit-test in isolation (anything about how the ffmpeg filter graph's pieces
+    actually combine visually) — not (yet) a permanent addition to `tests/`, since it
+    shells out to real ffmpeg and takes real wall-clock time, unlike the rest of the
+    suite.
 
 ## Uploading a rendered video to YouTube
 `contest_video.py` only renders the mp4 + `.chapters.txt` + `.srt` — it does not upload.

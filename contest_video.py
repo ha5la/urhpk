@@ -49,6 +49,8 @@ import numpy as np
 import pyte
 from PIL import Image, ImageDraw, ImageFont
 
+from icom_net import read_scope_records
+
 # ---------------------------------------------------------------------------
 # CW decoding
 # ---------------------------------------------------------------------------
@@ -1811,6 +1813,7 @@ def build_ass(
     H: int,
     state_events: list[tuple[float, float, SegState]] | None = None,
     long_cw_spans: list[tuple[float, float, list[CharEvent]]] | None = None,
+    scope_periods: list[tuple[float, float, int, int]] | None = None,
 ) -> str:
     """The RX/TX badge and CW ticker are the only overlays left here --
     everything else the video used to render itself (timestamp, QSO
@@ -1836,6 +1839,7 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Ticker,DejaVu Sans Mono,{fs_ticker},&H00FFFF66,&H000000FF,&H00000000,&H8C100C08,-1,0,0,0,100,100,0,0,3,10,0,2,60,60,20,1
 Style: State,DejaVu Sans Mono,{fs_hdr},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,2,7,60,60,40,1
+Style: ScopeFreq,DejaVu Sans Mono,{fs_hdr},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,2,9,60,60,40,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -1865,6 +1869,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             # terminal-session PiP's own toolbar, and its second line overlapped
             # the cast box at 720p.
             ev(start, end, "State", f"{{\\c&H{hexcol}&}}● {label}")
+
+    # --- scope waterfall frequency range (top-right): only present with
+    # --scope, one Dialogue per stretch the range stayed constant (see
+    # scope_freq_periods) -- the operator can QSY or change span mid-
+    # recording, so this can't just be shown once as static text.
+    if scope_periods:
+        for start, end, start_hz, end_hz in scope_periods:
+            ev(start, end, "ScopeFreq", f"{start_hz / 1e6:.3f}-{end_hz / 1e6:.3f} MHz")
 
     # --- decode ticker: rolling window, flushed at the start of every fresh
     # burst of on-air activity -- not at a QSO's EDI timestamp, which is
@@ -2060,6 +2072,155 @@ RENDER_FPS = 30  # output frame rate; the webcam PiP is resampled to
 # real-time clock
 
 
+# ---------------------------------------------------------------------------
+# Scope (spectrum waterfall) background -- from icom_net.py's .scope
+# recordings (real IC-9700 CI-V scope sweeps), instead of showspectrum's
+# reconstruction from the recorded audio. See icom_net.py's own docs for
+# where these come from; this section only renders them into video.
+# ---------------------------------------------------------------------------
+
+SCOPE_AMP_MAX = (
+    160  # icom_net.py's own SCOPE_AMP_MAX -- raw linear scope units, not dBm
+)
+
+# Same gradient as scope_preview.py -- kept as a separate copy rather than a
+# shared import, since scope_preview.py is a standalone preview tool with no
+# other dependency on contest_video.py's own rendering conventions (RENDER_FPS,
+# canvas sizing) and the two are otherwise unrelated.
+_SCOPE_COLORMAP_STOPS = [
+    (0, (0, 0, 0)),
+    (32, (0, 0, 180)),
+    (64, (0, 180, 220)),
+    (96, (0, 200, 0)),
+    (128, (230, 210, 0)),
+    (160, (255, 0, 0)),
+]
+
+
+def _scope_colormap() -> np.ndarray:
+    lut = np.zeros((SCOPE_AMP_MAX + 1, 3), dtype=np.uint8)
+    for (x0, c0), (x1, c1) in zip(_SCOPE_COLORMAP_STOPS, _SCOPE_COLORMAP_STOPS[1:]):
+        for i in range(x0, x1 + 1):
+            t = (i - x0) / (x1 - x0)
+            lut[i] = [round(c0[ch] + t * (c1[ch] - c0[ch])) for ch in range(3)]
+    return lut
+
+
+def _resize_scope_row(pixels: np.ndarray, width: int) -> np.ndarray:
+    """Linearly interpolate a sweep's raw amplitude values (not yet
+    colormapped) up to the output canvas width -- interpolating on the
+    scalar amplitude domain rather than on already-colormapped RGB triples
+    avoids odd color mixing at the boundary between two very different
+    colormap regions (e.g. black next to red)."""
+    src_x = np.linspace(0, len(pixels) - 1, len(pixels))
+    dst_x = np.linspace(0, len(pixels) - 1, width)
+    return np.interp(dst_x, src_x, pixels).astype(np.uint8)
+
+
+def render_scope_video(
+    scope_path: str, out_path: str, W: int, H: int, fps: int = RENDER_FPS
+) -> None:
+    """Render a .scope recording into a standalone full-canvas waterfall
+    clip, scrolling one row per *real* sweep (held static between sweeps to
+    fill real elapsed time at fps, not resampled to a constant per-sweep
+    rate) -- so the clip's own internal duration equals the recording's real
+    elapsed capture time, and its t=0 is exactly the first sweep's own
+    timestamp. That's what lets render() position it with a plain -itsoffset
+    the same way render_cast_video's output is positioned: both carry real,
+    absolute timestamps from the moment they were captured, unlike the
+    webcam branch's independent, drifting camera clock.
+    """
+    records = read_scope_records(scope_path)
+    if len(records) < 2:
+        raise ValueError(
+            f"need at least 2 scope sweeps in {scope_path}, found {len(records)}"
+        )
+
+    lut = _scope_colormap()
+    canvas = np.zeros((H, W, 3), dtype=np.uint8)
+    t0 = records[0][0]
+    duration = records[-1][0] - t0
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "warning",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s",
+        f"{W}x{H}",
+        "-r",
+        f"{fps}",
+        "-i",
+        "-",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "20",
+        "-pix_fmt",
+        "yuv420p",
+        out_path,
+    ]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    try:
+        frame_dt = 1.0 / fps
+        idx = 0
+        n = len(records)
+        t = 0.0
+        while t <= duration:
+            while idx < n and records[idx][0] - t0 <= t:
+                pixels = np.frombuffer(records[idx][3], dtype=np.uint8)
+                row = lut[_resize_scope_row(pixels, W)]
+                canvas[1:] = canvas[:-1]  # scroll down; newest sweep enters at the top
+                canvas[0] = row
+                idx += 1
+            proc.stdin.write(canvas.tobytes())
+            t += frame_dt
+    finally:
+        proc.stdin.close()
+        proc.wait()
+
+
+def scope_freq_periods(
+    records: list[tuple[float, int, int, bytes]],
+    segs: list[Segment],
+    offset_h: int,
+) -> list[tuple[float, float, int, int]]:
+    """(video_start_t, video_end_t, start_hz, end_hz) for each stretch during
+    which the scope's own frequency range stayed constant -- the operator can
+    QSY or change span mid-recording, and the on-screen label (see build_ass)
+    needs to track that, not just show whatever the first sweep happened to
+    show. Deliberately does *not* extend the last period past the last real
+    sweep: an earlier version extended it to the video's full duration so the
+    label wouldn't "vanish" once the scope recording stopped -- but the scope
+    *background* itself doesn't persist past its own last sweep either (see
+    render()'s enable='between(scope_start,scope_end)'), so a label outliving
+    it just shows a stale frequency range over what's actually the fallback
+    audio-spectrum background. Caught rendering a real (small, synthetic)
+    end-to-end video and inspecting actual frames -- the two other test
+    layers (unit tests on this function alone, and string-matching the
+    filter_complex) both looked correct in isolation and neither would have
+    caught this, since the bug is in how two independently-correct pieces
+    combine."""
+    periods: list[list] = []
+    for ts, start_hz, end_hz, _ in records:
+        wall = datetime.fromtimestamp(ts, tz=timezone.utc).replace(
+            tzinfo=None
+        ) + timedelta(hours=offset_h)
+        t = audio_time_for(wall, segs)
+        if periods and (start_hz, end_hz) == (periods[-1][2], periods[-1][3]):
+            periods[-1][1] = t
+        else:
+            periods.append([t, t, start_hz, end_hz])
+    return [tuple(p) for p in periods]
+
+
 def render(
     wav: str,
     ass: str,
@@ -2072,18 +2233,61 @@ def render(
     cast: str | None = None,
     cast_start: float = 0.0,
     cast_rate: float = 0.0,
+    scope: str | None = None,
+    scope_start: float = 0.0,
+    scope_end: float = 0.0,
 ) -> None:
     ass_esc = ass.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-stats", "-loglevel", "warning", "-i", wav]
+
+    # Inputs are added in this order when present: scope, cast, webcam --
+    # indices computed up front so each branch below references its own
+    # input by number regardless of which others are present, rather than
+    # each branch guessing its own index from what came before it.
+    next_idx = 1
+    scope_idx = cast_idx = webcam_idx = None
+    if scope:
+        scope_idx, next_idx = next_idx, next_idx + 1
+    if cast:
+        cast_idx, next_idx = next_idx, next_idx + 1
+    if webcam:
+        webcam_idx, next_idx = next_idx, next_idx + 1
+
     # Full-screen scrolling waterfall, dimmed to ~half luma so it reads as an
     # ambient background and the text stays crisp on top. overlap=0.8 makes it
     # scroll fast enough to fill the frame within the first few seconds.
     fchain = (
         f"[0:a]showspectrum=s={W}x{H}:mode=combined:slide=scroll:overlap=0.8:"
         f"color=intensity:scale=cbrt:fscale=log:saturation=1.6,"
-        f"lutyuv=y=val*0.42,format=yuv420p,fps={RENDER_FPS}[bg];"
-        f"[bg]subtitles='{ass_esc}':fontsdir=/usr/share/fonts[v0]"
+        f"lutyuv=y=val*0.42,format=yuv420p,fps={RENDER_FPS}[specbg]"
     )
-    cmd = ["ffmpeg", "-y", "-hide_banner", "-stats", "-loglevel", "warning", "-i", wav]
+    bg = "specbg"
+    if scope:
+        # scope is our own render_scope_video output -- like the cast branch
+        # (and unlike webcam), its own timestamps are real/absolute
+        # (icom_net.py's write_scope_record uses real time.time() values),
+        # so a plain -itsoffset positions it exactly, no drift-rate
+        # correction needed. Drawn *under* the subtitles pass (unlike
+        # cast/webcam, which sit on top of it as PiPs) so it acts as a real
+        # replacement background rather than an inset -- the audio-derived
+        # showspectrum layer stays underneath as a fallback for any stretch
+        # the scope recording doesn't cover (didn't start recording yet,
+        # stopped early, or a `--duration` cut lands outside its range).
+        # tpad still guards against the shared filtergraph ending early the
+        # same way it does for cast/webcam; enable='between(...)' (not
+        # eof_action=pass) handles both the before-start and after-end gaps
+        # with the one proven mechanism already used for those PiPs' own
+        # start gate, rather than mixing two different techniques for the
+        # same class of problem.
+        cmd += ["-itsoffset", f"{scope_start:.3f}", "-i", scope]
+        fchain += (
+            f";[{scope_idx}:v]scale={W}:{H},fps={RENDER_FPS},format=yuv420p,"
+            f"tpad=stop_mode=clone:stop_duration=99999[scopebg]"
+            f";[{bg}][scopebg]overlay=x=0:y=0:"
+            f"enable='between(t,{scope_start:.3f},{scope_end:.3f})'[bg2]"
+        )
+        bg = "bg2"
+    fchain += f";[{bg}]subtitles='{ass_esc}':fontsdir=/usr/share/fonts[v0]"
     cur = "v0"
     if cast:
         # cast is our own render_cast_video output -- a synthetic, constant-
@@ -2105,7 +2309,7 @@ def render(
         # overlay blends it over the waterfall (a little transparency, not a
         # wash) -- overlay honours the top input's own alpha channel.
         fchain += (
-            f";[1:v]setpts=PTS/{1 - cast_rate:.8f},scale={cast_w}:-2,fps={RENDER_FPS},"
+            f";[{cast_idx}:v]setpts=PTS/{1 - cast_rate:.8f},scale={cast_w}:-2,fps={RENDER_FPS},"
             f"format=yuva420p,colorchannelmixer=aa={CAST_PIP_ALPHA},"
             f"tpad=stop_mode=clone:stop_duration=99999[castpip]"
             f";[{cur}][castpip]overlay=x={cast_x}:y={cast_y}:"
@@ -2160,7 +2364,6 @@ def render(
         # cross-correlation found no confident match).
         pip_w = round(W * PIP_WIDTH_FRAC)
         margin = round(W * PIP_MARGIN_FRAC)
-        webcam_idx = 2 if cast else 1
         cmd += ["-itsoffset", f"{webcam_start:.3f}", "-i", webcam]
         fchain += (
             f";[{webcam_idx}:v]setpts=PTS/{1 - webcam_rate:.8f},fps={RENDER_FPS},"
@@ -2244,6 +2447,14 @@ def main() -> None:
         "UTC with no whole-hour rounding needed",
     )
     ap.add_argument(
+        "--scope",
+        help="icom_net.py *-scope recording (uv run icom_net.py <ip> --scope "
+        "FILE) -- replaces the audio-derived showspectrum background with "
+        "the radio's own real spectrum-scope sweeps wherever the recording "
+        "covers, falling back to the audio waterfall elsewhere. Synced from "
+        "each sweep's own Unix-epoch timestamp, exact like --cast",
+    )
+    ap.add_argument(
         "--webcam",
         help="picture-in-picture selfie/webcam clip, synced automatically "
         "from its own filename timestamp (e.g. VID_20260706_180003.mp4), "
@@ -2320,6 +2531,29 @@ def main() -> None:
             f"{cast_start:.0f}s in the output (exact -- Unix-epoch timestamp; "
             f"see below for a clock-drift correction shared with --webcam, if given)"
         )
+
+    scope_records: list[tuple[float, int, int, bytes]] = []
+    scope_start = None
+    scope_end = None
+    if args.scope:
+        scope_records = read_scope_records(args.scope)
+        if len(scope_records) < 2:
+            print(f"  scope: {args.scope} has fewer than 2 sweeps -- ignoring")
+            scope_records = []
+        else:
+            first_wall = datetime.fromtimestamp(
+                scope_records[0][0], tz=timezone.utc
+            ).replace(tzinfo=None) + timedelta(hours=offset_h)
+            last_wall = datetime.fromtimestamp(
+                scope_records[-1][0], tz=timezone.utc
+            ).replace(tzinfo=None) + timedelta(hours=offset_h)
+            scope_start = audio_time_for(first_wall, segs)
+            scope_end = audio_time_for(last_wall, segs)
+            print(
+                f"  scope: {len(scope_records)} sweeps, synced to "
+                f"{scope_start:.0f}-{scope_end:.0f}s in the output "
+                f"(exact -- Unix-epoch timestamps, same as --cast)"
+            )
 
     webcam_start = None
     webcam_rate = 0.0
@@ -2500,6 +2734,16 @@ def main() -> None:
         print("  cast starts after the cut ends -- dropping the PiP overlay")
         cast_start = None
 
+    if scope_start is not None and scope_start >= total:
+        print("  scope starts after the cut ends -- dropping the background")
+        scope_records, scope_start, scope_end = [], None, None
+    elif scope_end is not None:
+        scope_end = min(scope_end, total)
+
+    scope_periods = (
+        scope_freq_periods(scope_records, segs, offset_h) if scope_records else None
+    )
+
     # Resolved to absolute video-timeline time only now, using each
     # segment's final audio_t (post-remap, if --skip-gaps was used).
     long_cw_spans = [
@@ -2519,7 +2763,14 @@ def main() -> None:
             f"  {matched}/{len(qsos)} QSOs got an exact submit time from the input log"
         )
 
-    ass_text = build_ass(segs, W, H, state_events, long_cw_spans=long_cw_spans)
+    ass_text = build_ass(
+        segs,
+        W,
+        H,
+        state_events,
+        long_cw_spans=long_cw_spans,
+        scope_periods=scope_periods,
+    )
     ass_path = os.path.splitext(args.out)[0] + ".ass"
     with open(ass_path, "w") as fh:
         fh.write(ass_text)
@@ -2542,6 +2793,12 @@ def main() -> None:
         print("rendering terminal-session PiP ...")
         render_cast_video(args.cast, cast_video)
 
+    scope_video = None
+    if scope_records and scope_start is not None:
+        scope_video = stem + ".scope.mp4"
+        print("rendering scope waterfall background ...")
+        render_scope_video(args.scope, scope_video, W, H)
+
     print("rendering (this takes a while) ...")
     render(
         wav,
@@ -2555,6 +2812,9 @@ def main() -> None:
         cast=cast_video,
         cast_start=cast_start or 0.0,
         cast_rate=cast_rate,
+        scope=scope_video,
+        scope_start=scope_start or 0.0,
+        scope_end=scope_end or 0.0,
     )
 
     if not args.keep_ass:
@@ -2562,6 +2822,8 @@ def main() -> None:
         os.remove(ass_path)
         if cast_video:
             os.remove(cast_video)
+        if scope_video:
+            os.remove(scope_video)
     print(f"wrote {args.out}")
 
 
