@@ -61,8 +61,8 @@ CHANNEL = "#on4kst"
 REFRESH_SEC = 120
 RECONNECT_S = 30
 RIGCTLD_HOST = "localhost"
-RIGCTLD_PORT = 4532
-RIGCTLD_POLL_S = 5
+RIGCTLD_PORT = 4532  # rigctld dialect; normally served by puskas_logger's rig server
+RIG_QUERY_TIMEOUT_S = 0.5
 
 # ============================================================
 # Credentials
@@ -254,20 +254,23 @@ async def scatter_candidates(my_loc: str, online_users: dict[str, dict]) -> list
 
 
 async def fetch_rig_info() -> tuple[str, str]:
-    """Returns (freq_mhz_str, mode) from rigctld, or ('', '') if unavailable."""
+    """(freq_mhz_str, mode) via one short connect-query-close, or ('', '')
+    if unavailable. No poller, no cache, no persistent connection: the rig
+    server (normally puskas_logger's, on 4532) answers from memory in
+    microseconds, and a dead port refuses instantly -- so querying at the
+    moment of need is both the freshest and the simplest option, whether
+    the logger is running or not. The tight overall timeout only matters
+    for a listening-but-hung server."""
     try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(RIGCTLD_HOST, RIGCTLD_PORT), timeout=2.0
-        )
-        writer.write(b"f\nm\n")
-        await writer.drain()
-        freq_line = (
-            (await asyncio.wait_for(reader.readline(), timeout=2.0)).decode().strip()
-        )
-        mode_line = (
-            (await asyncio.wait_for(reader.readline(), timeout=2.0)).decode().strip()
-        )
-        writer.close()
+        async with asyncio.timeout(RIG_QUERY_TIMEOUT_S):
+            reader, writer = await asyncio.open_connection(RIGCTLD_HOST, RIGCTLD_PORT)
+            try:
+                writer.write(b"f\nm\n")
+                await writer.drain()
+                freq_line = (await reader.readline()).decode().strip()
+                mode_line = (await reader.readline()).decode().strip()
+            finally:
+                writer.close()
         return f"{float(freq_line) / 1e6:.3f}", mode_line
     except Exception:
         return "", ""
@@ -364,8 +367,6 @@ class Bridge:
     def __init__(self, callsign: str):
         self.callsign = callsign
         self.my_locator = ""
-        self.rig_qrg = ""
-        self.rig_mode = ""
         self.kst: ON4KSTClient | None = None
         self._sessions: set[IRCSession] = set()
         self._seen: dict[str, dict] = _load_seen()
@@ -400,13 +401,7 @@ class Bridge:
             if text.strip().lower() == "sked":
                 call = target.upper()
                 user = self.kst.online_users.get(call) or {}
-                # Fresh query at composition time: the 4532 server (the
-                # logger) answers from its push-fresh cache in microseconds,
-                # so this beats the poll cache after a just-made QSY. Cache
-                # stays as fallback (server briefly gone / reconnecting).
                 qrg, mode = await fetch_rig_info()
-                if not qrg:
-                    qrg, mode = self.rig_qrg, self.rig_mode
                 msg = sked_text(
                     call,
                     self.callsign,
@@ -458,13 +453,14 @@ class Bridge:
         )
         await self._notify("  !help     – this help")
         await self._notify("  /msg CALL sked  – send contest sked proposal via /CQ")
-        if self.rig_qrg:
+        qrg, mode = await fetch_rig_info()
+        if qrg:
             await self._notify(
-                f"  Rig: {self.rig_qrg} MHz {self.rig_mode} (included in sked automatically)"
+                f"  Rig: {qrg} MHz {mode} (included in sked automatically)"
             )
         else:
             await self._notify(
-                "  Rig: rigctld not connected (start rigctld to include QRG in sked)"
+                "  Rig: no rig server on 4532 (run puskas_logger to include QRG in sked)"
             )
 
     async def _run_list(self):
@@ -989,26 +985,6 @@ class ON4KSTClient:
 # ============================================================
 
 
-async def _rig_poller(bridge: Bridge):
-    """Poll rigctld every RIGCTLD_POLL_S seconds and cache freq/mode on bridge."""
-    was_connected = False
-    while True:
-        qrg, mode = await fetch_rig_info()
-        if qrg:
-            if not was_connected:
-                await bridge._notify_status(f"[rig] Connected – {qrg} MHz {mode}")
-                was_connected = True
-            bridge.rig_qrg = qrg
-            bridge.rig_mode = mode
-        else:
-            if was_connected:
-                await bridge._notify_status("[rig] Disconnected – rig info unavailable")
-                was_connected = False
-            bridge.rig_qrg = ""
-            bridge.rig_mode = ""
-        await asyncio.sleep(RIGCTLD_POLL_S)
-
-
 async def _run_kst(bridge: Bridge, callsign: str, password: str):
     """Keep ON4KST connected, reconnecting as needed."""
     was_connected = False
@@ -1071,7 +1047,6 @@ async def _main():
         await asyncio.gather(
             server.serve_forever(),
             _run_kst(bridge, callsign, password),
-            _rig_poller(bridge),
         )
 
 

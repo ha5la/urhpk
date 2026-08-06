@@ -133,13 +133,13 @@ Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
   rigctld TCP dialect (`f`/`m`) to `localhost:4532`, but what normally serves that port
   now is **`puskas_logger.py`'s built-in rig server** (answering from its push-fresh
   `icom_net` cache), not Hamlib's rigctld — the port is an interface, either works.
-  - Background poller (`_rig_poller`) still fills a `(rig_qrg, rig_mode)` cache every
-    `RIGCTLD_POLL_S` (5 s) — used for the connect/disconnect NOTICEs and as a fallback
-  - Sked composition does a **fresh `fetch_rig_info()` query** instead of trusting the
-    cache: served from the logger's memory it costs microseconds, and a QSY made moments
-    before sending a sked shows the new QRG (cache would be up to 5 s stale). Falls back
-    to the cache when the query fails (server briefly gone)
-  - Connect/disconnect events shown as NOTICE to own nick (irssi status window), not the channel
+  - **No poller, no cache, no persistent connection**: `fetch_rig_info()` is one short
+    connect-query-close (`RIG_QUERY_TIMEOUT_S` = 0.5 s overall), run at the moment the
+    data is needed — sked composition and `!help`'s rig line. Served from the logger's
+    memory it costs microseconds; with no server listening, the localhost connect is
+    refused instantly, so the offline case costs nothing and degrades to a sked without
+    QRG. (There used to be a 5 s `_rig_poller` + cache + connect/disconnect NOTICEs —
+    removed once query-on-demand made all three redundant.)
 
 irssi quick-start:
 ```

@@ -4,6 +4,7 @@ Covers the end-to-end message flows between ON4KST and IRC.
 """
 
 import asyncio
+import socket
 
 import pytest
 
@@ -30,6 +31,15 @@ async def bridge_env():
     """
     kst_server = MockKSTServer()
     await kst_server.start()
+
+    # A dead port by default: nothing in these tests may accidentally reach
+    # a real rig server (e.g. a live puskas_logger on 4532 on this machine).
+    dead = socket.socket()
+    dead.bind(("127.0.0.1", 0))
+    dead_port = dead.getsockname()[1]
+    dead.close()
+    orig_rig_port = bridge_module.RIGCTLD_PORT
+    bridge_module.RIGCTLD_PORT = dead_port
 
     bridge = Bridge(CALLSIGN)
 
@@ -62,6 +72,7 @@ async def bridge_env():
 
     yield bridge, kst_server, irc_port
 
+    bridge_module.RIGCTLD_PORT = orig_rig_port
     kst_task.cancel()
     try:
         await asyncio.wait_for(kst_task, timeout=1.0)
@@ -456,117 +467,21 @@ class MockRigctld:
 
 
 class TestRigctld:
-    async def test_sked_includes_qrg_when_cache_populated(self, bridge_env):
-        bridge, kst_server, irc_port = bridge_env
-        bridge.my_locator = "JN97MX"
-        bridge.rig_qrg = "144.174"
-        bridge.rig_mode = "USB"
-        bridge.kst.online_users["G6DDN"] = {
-            "loc": "IO83RJ",
-            "info": "Ian",
-            "away": False,
-        }
-        client, w = await irc_connect(irc_port)
-        try:
-            await client.send("PRIVMSG G6DDN :sked")
-            assert await wait_until(
-                lambda: "144.174 MHz" in " ".join(kst_server.received)
-            )
-            assert "USB" in " ".join(kst_server.received)
-        finally:
-            w.close()
+    """Rig state comes from one-shot queries to the rig server (normally
+    puskas_logger's built-in 4532 server) at the moment it's needed -- no
+    poller, no cache, no persistent connection."""
 
-    async def test_sked_omits_qrg_when_rigctld_unavailable(self, bridge_env):
-        bridge, kst_server, irc_port = bridge_env
-        bridge.my_locator = "JN97MX"
-        bridge.rig_qrg = ""
-        bridge.rig_mode = ""
-        bridge.kst.online_users["G6DDN"] = {
-            "loc": "IO83RJ",
-            "info": "Ian",
-            "away": False,
-        }
-        client, w = await irc_connect(irc_port)
-        try:
-            await client.send("PRIVMSG G6DDN :sked")
-            # Proving a negative — see test_own_message_not_echoed above.
-            await asyncio.sleep(0.05)
-            new_sent = " ".join(kst_server.received)
-            assert "MHz" not in new_sent
-        finally:
-            w.close()
-
-    async def test_rig_poller_notifies_status_on_connect(self):
-        bridge = Bridge(CALLSIGN)
-        rig = MockRigctld(freq_hz="144174000", mode="USB")
-        await rig.start()
-        orig_host, orig_port = bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT
-        orig_poll = bridge_module.RIGCTLD_POLL_S
-        bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT = "127.0.0.1", rig.port
-        bridge_module.RIGCTLD_POLL_S = 0.01
-        notices = []
-
-        async def fake_notify_status(text):
-            notices.append(text)
-
-        bridge._notify_status = fake_notify_status
-        task = asyncio.create_task(bridge_module._rig_poller(bridge))
-        try:
-            assert await wait_until(lambda: any("Connected" in n for n in notices))
-            assert any("144.174" in n for n in notices)
-        finally:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-            bridge_module.RIGCTLD_HOST = orig_host
-            bridge_module.RIGCTLD_PORT = orig_port
-            bridge_module.RIGCTLD_POLL_S = orig_poll
-            await rig.stop()
-
-    async def test_rig_poller_notifies_status_on_disconnect(self):
-        bridge = Bridge(CALLSIGN)
-        rig = MockRigctld()
-        await rig.start()
-        orig_host, orig_port = bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT
-        orig_poll = bridge_module.RIGCTLD_POLL_S
-        bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT = "127.0.0.1", rig.port
-        bridge_module.RIGCTLD_POLL_S = 0.01
-        notices = []
-
-        async def fake_notify_status(text):
-            notices.append(text)
-
-        bridge._notify_status = fake_notify_status
-        task = asyncio.create_task(bridge_module._rig_poller(bridge))
-        try:
-            assert await wait_until(lambda: any("Connected" in n for n in notices))
-            await rig.stop()
-            assert await wait_until(lambda: any("Disconnected" in n for n in notices))
-        finally:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-            bridge_module.RIGCTLD_HOST = orig_host
-            bridge_module.RIGCTLD_PORT = orig_port
-            bridge_module.RIGCTLD_POLL_S = orig_poll
-
-    async def test_sked_prefers_live_rig_query_over_stale_cache(self, bridge_env):
-        # The 4532 server (puskas_logger) answers from memory in microseconds,
-        # so sked composition does a fresh query instead of trusting the
-        # possibly-poll-interval-stale cache -- a QSY immediately before
-        # sending a sked must show the new QRG.
-        bridge, kst_server, irc_port = bridge_env
-        bridge.my_locator = "JN97MX"
-        bridge.rig_qrg = "144.174"  # stale cache from before the QSY
-        bridge.rig_mode = "USB"
-        rig = MockRigctld(freq_hz="432500000", mode="CW")
+    async def _live_rig(self, freq_hz: str, mode: str):
+        rig = MockRigctld(freq_hz=freq_hz, mode=mode)
         await rig.start()
         orig_host, orig_port = bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT
         bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT = "127.0.0.1", rig.port
+        return rig, (orig_host, orig_port)
+
+    async def test_sked_includes_qrg_from_live_server(self, bridge_env):
+        bridge, kst_server, irc_port = bridge_env
+        bridge.my_locator = "JN97MX"
+        rig, orig = await self._live_rig("432500000", "CW")
         bridge.kst.online_users["G6DDN"] = {
             "loc": "IO83RJ",
             "info": "Ian",
@@ -578,9 +493,38 @@ class TestRigctld:
             assert await wait_until(
                 lambda: "432.500 MHz CW" in " ".join(kst_server.received)
             )
-            assert "144.174" not in " ".join(kst_server.received)
         finally:
             w.close()
-            bridge_module.RIGCTLD_HOST = orig_host
-            bridge_module.RIGCTLD_PORT = orig_port
+            bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT = orig
+            await rig.stop()
+
+    async def test_sked_omits_qrg_when_rig_server_unavailable(self, bridge_env):
+        # bridge_env points RIGCTLD_PORT at a dead port by default.
+        bridge, kst_server, irc_port = bridge_env
+        bridge.my_locator = "JN97MX"
+        bridge.kst.online_users["G6DDN"] = {
+            "loc": "IO83RJ",
+            "info": "Ian",
+            "away": False,
+        }
+        client, w = await irc_connect(irc_port)
+        try:
+            await client.send("PRIVMSG G6DDN :sked")
+            assert await wait_until(lambda: "sked?" in " ".join(kst_server.received))
+            assert "MHz" not in " ".join(kst_server.received)
+        finally:
+            w.close()
+
+    async def test_help_shows_rig_line_from_live_server(self, bridge_env):
+        # !help must reflect the rig's state right now, not a cache.
+        bridge, kst_server, irc_port = bridge_env
+        rig, orig = await self._live_rig("144174000", "USB")
+        client, w = await irc_connect(irc_port)
+        try:
+            await client.send(f"PRIVMSG {CHANNEL} :!help")
+            # recv_until raises TimeoutError if the rig line never appears.
+            await client.recv_until("144.174 MHz USB")
+        finally:
+            w.close()
+            bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT = orig
             await rig.stop()
