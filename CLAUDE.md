@@ -426,9 +426,22 @@ entirely with instant, event-driven state.
   retry-cadence and deadlock findings above) are all about how a real radio's own
   session/sequence tracking behaves, which a fake server that just mirrors back
   whatever the client sends can't reproduce — those needed the real IC-9700.
+- **rigctld-parity commands** — the full rigctld surface `puskas_logger.py` uses beyond
+  freq/mode reads, as plain CI-V writes on the existing CI-V socket: `send_cw()` (0x17 +
+  ASCII, 30-char limit), `stop_cw()` (0x17 + 0xFF), `set_clock()` (0x1A 0x05, IC-9700
+  parameters 0184 UTC-offset / 0180 time / 0179 date, packed BCD) — byte layouts
+  transcribed from Hamlib's `icom_send_morse`/`icom_stop_morse`/`icom_set_clock`
+  (`rigs/icom/icom.c`) and `ic9700_clock_cmds` (`rigs/icom/ic7300.c`), the exact code
+  paths rigctld's `b`/`0xBB`/`\set_clock` take. `set_clock` verified against the real
+  radio: all three set commands ACKed (FB) and the time/date read back over CI-V matched
+  the set value exactly. `on_civ_frame()` exposes every raw inbound CI-V frame — this is
+  how a caller observes ACKs (FB ok / FA rejected), which the logger's clock-sync
+  success/failure notice will need. Note: the radio echoes the client's own outbound
+  frames back on the CI-V stream, so a raw-frame listener sees both directions —
+  distinguish by the to/from address bytes (`E0 A2` = radio→controller).
 - **Not yet implemented / explicitly out of scope for this first pass**: audio
   streaming (conninfo currently requests `rxenable=0`/`txenable=0` — CI-V status only),
-  transmit control, and general-purpose retransmit-*request* compliance (resending a
+  PTT/transmit control, and general-purpose retransmit-*request* compliance (resending a
   specific buffered packet on demand — the project's research concluded, and
   real-hardware testing confirmed for steady-state traffic, that this is skippable on a
   clean LAN; what *isn't* skippable, per the bugs above, is getting the initial seq

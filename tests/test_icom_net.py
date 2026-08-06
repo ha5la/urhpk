@@ -4,9 +4,13 @@ credential scrambling, BCD frequency codec, and CI-V frame parsing.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from icom_net import (
     bcd_decode_freq,
     bcd_encode_freq,
+    civ_clock_payloads,
+    civ_cw_payload,
     civ_frame,
     parse_civ_update,
     parse_scope_frame,
@@ -206,3 +210,36 @@ def test_parse_scope_frame_multi_sequence_reassembly():
     assert p1["sequence"] == 1 and p1["sequence_max"] == 2
     assert p2["sequence"] == 2 and p2["sequence_max"] == 2
     assert "start_hz" not in p2
+
+
+def test_civ_cw_payload_is_plain_ascii():
+    assert civ_cw_payload("TU") == b"TU"
+
+
+def test_civ_cw_payload_truncates_to_the_radios_30_char_limit():
+    # Same truncation Hamlib's icom_send_morse applies -- the radio's CW
+    # message buffer takes at most 30 characters per command.
+    msg = "CQ HA5LA HA5LA TEST CQ HA5LA HA5LA TEST"
+    assert len(msg) > 30
+    assert civ_cw_payload(msg) == msg[:30].encode("ascii")
+
+
+def test_civ_clock_payloads_known_datetime():
+    # Parameter numbers 0184 (UTC offset) / 0180 (time) / 0179 (date) and
+    # packed-BCD values, per Hamlib's ic9700_clock_cmds + icom_set_clock,
+    # in Hamlib's own send order: offset, time, date.
+    payloads = civ_clock_payloads(datetime(2026, 8, 3, 18, 5, tzinfo=timezone.utc))
+    assert payloads == [
+        bytes([0x05, 0x01, 0x84, 0x00, 0x00, 0x00]),
+        bytes([0x05, 0x01, 0x80, 0x18, 0x05]),
+        bytes([0x05, 0x01, 0x79, 0x20, 0x26, 0x08, 0x03]),
+    ]
+
+
+def test_civ_clock_payloads_converts_non_utc_input():
+    # 20:05 CEST is 18:05 UTC -- the radio is always set to UTC (offset 0000),
+    # matching the logger's existing `\set_clock ...+00:00` rigctld call.
+    cest = timezone(timedelta(hours=2))
+    assert civ_clock_payloads(
+        datetime(2026, 8, 3, 20, 5, tzinfo=cest)
+    ) == civ_clock_payloads(datetime(2026, 8, 3, 18, 5, tzinfo=timezone.utc))

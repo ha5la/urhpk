@@ -37,6 +37,7 @@ import struct
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 
 # ============================================================
 # Credential scrambling
@@ -169,6 +170,57 @@ def band_from_hz(hz: int) -> str:
     if mhz < 1000:
         return "70CM"
     return "23CM"
+
+
+# ============================================================
+# CW keying + clock -- the remaining CI-V commands puskas_logger needs
+# to drop rigctld entirely. Byte layouts transcribed from Hamlib's
+# icom_send_morse/icom_stop_morse/icom_set_clock (rigs/icom/icom.c) and
+# the IC-9700's parameter numbers (ic9700_clock_cmds in rigs/icom/ic7300.c),
+# the exact code paths rigctld's 'b' / 0xBB / \set_clock commands take.
+# ============================================================
+
+CIV_CMD_SEND_CW = 0x17
+CIV_CW_STOP = 0xFF  # as the message payload: abort the in-progress message
+CIV_CW_MAX_CHARS = 30
+CIV_CMD_SET_PARAM = 0x1A  # with subcommand 0x05: numbered radio setting
+CIV_PARAM_SUBCMD = 0x05
+CIV_PARAM_DATE = bytes([0x01, 0x79])
+CIV_PARAM_TIME = bytes([0x01, 0x80])
+CIV_PARAM_UTC_OFFSET = bytes([0x01, 0x84])
+
+
+def _bcd2(v: int) -> int:
+    return ((v // 10) << 4) | (v % 10)
+
+
+def civ_cw_payload(message: str) -> bytes:
+    return message[:CIV_CW_MAX_CHARS].encode("ascii")
+
+
+def civ_clock_payloads(now: datetime) -> list[bytes]:
+    """Data payloads (for CI-V command 0x1A) that set the radio's clock.
+
+    Always sets UTC (offset 0000), matching the logger's existing
+    `\\set_clock ...+00:00` rigctld usage; the IC-9700 ignores seconds.
+    Hamlib's own send order: UTC offset, time, date.
+    """
+    now = now.astimezone(timezone.utc)
+    sub = bytes([CIV_PARAM_SUBCMD])
+    return [
+        sub + CIV_PARAM_UTC_OFFSET + bytes([0x00, 0x00, 0x00]),
+        sub + CIV_PARAM_TIME + bytes([_bcd2(now.hour), _bcd2(now.minute)]),
+        sub
+        + CIV_PARAM_DATE
+        + bytes(
+            [
+                _bcd2(now.year // 100),
+                _bcd2(now.year % 100),
+                _bcd2(now.month),
+                _bcd2(now.day),
+            ]
+        ),
+    ]
 
 
 # ============================================================
@@ -529,6 +581,7 @@ class IcomNetRig:
         self.freq_hz: int | None = None
         self.mode: str | None = None
         self._listeners: list = []
+        self._frame_listeners: list = []
 
         self.scope_start_hz: int | None = None
         self.scope_end_hz: int | None = None
@@ -567,6 +620,30 @@ class IcomNetRig:
                 cb(freq_hz, mode, band)
             except Exception:
                 pass
+
+    def on_civ_frame(self, callback) -> None:
+        """callback(frame: bytes) fires for every inbound CI-V frame (sans
+        FE FE/FD), before any interpretation -- lets callers observe ACKs
+        (FB ok / FA rejected) and replies this client doesn't parse itself."""
+        self._frame_listeners.append(callback)
+
+    def send_cw(self, message: str) -> None:
+        """Key the radio's own CW message sender (CI-V 0x17) -- the same
+        command rigctld's 'b' (send_morse) issues. Truncated to the radio's
+        30-char limit, exactly as Hamlib's icom_send_morse does."""
+        self._send_civ_command(CIV_CMD_SEND_CW, civ_cw_payload(message))
+
+    def stop_cw(self) -> None:
+        """Abort an in-progress CW message (0x17 with payload 0xFF) -- the
+        same command rigctld's 0xBB (stop_morse) issues."""
+        self._send_civ_command(CIV_CMD_SEND_CW, bytes([CIV_CW_STOP]))
+
+    def set_clock(self, now: datetime) -> None:
+        """Set the radio's clock + UTC offset -- what rigctld's \\set_clock
+        does. The IC-9700 ignores seconds, so callers should fire this on a
+        minute boundary (as puskas_logger's Alt+T already does)."""
+        for payload in civ_clock_payloads(now):
+            self._send_civ_command(CIV_CMD_SET_PARAM, payload)
 
     def on_scope(self, callback) -> None:
         """callback(start_hz, end_hz, pixels: bytes) fires on each complete
@@ -861,6 +938,11 @@ class IcomNetRig:
                         self._civ_ready.set()
                     last_data = time.monotonic()
                     for frame in split_civ_frames(payload):
+                        for cb in self._frame_listeners:
+                            try:
+                                cb(frame)
+                            except Exception:
+                                pass
                         scope = parse_scope_frame(frame)
                         if scope is not None:
                             self._apply_scope_frame(scope)

@@ -15,6 +15,7 @@ import os
 import socket
 import struct
 import threading
+from datetime import datetime, timezone
 
 import pytest
 
@@ -102,6 +103,7 @@ class FakeIcomRadio:
         self._tok = os.urandom(6)
         self._civ_inner_seq = 0
         self.civ_opened = threading.Event()
+        self.received_civ: list[bytes] = []
         self._cur_freq = 144_174_000
         self._cur_mode = 0x01  # USB
 
@@ -210,6 +212,7 @@ class FakeIcomRadio:
             payload = parse_civ_data_packet(data)
             if payload:
                 for frame in split_civ_frames(payload):
+                    self.received_civ.append(frame)
                     if len(frame) >= 3 and frame[2] == 0x03:  # read freq
                         reply = civ_frame(
                             CIV_CONTROLLER_ADDR,
@@ -292,5 +295,64 @@ def test_connect_and_receive_unsolicited_transceive_update(fake_radio):
         assert rig.band == "70CM"
 
         assert (432_500_000, "CW", "70CM") in updates
+    finally:
+        rig.close()
+
+
+def test_send_cw_stop_cw_and_set_clock_reach_the_radio_as_civ_frames(fake_radio):
+    # The three rigctld operations puskas_logger uses besides freq/mode
+    # reads: CW macro send ('b'), CW abort (0xBB), clock sync (\set_clock).
+    # Each must land on the radio as the exact CI-V frame Hamlib would send.
+    rig = IcomNetRig(
+        "127.0.0.1",
+        "testuser",
+        "testpass",
+        control_port=fake_radio.control_port,
+        civ_port=fake_radio.civ_port,
+    )
+    try:
+        rig.connect(timeout=5.0)
+        assert wait_until_sync(lambda: rig.freq_hz is not None, timeout=2.0)
+
+        rig.send_cw("TU")
+        rig.stop_cw()
+        rig.set_clock(datetime(2026, 8, 3, 18, 5, tzinfo=timezone.utc))
+
+        to_radio = bytes([CIV_IC9700_ADDR, CIV_CONTROLLER_ADDR])
+        expected = [
+            to_radio + bytes([0x17]) + b"TU",
+            to_radio + bytes([0x17, 0xFF]),
+            to_radio + bytes([0x1A, 0x05, 0x01, 0x84, 0x00, 0x00, 0x00]),
+            to_radio + bytes([0x1A, 0x05, 0x01, 0x80, 0x18, 0x05]),
+            to_radio + bytes([0x1A, 0x05, 0x01, 0x79, 0x20, 0x26, 0x08, 0x03]),
+        ]
+        assert wait_until_sync(
+            lambda: all(f in fake_radio.received_civ for f in expected), timeout=2.0
+        )
+    finally:
+        rig.close()
+
+
+def test_on_civ_frame_sees_raw_inbound_frames(fake_radio):
+    # ACK frames (FB/FA) and replies this client doesn't interpret itself
+    # must still be observable -- the logger's clock-sync feedback needs to
+    # know whether the radio accepted a set command.
+    rig = IcomNetRig(
+        "127.0.0.1",
+        "testuser",
+        "testpass",
+        control_port=fake_radio.control_port,
+        civ_port=fake_radio.civ_port,
+    )
+    frames = []
+    rig.on_civ_frame(frames.append)
+    try:
+        rig.connect(timeout=5.0)
+        # connect()'s priming read-freq query is answered by the fake radio --
+        # that reply must show up raw, addressing bytes and all.
+        freq_reply = bytes([CIV_CONTROLLER_ADDR, CIV_IC9700_ADDR, 0x03])
+        assert wait_until_sync(
+            lambda: any(f.startswith(freq_reply) for f in frames), timeout=2.0
+        )
     finally:
         rig.close()
