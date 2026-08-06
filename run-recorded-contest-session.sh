@@ -36,5 +36,11 @@ if [ -z "$svc_found" ]; then
     echo "  NTP-disciplined at all; webcam/cast PiP sync may drift." >&2
 fi
 
+# irssi is fully parameterized -- no reliance on a saved '/server add -auto'
+# config on this machine: wait for the bridge (started in the bg window) to
+# bind 6667, then connect straight to it. The bridge renames the nick and
+# auto-joins #on4kst on its own, so no other client config is needed.
+irssi_cmd="while ! nc -z 127.0.0.1 6667; do sleep 0.2; done; exec irssi -c 127.0.0.1 -p 6667"
+
 filename="$(date -uIseconds).cast"
-asciinema rec "${filename}" -c "tmux new-session irssi\; split-window $d/puskas_logger.py\; select-layout even-horizontal\; new-window -d -n bg $d/hamlib_supervisor.py\; split-window -t bg $d/on4kst_irc_bridge.py"
+asciinema rec "${filename}" -c "tmux new-session '$irssi_cmd'\; split-window $d/puskas_logger.py\; select-layout even-horizontal\; new-window -d -n bg $d/hamlib_supervisor.py\; split-window -t bg $d/on4kst_irc_bridge.py"
