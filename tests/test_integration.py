@@ -553,3 +553,34 @@ class TestRigctld:
             bridge_module.RIGCTLD_HOST = orig_host
             bridge_module.RIGCTLD_PORT = orig_port
             bridge_module.RIGCTLD_POLL_S = orig_poll
+
+    async def test_sked_prefers_live_rig_query_over_stale_cache(self, bridge_env):
+        # The 4532 server (puskas_logger) answers from memory in microseconds,
+        # so sked composition does a fresh query instead of trusting the
+        # possibly-poll-interval-stale cache -- a QSY immediately before
+        # sending a sked must show the new QRG.
+        bridge, kst_server, irc_port = bridge_env
+        bridge.my_locator = "JN97MX"
+        bridge.rig_qrg = "144.174"  # stale cache from before the QSY
+        bridge.rig_mode = "USB"
+        rig = MockRigctld(freq_hz="432500000", mode="CW")
+        await rig.start()
+        orig_host, orig_port = bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT
+        bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT = "127.0.0.1", rig.port
+        bridge.kst.online_users["G6DDN"] = {
+            "loc": "IO83RJ",
+            "info": "Ian",
+            "away": False,
+        }
+        client, w = await irc_connect(irc_port)
+        try:
+            await client.send("PRIVMSG G6DDN :sked")
+            assert await wait_until(
+                lambda: "432.500 MHz CW" in " ".join(kst_server.received)
+            )
+            assert "144.174" not in " ".join(kst_server.received)
+        finally:
+            w.close()
+            bridge_module.RIGCTLD_HOST = orig_host
+            bridge_module.RIGCTLD_PORT = orig_port
+            await rig.stop()

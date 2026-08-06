@@ -400,13 +400,20 @@ class Bridge:
             if text.strip().lower() == "sked":
                 call = target.upper()
                 user = self.kst.online_users.get(call) or {}
+                # Fresh query at composition time: the 4532 server (the
+                # logger) answers from its push-fresh cache in microseconds,
+                # so this beats the poll cache after a just-made QSY. Cache
+                # stays as fallback (server briefly gone / reconnecting).
+                qrg, mode = await fetch_rig_info()
+                if not qrg:
+                    qrg, mode = self.rig_qrg, self.rig_mode
                 msg = sked_text(
                     call,
                     self.callsign,
                     self.my_locator,
                     user.get("loc", ""),
-                    self.rig_qrg,
-                    self.rig_mode,
+                    qrg,
+                    mode,
                 )
                 await self.kst.send(f"/CQ {call} {msg}")
                 await self._notify(f"→ /CQ {call}: {msg}")
