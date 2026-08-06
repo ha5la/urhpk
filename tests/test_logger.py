@@ -1481,3 +1481,19 @@ class TestScopeRecorder:
     def test_on_scope_is_a_noop_without_a_configured_path(self):
         pl._on_scope(145_000_000, 146_000_000, b"\x01\x02")
         assert pl._scope_rec["file"] is None
+
+
+def test_radio_close_if_connected_closes_and_clears_the_session():
+    # A logger exit must deregister the radio session (IcomNetRig.close
+    # sends the token deregister) so a restart never races the radio's
+    # abandoned-session cooldown.
+    rig = MagicMock()
+    with _rig_lock:
+        pl._radio["rig"] = rig
+    try:
+        pl._radio_close_if_connected()
+        rig.close.assert_called_once()
+        assert pl._radio["rig"] is None
+    finally:
+        with _rig_lock:
+            pl._radio["rig"] = None

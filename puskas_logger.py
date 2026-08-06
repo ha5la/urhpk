@@ -280,6 +280,20 @@ def _radio_rig() -> icom_net.IcomNetRig | None:
         return _radio["rig"]
 
 
+def _radio_close_if_connected() -> None:
+    """Deregister the radio session on exit (close() sends the token
+    deregister) so a restart never races the radio's abandoned-session
+    cooldown. Called from the same normal-exit and crash paths as
+    _webcam_stop_if_running."""
+    with _rig_lock:
+        rig, _radio["rig"] = _radio["rig"], None
+    if rig is not None:
+        try:
+            rig.close()
+        except Exception:
+            pass
+
+
 def current_rig() -> tuple[str, str, str, bool]:
     """(band, mode, qrg, online) — falls back to manual override if offline."""
     with _rig_lock:
@@ -1877,6 +1891,7 @@ def run(lb: LogBook, tname: str):
         save_all(lb, tname)
 
     _webcam_stop_if_running()
+    _radio_close_if_connected()
     print("\nSaving EDI files...")
     paths = save_all(lb, tname)
     if paths:
@@ -1985,6 +2000,7 @@ def main():
     except Exception as e:
         print(f"\n[ERROR] {e}")
         _webcam_stop_if_running()
+        _radio_close_if_connected()
         save_all(lb, tname)
         raise
 
