@@ -1364,3 +1364,30 @@ class TestInputLog:
             "nr_s": 3,
             "dup": False,
         }
+
+
+class TestRadioUpdate:
+    """icom_net push-update -> _rig cache (replaces the rigctld poller)."""
+
+    def _reset(self):
+        with _rig_lock:
+            _rig.update(band="", mode="", qrg="", online=False)
+        pl._rig_manual.update(band="", mode="")
+
+    def test_partial_update_stays_offline(self):
+        # connect() primes freq and mode with separate queries; until both
+        # have arrived the rig must not report online (a half-known state
+        # would show mode "SSB" by fallback for a moment).
+        self._reset()
+        pl._on_radio_update(144_174_000, None, "2M")
+        assert pl.current_rig() == ("", "", "", False)
+
+    def test_full_update_goes_online_with_formatted_qrg(self):
+        self._reset()
+        pl._on_radio_update(144_174_000, "USB", "2M")
+        assert pl.current_rig() == ("2M", "SSB", "144.174", True)
+        self._reset()
+
+    def test_cw_reverse_mode_maps_to_cw(self):
+        # icom_net spells reverse CW "CW-R" (rigctld spelled it "CWR").
+        assert pl._mode_str("CW-R") == "CW"

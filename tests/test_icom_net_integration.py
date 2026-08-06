@@ -104,6 +104,7 @@ class FakeIcomRadio:
         self._civ_inner_seq = 0
         self.civ_opened = threading.Event()
         self.received_civ: list[bytes] = []
+        self.token_deregistered = threading.Event()
         self._cur_freq = 144_174_000
         self._cur_mode = 0x01  # USB
 
@@ -155,6 +156,8 @@ class FakeIcomRadio:
             )
         elif length == 0x40:  # token_packet
             requesttype = data[0x15]
+            if requesttype == 0x01:
+                self.token_deregistered.set()
             self.ctrl_sock.sendto(
                 _token_response(
                     self._my_ctrl_id, self._client_ctrl_id, requesttype, self._tok
@@ -354,5 +357,41 @@ def test_on_civ_frame_sees_raw_inbound_frames(fake_radio):
         assert wait_until_sync(
             lambda: any(f.startswith(freq_reply) for f in frames), timeout=2.0
         )
+    finally:
+        rig.close()
+
+
+def test_close_deregisters_the_session_token(fake_radio):
+    # Without this the radio holds the abandoned session for tens of
+    # seconds (observed on real hardware) and refuses the next connect --
+    # fatal for a logger restart mid-contest.
+    rig = IcomNetRig(
+        "127.0.0.1",
+        "testuser",
+        "testpass",
+        control_port=fake_radio.control_port,
+        civ_port=fake_radio.civ_port,
+    )
+    rig.connect(timeout=5.0)
+    assert not fake_radio.token_deregistered.is_set()
+    rig.close()
+    assert fake_radio.token_deregistered.wait(timeout=2.0)
+
+
+def test_last_rx_age_is_fresh_while_connected_and_grows_when_radio_dies(fake_radio):
+    rig = IcomNetRig(
+        "127.0.0.1",
+        "testuser",
+        "testpass",
+        control_port=fake_radio.control_port,
+        civ_port=fake_radio.civ_port,
+    )
+    try:
+        rig.connect(timeout=5.0)
+        # connect() only returns once CI-V data has been seen, so the age
+        # must already be finite and recent.
+        assert rig.last_rx_age() < 2.0
+        fake_radio.stop()
+        assert wait_until_sync(lambda: rig.last_rx_age() > 0.5, timeout=5.0)
     finally:
         rig.close()

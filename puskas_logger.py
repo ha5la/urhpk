@@ -39,14 +39,18 @@ from prompt_toolkit.formatted_text import HTML, FormattedText
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import DynamicStyle, Style
 
+import icom_net
+
 # ──────────────────────────────────────────────────────────────
 # Configuration
 # ──────────────────────────────────────────────────────────────
-RIGCTLD_HOST = "localhost"
-RIGCTLD_PORT = 4532
+RADIO_HOST = "icom9700"  # credentials in ~/.netrc under this machine name
+RADIO_CONNECT_TIMEOUT_S = 5.0
+RADIO_STALE_S = 5.0  # no CI-V-socket traffic for this long = session dead
+RADIO_RECONNECT_S = 15.0  # quiet time the radio needs before accepting a new session
 ROTCTLD_HOST = "localhost"
 ROTCTLD_PORT = 4533
-RIGCTLD_POLL_S = 1
+ROTCTLD_POLL_S = 1
 MY_LOGS_DIR = Path("my-logs")
 PUSKAS_DIR = Path.home() / ".puskas"
 SEEN_STATIONS = PUSKAS_DIR / "puskas-seen-stations.json"
@@ -195,81 +199,73 @@ def load_loc_cache() -> dict[str, list[str]]:
 
 
 # ──────────────────────────────────────────────────────────────
-# rigctld — background daemon thread
+# Radio — direct Ethernet CI-V (icom_net), replaces rigctld entirely.
+# freq/mode arrive as CI-V Transceive pushes the instant they change on
+# the radio, not up to a poll interval late.
 # ──────────────────────────────────────────────────────────────
 _rig: dict = {"band": "", "mode": "", "qrg": "", "online": False}
 _rig_lock = threading.Lock()
 _rig_manual: dict = {"band": "", "mode": ""}
+_radio: dict = {"rig": None}  # live IcomNetRig session, None while offline
 
 
 def _mode_str(raw: str) -> str:
     r = raw.upper()
     if r in ("USB", "LSB", "AM", "DSB", "SAM"):
         return "SSB"
-    if r in ("CW", "CWR"):
+    if r in ("CW", "CWR", "CW-R"):
         return "CW"
     if r in ("FM", "FMN", "WFM", "NFM"):
         return "FM"
     return r or "SSB"
 
 
-def _band_from_qrg(mhz: float) -> str:
-    if mhz < 300:
-        return "2M"
-    if mhz < 1000:
-        return "70CM"
-    return "23CM"
+def _on_radio_update(freq_hz, mode, band) -> None:
+    # connect() primes freq and mode with separate queries -- until both have
+    # arrived, stay "offline" rather than show a half-known state.
+    if freq_hz is None or mode is None:
+        return
+    with _rig_lock:
+        _rig.update(
+            band=band, mode=_mode_str(mode), qrg=f"{freq_hz / 1e6:.3f}", online=True
+        )
 
 
-def _read_rig() -> tuple[str, str]:
-    """Query freq ('f' -> 1 line) and mode ('m' -> mode + passband, 2 lines)
-    in one round trip. 3 lines total.
+def _radio_thread():
+    """Keep one live icom_net session up; reconnect after drops.
 
-    PTT used to be queried here too ('t') and recorded into telemetry, but
-    the WAV recordings themselves turned out to carry the same information
-    straight from the rig (IC-9700 'Voice Recorder' metadata, read by
-    contest_video.py's read_wav_metadata) with zero polling lag -- telemetry
-    was in practice used to *reconstruct* something already recorded
-    losslessly elsewhere. Removed rather than kept for redundancy per Kent
-    Beck's rule: dead weight, not a safety net.
+    RADIO_RECONNECT_S between attempts is not just politeness: the radio
+    refuses new sessions for a while after an uncleanly-dropped one, so
+    hammering it would only push recovery further away.
     """
-    try:
-        with socket.create_connection((RIGCTLD_HOST, RIGCTLD_PORT), timeout=2.0) as s:
-            s.sendall(b"f\nm\n")
-            buf, t0 = b"", time.monotonic()
-            while time.monotonic() - t0 < 2.0:
-                s.settimeout(2.0 - (time.monotonic() - t0))
-                chunk = s.recv(256)
-                if not chunk:
-                    break
-                buf += chunk
-                if len(buf.decode(errors="replace").splitlines()) >= 3:
-                    break
-            lines = buf.decode(errors="replace").splitlines()
-            qrg = f"{float(lines[0]) / 1e6:.3f}"
-            mode = lines[1].strip() if len(lines) > 1 else ""
-            return qrg, mode
-    except Exception:
-        return "", ""
-
-
-def _rig_thread():
     while True:
+        rig = None
         try:
-            qrg, raw = _read_rig()
+            user, password = icom_net._load_netrc_credentials(RADIO_HOST)
+            rig = icom_net.IcomNetRig(RADIO_HOST, user, password)
+            rig.on_update(_on_radio_update)
+            rig.connect(timeout=RADIO_CONNECT_TIMEOUT_S)
             with _rig_lock:
-                if qrg:
-                    _rig.update(
-                        band=_band_from_qrg(float(qrg)),
-                        mode=_mode_str(raw),
-                        qrg=qrg,
-                        online=True,
-                    )
-                else:
-                    _rig.update(band="", mode="", qrg="", online=False)
+                _radio["rig"] = rig
+            while rig.last_rx_age() < RADIO_STALE_S:
+                time.sleep(1.0)
         except Exception:
             pass
-        time.sleep(RIGCTLD_POLL_S)
+        with _rig_lock:
+            _radio["rig"] = None
+            _rig.update(band="", mode="", qrg="", online=False)
+        if rig is not None:
+            try:
+                rig.close()
+            except Exception:
+                pass
+        time.sleep(RADIO_RECONNECT_S)
+
+
+def _radio_rig() -> icom_net.IcomNetRig | None:
+    """The live session, or None — for commands (CW keying, clock set)."""
+    with _rig_lock:
+        return _radio["rig"]
 
 
 def current_rig() -> tuple[str, str, str, bool]:
@@ -312,7 +308,7 @@ def _rot_thread():
         except Exception:
             with _rot_lock:
                 _rot.update(az=0.0, online=False)
-        time.sleep(RIGCTLD_POLL_S)
+        time.sleep(ROTCTLD_POLL_S)
 
 
 def current_rot() -> tuple[float, bool]:
@@ -339,11 +335,12 @@ _clock_sync_lock = threading.Lock()
 
 
 def _clock_sync() -> None:
-    """Sleep to the next minute boundary, then push UTC time to rigctld.
+    """Sleep to the next minute boundary, then push UTC time to the radio.
 
     The IC-9700 ignores the seconds field, so we sync on :00 for reliability.
     Shows "waiting…" immediately so the operator knows the key was registered,
-    then the result for 5 s once the sync fires."""
+    then the result for 5 s once the sync fires. Success = the radio ACKs
+    (FB) all three CI-V set commands (UTC offset, time, date)."""
 
     def _do():
         with _clock_sync_lock:
@@ -353,20 +350,39 @@ def _clock_sync() -> None:
         secs_to_next_minute = 60 - now.second - now.microsecond / 1e6
         time.sleep(secs_to_next_minute)
         now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-        ts = now.strftime("%Y-%m-%dT%H:%M:%S.000+00:00")
-        try:
-            with socket.create_connection(
-                (RIGCTLD_HOST, RIGCTLD_PORT), timeout=3.0
-            ) as s:
-                s.sendall(f"\\set_clock {ts}\n".encode())
-                resp = s.recv(64).decode(errors="replace").strip()
-                msg = (
-                    f"clock synced {ts[11:16]}Z"
-                    if resp == "RPRT 0"
-                    else f"clock sync failed: {resp}"
-                )
-        except Exception as exc:
-            msg = f"clock sync failed: {exc}"
+        rig = _radio_rig()
+        if rig is None:
+            msg = "clock sync failed: radio offline"
+        else:
+            # Only frames FROM the radio count -- it echoes our own back too.
+            from_radio = bytes([icom_net.CIV_CONTROLLER_ADDR, icom_net.CIV_IC9700_ADDR])
+            acks: list[int] = []
+
+            def _on_frame(frame: bytes) -> None:
+                if (
+                    len(frame) >= 3
+                    and frame[:2] == from_radio
+                    and frame[2] in (0xFB, 0xFA)
+                ):
+                    acks.append(frame[2])
+
+            rig.on_civ_frame(_on_frame)
+            try:
+                rig.set_clock(now)
+                deadline = time.monotonic() + 2.0
+                while time.monotonic() < deadline and len(acks) < 3:
+                    time.sleep(0.05)
+            except Exception as exc:
+                msg = f"clock sync failed: {exc}"
+            else:
+                if acks.count(0xFB) == 3:
+                    msg = f"clock synced {now:%H:%M}Z"
+                elif 0xFA in acks:
+                    msg = "clock sync failed: radio rejected a set command"
+                else:
+                    msg = f"clock sync failed: {acks.count(0xFB)}/3 acks"
+            finally:
+                rig.remove_civ_frame(_on_frame)
         with _clock_sync_lock:
             _clock_sync_notice["msg"] = msg
             _clock_sync_notice["until"] = time.monotonic() + 5.0
@@ -523,8 +539,8 @@ def _webcam_precise_name(out_path: str, start: datetime) -> str:
 def _webcam_capture_cmd(device: str, audio_source: str, out_path: str) -> list[str]:
     """The ffmpeg command to capture the local webcam + mic to `out_path`.
     -preset ultrafast keeps this cheap enough to run alongside the logger
-    for a multi-hour session without competing for CPU with rigctld polling
-    or the UI itself.
+    for a multi-hour session without competing for CPU with the radio/rotator
+    threads or the UI itself.
 
     -use_wallclock_as_timestamps 1 on the v4l2 input stamps every captured
     frame with the real gettimeofday wallclock, so ffmpeg logs an exact
@@ -1051,29 +1067,23 @@ def _expand_cw(template: str, lb: LogBook, hiscall: str, band: str) -> str:
 
 
 def _cw_send(message: str) -> None:
-    def _do():
+    # A single UDP send -- no thread needed, unlike the old rigctld TCP
+    # round-trip. Silently no-ops when the radio is offline.
+    rig = _radio_rig()
+    if rig is not None:
         try:
-            with socket.create_connection(
-                (RIGCTLD_HOST, RIGCTLD_PORT), timeout=2.0
-            ) as s:
-                s.sendall(f"b{message}\n".encode())
+            rig.send_cw(message)
         except Exception:
             pass
-
-    threading.Thread(target=_do, daemon=True).start()
 
 
 def _cw_stop() -> None:
-    def _do():
+    rig = _radio_rig()
+    if rig is not None:
         try:
-            with socket.create_connection(
-                (RIGCTLD_HOST, RIGCTLD_PORT), timeout=2.0
-            ) as s:
-                s.sendall(b"\xbb")
+            rig.stop_cw()
         except Exception:
             pass
-
-    threading.Thread(target=_do, daemon=True).start()
 
 
 def _band_summary(lb: LogBook) -> str:
@@ -1194,7 +1204,7 @@ def _offline_setup():
     print(f"\n\033[1m{bar}\033[0m")
     print("  RIG OFFLINE — set band and mode to start logging")
     print(
-        "\033[2m  (start rigctld for automatic control, or enter values below)\033[0m"
+        "\033[2m  (power on the radio for automatic control, or enter values below)\033[0m"
     )
     print(f"\033[1m{bar}\033[0m")
     while True:
@@ -1851,7 +1861,7 @@ def main():
         loc_cache = load_loc_cache()
         lb = LogBook(my_call, my_loc, loc_cache)
 
-    t = threading.Thread(target=_rig_thread, daemon=True)
+    t = threading.Thread(target=_radio_thread, daemon=True)
     t.start()
     threading.Thread(target=_rot_thread, daemon=True).start()
     _telem_path = Path(

@@ -3,7 +3,8 @@
 ## What is this?
 Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
 - `on4kst_irc_bridge.py` – general ON4KST↔IRC bridge; use with irssi or any IRC client
-- `puskas_logger.py` – contest QSO logger with rigctld + rotctld integration; exports EDI files
+- `puskas_logger.py` – contest QSO logger; rig via `icom_net` (direct Ethernet, push updates)
+  plus rotctld integration; exports EDI files
 - `puskas_harvester.py` – pre-contest data collector; fetches all stations → `~/.puskas/puskas-seen-stations.json`
 - `puskas_visualizer.py` – map and polar diagram from `~/.puskas/puskas-seen-stations.json`
 - `hamlib_supervisor.py` – starts/stops rigctld and rotctld based on USB device presence (inotify)
@@ -284,9 +285,10 @@ Run permanently (tmux, or a `systemd --user` unit) alongside the contest tools.
   against the Hamlib source at both version tags). Hamlib's rotator API
   (`include/hamlib/rotator.h`) has no equivalent concept at all, for any backend, at
   either version — this isn't a per-rig gap, the rotator subsystem never defined the
-  hook. So `puskas_logger.py`'s existing rig/rotator polling threads stay as they are;
-  this script only removes polling from the *device-presence* problem, not from
-  freq/mode/azimuth queries themselves.
+  hook. So `puskas_logger.py`'s rotator polling thread stays as it is (its rig polling
+  has since been replaced entirely by `icom_net` push updates — rigctld is now only
+  used by `on4kst_irc_bridge.py`); this script only removes polling from the
+  *device-presence* problem, not from azimuth queries themselves.
 - The IC-7300MK2 (an unrelated HF rig also on this machine) has no dedicated Hamlib
   backend in the installed 4.6.2 — `RIG_MODEL_IC7300MK2` was added in the 4.7 release
   series (confirmed: absent from `rigctl --list` here, present in Hamlib's 4.7.2 source
@@ -303,16 +305,16 @@ plain "CI-V over TCP" port on the radio itself. The only way to control it over 
 is Icom's own network-remote-control protocol (the one RS-BA1 and wfview speak), which is
 UDP-based, authenticated, and stateful. `icom_net.py` implements a minimal client for it
 directly, in pure stdlib Python (no external deps, matching `on4kst_irc_bridge.py`'s
-style) — first step toward eventually replacing `rigctld`+polling in `puskas_logger.py`
-entirely with instant, event-driven state.
+style). Originally a standalone first step; `puskas_logger.py` now uses it as its only
+rig interface — instant, event-driven state, no rigctld involved.
 
 - **Why this is worth it over polling**: CI-V has a "Transceive" mode (`SET > CONNECTORS
   > CI-V > CI-V Transceive: ON`) where the radio pushes frequency/mode changes
   unsolicited the instant they happen (front-panel or otherwise), rather than waiting to
   be asked. `rigctld`'s Hamlib backend for the IC-9700 doesn't take advantage of this
   (see `hamlib_supervisor.py`'s notes above on `async_data_supported`), so
-  `puskas_logger.py` today only ever sees rig state up to `RIGCTLD_POLL_S` (1s) stale.
-  A direct client can just listen — no polling loop at all.
+  `puskas_logger.py` on rigctld only ever saw rig state up to its 1 s poll interval
+  stale. A direct client can just listen — no polling loop at all.
 - **Protocol reverse-engineered from two independent implementations**, not from any
   official Icom spec (there isn't a public one): wfview (C++,
   gitlab.com/eliggett/wfview) and kappanhang (Go, github.com/nonoo/kappanhang, credited
@@ -445,10 +447,9 @@ entirely with instant, event-driven state.
   specific buffered packet on demand — the project's research concluded, and
   real-hardware testing confirmed for steady-state traffic, that this is skippable on a
   clean LAN; what *isn't* skippable, per the bugs above, is getting the initial seq
-  numbering and handshake ordering exactly right). Not yet wired into `puskas_logger.py`
-  in place of `rigctld` — this file is currently a standalone client with its own CLI
-  test harness (`uv run icom_net.py <radio-ip>`), proven against real hardware but not
-  yet integrated.
+  numbering and handshake ordering exactly right). Wired into `puskas_logger.py` as its
+  only rig interface (see that section's radio notes); also still usable standalone via
+  the CLI test harness (`uv run icom_net.py <radio-ip>`).
 
 ### Scope (spectrum waterfall) data
 
@@ -1336,9 +1337,9 @@ These requirements must be preserved across all future changes:
   input line background turns red (`DynamicStyle({'': 'bg:ansired fg:white'})`) and the
   right prompt shows a red `DUP` label followed by the geo info (distance + bearing + arrow)
   if known. The operator must not need to press Enter to discover a duplicate. The dup check
-  must re-evaluate when the band changes on the radio — `RIGCTLD_POLL_S = 1` keeps cached
-  rig state fresh so the style (redrawn on the next change-triggered toolbar redraw, see
-  above) always reflects the current band. The dup style is suppressed during edit mode
+  must re-evaluate when the band changes on the radio — the `icom_net` session pushes
+  band/mode changes the instant they happen, so the style (redrawn on the next
+  change-triggered toolbar redraw, see above) always reflects the current band. The dup style is suppressed during edit mode
   (`_state['edit_idx'] is not None`) to avoid false positives.
 - **Band always visible in log**: every QSO row must show its band. RST columns are
   **left-aligned** in 3 chars (`:<3`) so `↑` and `↓` attach directly to the first digit
@@ -1349,8 +1350,11 @@ These requirements must be preserved across all future changes:
 - **Rig read at Enter time**: band and mode for a new QSO are captured by a fresh
   `current_rig()` call immediately after Enter, never from the stale snapshot taken when
   the prompt was first drawn.
-- **Rig thread must never die**: `_rig_thread` wraps its loop body in `try/except` so a
-  transient rigctld error cannot kill the thread.
+- **Radio thread must never die**: `_radio_thread` wraps each session in `try/except`
+  and reconnects after drops (`RADIO_RECONNECT_S` cooldown — the radio refuses new
+  sessions for a while after an uncleanly-dropped one), so a transient radio/network
+  error cannot kill rig state permanently. Liveness comes from `last_rx_age()`
+  (no CI-V-socket traffic for `RADIO_STALE_S` = session dead), not from polling.
 - **Backspace stops at column 0**: pressing Backspace when the input buffer is empty does
   nothing. Edit mode is entered with the Up arrow key only.
 - **Edit mode via Up/Down**: Up/Down navigate to earlier/later QSOs in edit mode.
@@ -1485,7 +1489,8 @@ HA7NS 599 014 JN97WM   → CW with locator
 - Alt+V → start/stop webcam recording (see **Webcam capture** below); toolbar shows a red
   `● REC` indicator the whole time it's running, plus a transient confirmation message
 
-**CW macros** (F1–F8, requires rigctld):
+**CW macros** (F1–F8, requires the radio online — sent via `icom_net`'s `send_cw`,
+CI-V 0x17, the radio's own message keyer):
 | Key | Template |
 |-----|----------|
 | F1  | `CQ <MYCALL> <MYCALL> TEST` |
@@ -1499,9 +1504,9 @@ HA7NS 599 014 JN97WM   → CW with locator
 
 `<HISCALL>` is the first token in the input buffer at key-press time.
 `<NUMBER>` uses CW abbreviations: `0→T`, `9→N` (e.g. 014 → `T14`).
-Macros silently no-op when rigctld is offline.
+Macros silently no-op when the radio is offline. Escape aborts via `stop_cw` (0x17+0xFF).
 
-**Offline setup wizard**: if rigctld is not running at startup and no manual band/mode
+**Offline setup wizard**: if the radio is not reachable at startup and no manual band/mode
 override is set, the logger shows an interactive prompt asking for band (`2M/70CM/23CM`)
 then mode (`SSB/CW/FM`) before entering the main loop. Ctrl-D exits cleanly.
 Mid-session rig disconnect uses `_rig_manual` values as fallback (set by the wizard or
@@ -1509,14 +1514,14 @@ Mid-session rig disconnect uses `_rig_manual` values as fallback (set by the wiz
 
 **rotctld integration** (optional, no-op when rotctld not running):
 - Background poller (`_rot_thread`) queries `ROTCTLD_HOST:ROTCTLD_PORT` (4533) every
-  `RIGCTLD_POLL_S` (1 s) using the `p` command (returns azimuth and elevation)
+  `ROTCTLD_POLL_S` (1 s) using the `p` command (returns azimuth and elevation)
 - Current azimuth shown in toolbar as `ROT: 045°` when online, `ROT: ---` when offline
 - **Alt+R** sends `P az 0` to rotctld to slew the rotator; fires in a background thread
 - To start rotctld: `rotctld -m MODEL -r /dev/ttyUSB0` (see Hamlib docs for MODEL number)
 
 **Telemetry recorder** (`*-telemetry.jsonl`, always on, one JSON line per
-second): `{"t", "freq_hz", "mode", "az"}` -- band/mode/QRG from rigctld,
-bearing from rotctld. No `ptt` field: it used to be queried and recorded
+second): `{"t", "freq_hz", "mode", "az"}` -- band/mode/QRG from the `icom_net`
+radio session, bearing from rotctld. No `ptt` field: it used to be queried and recorded
 here too, but the WAV recordings' own IC-9700 metadata already carries it
 straight from the rig with zero polling lag (see `contest_video.py`'s
 `read_wav_metadata`) -- this was in practice reconstructing, with more
@@ -1565,7 +1570,7 @@ below — Alt+V to start/stop, off by default):
   video4linux2 + PulseAudio); `WEBCAM_DEVICE`/`WEBCAM_AUDIO_SOURCE` constants at the
   top of the file are the only things that need adjusting for a given machine (find
   with `v4l2-ctl --list-devices` / `pactl list short sources`). `-preset ultrafast`
-  keeps the encode cheap enough to run alongside rigctld polling and the UI for a
+  keeps the encode cheap enough to run alongside the radio/rotator threads and the UI for a
   multi-hour session without competing for CPU.
 - Stop sends `SIGINT` (not a hard kill) so ffmpeg finalizes the mp4 properly; a
   5 s `wait()` with a `terminate()` fallback guards against ffmpeg hanging. Also
@@ -1594,7 +1599,8 @@ below — Alt+V to start/stop, off by default):
   one more consumer of the same already-precise event log, not a new format.
 
 **Contest rules**:
-- Reads band/QRG/mode from rigctld; falls back to Alt+B/Alt+M (or `!band`/`!mode`) if rig offline
+- Reads band/QRG/mode from the radio via `icom_net` (push updates, no polling); falls
+  back to Alt+B/Alt+M (or `!band`/`!mode`) if the radio is offline
 - RST defaults: `59` for SSB/FM, `599` for CW
 - Serial auto-increments per band; all QSOs (including dups) get a serial
 - Dup check key: `(callsign, band, mode)` — 9 valid combos per station (3 bands × 3 modes)

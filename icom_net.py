@@ -594,6 +594,8 @@ class IcomNetRig:
         self._ctrl_sock: socket.socket | None = None
         self._civ_sock: socket.socket | None = None
         self._threads: list[threading.Thread] = []
+        self._send_lock = threading.Lock()
+        self._last_civ_rx = 0.0
 
     @property
     def band(self) -> str | None:
@@ -621,11 +623,23 @@ class IcomNetRig:
             except Exception:
                 pass
 
+    def last_rx_age(self) -> float:
+        """Seconds since anything arrived on the CI-V socket (inf before the
+        first packet). The radio pings this socket constantly even when idle,
+        so a growing age means the session is dead -- the liveness signal a
+        reconnect supervisor needs."""
+        with self._lock:
+            last = self._last_civ_rx
+        return float("inf") if last == 0.0 else time.monotonic() - last
+
     def on_civ_frame(self, callback) -> None:
         """callback(frame: bytes) fires for every inbound CI-V frame (sans
         FE FE/FD), before any interpretation -- lets callers observe ACKs
         (FB ok / FA rejected) and replies this client doesn't parse itself."""
         self._frame_listeners.append(callback)
+
+    def remove_civ_frame(self, callback) -> None:
+        self._frame_listeners.remove(callback)
 
     def send_cw(self, message: str) -> None:
         """Key the radio's own CW message sender (CI-V 0x17) -- the same
@@ -697,10 +711,9 @@ class IcomNetRig:
             self._best_effort_logout()
             raise
 
-    def _best_effort_logout(self) -> None:
-        self._stop.set()
-        for t in self._threads:
-            t.join(timeout=1.0)
+    def _send_token_deregister(self) -> None:
+        """Free our session slot on the radio -- an abandoned session blocks
+        reconnecting for tens of seconds (observed on real hardware)."""
         if getattr(self, "_tok", None) is not None and self._ctrl_sock is not None:
             try:
                 pkt = token_packet(
@@ -714,6 +727,12 @@ class IcomNetRig:
                 self._ctrl_sock.sendto(pkt, self._ctrl_addr)
             except OSError:
                 pass
+
+    def _best_effort_logout(self) -> None:
+        self._stop.set()
+        for t in self._threads:
+            t.join(timeout=1.0)
+        self._send_token_deregister()
         if self._civ_sock is not None:
             self._civ_sock.close()
             self._civ_sock = None
@@ -866,17 +885,20 @@ class IcomNetRig:
         raise IcomNetError(f"no {length}-byte reply from radio within {timeout}s")
 
     def _send_civ_command(self, cmd: int, data: bytes = b"") -> None:
-        frame = civ_frame(self._civ_addr, CIV_CONTROLLER_ADDR, cmd, data)
-        pkt = civ_data_packet(
-            self._civ_seq,
-            self._civ_local_id,
-            self._civ_remote_id,
-            self._civ_inner,
-            frame,
-        )
-        self._civ_seq += 1
-        self._civ_inner += 1
-        self._civ_sock.sendto(pkt, self._civ_addr_net)
+        # Locked: called both from _civ_loop and from caller threads (CW
+        # macros, clock sync) -- unlocked seq increments could collide.
+        with self._send_lock:
+            frame = civ_frame(self._civ_addr, CIV_CONTROLLER_ADDR, cmd, data)
+            pkt = civ_data_packet(
+                self._civ_seq,
+                self._civ_local_id,
+                self._civ_remote_id,
+                self._civ_inner,
+                frame,
+            )
+            self._civ_seq += 1
+            self._civ_inner += 1
+            self._civ_sock.sendto(pkt, self._civ_addr_net)
 
     def _ctrl_loop(self) -> None:
         last_idle = 0.0
@@ -932,13 +954,15 @@ class IcomNetRig:
         while not self._stop.is_set():
             try:
                 data, _ = self._civ_sock.recvfrom(4096)
+                with self._lock:
+                    self._last_civ_rx = time.monotonic()
                 payload = parse_civ_data_packet(data)
                 if payload is not None:
                     if last_data == 0.0:
                         self._civ_ready.set()
                     last_data = time.monotonic()
                     for frame in split_civ_frames(payload):
-                        for cb in self._frame_listeners:
+                        for cb in tuple(self._frame_listeners):
                             try:
                                 cb(frame)
                             except Exception:
@@ -1025,6 +1049,7 @@ class IcomNetRig:
             except OSError:
                 pass
             self._civ_sock.close()
+        self._send_token_deregister()
         if self._ctrl_sock is not None:
             self._ctrl_sock.close()
 
