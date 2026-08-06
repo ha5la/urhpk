@@ -15,7 +15,7 @@ Amateur radio contest toolset for the Puskás URH Kupa, plus a general-purpose
 | `puskas_harvester.py` | Pre-contest data collector; fetches all stations → `puskas-seen-stations.json` |
 | `puskas_visualizer.py` | Map and polar diagram from `puskas-seen-stations.json` |
 | `contest_video.py` | Annotated CW contest video from a timestamped recording + EDI log |
-| `hamlib_supervisor.py` | Starts/stops rigctld and rotctld based on USB device presence (inotify, no polling) |
+| `hamlib_supervisor.py` | Starts/stops rotctld based on USB device presence (inotify, no polling) |
 | `icom_net.py` | Direct Ethernet CI-V client for Icom radios (IC-9700 etc.), bypassing rigctld; instant push freq/mode updates, plus real spectrum-scope capture |
 | `scope_preview.py` | Standalone preview: renders an `icom_net.py --scope` recording into a waterfall video |
 | `run-recorded-contest-session.sh` | The contest-round entrypoint — recorded irssi + logger, plus rig/rotator supervision and the bridge in a background window |

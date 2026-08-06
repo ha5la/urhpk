@@ -7,7 +7,8 @@ Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
   plus rotctld integration; exports EDI files
 - `puskas_harvester.py` – pre-contest data collector; fetches all stations → `~/.puskas/puskas-seen-stations.json`
 - `puskas_visualizer.py` – map and polar diagram from `~/.puskas/puskas-seen-stations.json`
-- `hamlib_supervisor.py` – starts/stops rigctld and rotctld based on USB device presence (inotify)
+- `hamlib_supervisor.py` – starts/stops rotctld based on USB device presence (inotify);
+  used to manage rigctld too, until the rig moved to direct Ethernet (`icom_net`)
 - `icom_net.py` – direct Ethernet CI-V client for Icom radios (IC-9700), bypassing rigctld; instant
   push freq/mode updates instead of polling, plus real spectrum-scope sweep capture
 - `scope_preview.py` – standalone preview: renders a `.scope` recording into a waterfall video
@@ -122,16 +123,23 @@ Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
 - Sked commands:
   - `/msg CALL sked` (IRC PM) → sends sked via `/CQ CALL …` on KST, echoes NOTICE to channel
   - Sked text: `"Hi CALL, sked? Puskás URH Kupa – 1534 km, 305° – 144.174 MHz USB (JN97MX). 73 HA5LA"`
-  - Distance/bearing from live KST user list; QRG/mode from rigctld cache
+  - Distance/bearing from live KST user list; QRG/mode queried fresh at sked-composition
+    time (falling back to the poll cache) — see rig-state integration below
 - Local commands (not forwarded to KST, response NOTICE goes to `#on4kst`):
   - `!scatter CALL` — real-time airplane scatter check via OpenSky Network API
   - `!list` — lists online stations by distance and bearing
   - `!help` — lists available commands
-- rigctld integration (optional, no-op when rigctld not running):
-  - Background poller (`_rig_poller`) queries `RIGCTLD_HOST:RIGCTLD_PORT` every `RIGCTLD_POLL_S` (5 s)
-  - Caches latest `(rig_qrg, rig_mode)` on the `Bridge` object; sked reads the cache — zero latency
+- Rig-state integration (optional, no-op when nothing listens on 4532): speaks the
+  rigctld TCP dialect (`f`/`m`) to `localhost:4532`, but what normally serves that port
+  now is **`puskas_logger.py`'s built-in rig server** (answering from its push-fresh
+  `icom_net` cache), not Hamlib's rigctld — the port is an interface, either works.
+  - Background poller (`_rig_poller`) still fills a `(rig_qrg, rig_mode)` cache every
+    `RIGCTLD_POLL_S` (5 s) — used for the connect/disconnect NOTICEs and as a fallback
+  - Sked composition does a **fresh `fetch_rig_info()` query** instead of trusting the
+    cache: served from the logger's memory it costs microseconds, and a QSY made moments
+    before sending a sked shows the new QRG (cache would be up to 5 s stale). Falls back
+    to the cache when the query fails (server briefly gone)
   - Connect/disconnect events shown as NOTICE to own nick (irssi status window), not the channel
-  - To start rigctld: `rigctld -m MODEL -r /dev/ttyUSB0` (see Hamlib docs for MODEL number)
 
 irssi quick-start:
 ```
@@ -234,7 +242,7 @@ uv run puskas_visualizer.py [CALLSIGN LOCATOR]
 - Missed stations (in seen_stations but not worked) shown in red on map
 - Dependencies: `folium`, `matplotlib`, `numpy`
 
-## hamlib_supervisor.py – rigctld/rotctld USB-replug supervisor
+## hamlib_supervisor.py – rotctld USB-replug supervisor
 
 Problem this solves: `rigctld`/`rotctld` were started by hand, picking the device path
 (`/dev/ttyUSBn`) from shell history. If the USB connection drops (cable wiggle, radio
@@ -428,6 +436,14 @@ rig interface — instant, event-driven state, no rigctld involved.
   retry-cadence and deadlock findings above) are all about how a real radio's own
   session/sequence tracking behaves, which a fake server that just mirrors back
   whatever the client sends can't reproduce — those needed the real IC-9700.
+- **The radio holds only ONE live network session — a second connect is not refused, it
+  silently kills the first**: verified live with two concurrent `IcomNetRig` sessions —
+  the second came up fine while the first's CI-V data stream died the moment the second
+  started connecting, and did not recover even after the second closed (its own reopen
+  retries notwithstanding). Consequences: every consumer of radio state must go through
+  the one session owner (`puskas_logger.py` during contests — it serves other local
+  consumers, see its rig-server notes), and the `icom_net.py` CLI harness must never be
+  run while the logger is up — the two would fight over the session in a reconnect loop.
 - **rigctld-parity commands** — the full rigctld surface `puskas_logger.py` uses beyond
   freq/mode reads, as plain CI-V writes on the existing CI-V socket: `send_cw()` (0x17 +
   ASCII, 30-char limit), `stop_cw()` (0x17 + 0xFF), `set_clock()` (0x1A 0x05, IC-9700
@@ -1519,6 +1535,22 @@ Mid-session rig disconnect uses `_rig_manual` values as fallback (set by the wiz
 - **Alt+R** sends `P az 0` to rotctld to slew the rotator; fires in a background thread
 - To start rotctld: `rotctld -m MODEL -r /dev/ttyUSB0` (see Hamlib docs for MODEL number)
 
+**Rig server** (port 4532, always on): serves the rigctld TCP dialect (`f` → freq in
+Hz, `m` → raw dial mode + passband, offline → `RPRT -1`) from the push-fresh `_rig`
+cache — this is how `on4kst_irc_bridge.py` gets QRG/mode now that rigctld is gone,
+with zero bridge protocol changes (the port is an interface: a real rigctld could
+still serve it when the logger isn't running). Serves the *raw* mode (`USB`), not the
+contest-normalized one (`SSB`), matching real rigctld byte-for-byte. Binds localhost
+only; silently serves nothing if the port is already taken.
+
+**Scope recorder** (`YYMMDD-CALL.scope`, always on once the radio connects): records
+the radio's own spectrum sweeps via `enable_scope()`/`on_scope` to the `.scope` format
+`contest_video.py --scope` consumes. Lives in the logger because the radio holds only
+one network session (see icom_net's notes) — the CLI harness recorder can't run
+alongside the logger. Re-enabled on every reconnect (scope data output is
+session-scoped on the radio's side); file is lazily opened on the first sweep and
+flushed per sweep. ~30 sweeps/s on real hardware (~18 MB per 2 h session).
+
 **Telemetry recorder** (`*-telemetry.jsonl`, always on, one JSON line per
 second): `{"t", "freq_hz", "mode", "az"}` -- band/mode/QRG from the `icom_net`
 radio session, bearing from rotctld. No `ptt` field: it used to be queried and recorded
@@ -1624,7 +1656,7 @@ outside a round, debugging one component, etc.):
 ```
 uv run on4kst_irc_bridge.py   # IRC bridge (then connect irssi to localhost:6667)
 uv run puskas_logger.py       # log QSOs
-uv run hamlib_supervisor.py   # starts/stops rigctld+rotctld on USB replug
+uv run hamlib_supervisor.py   # starts/stops rotctld on USB replug
 ```
 
 ## Testing

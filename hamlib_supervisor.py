@@ -7,10 +7,11 @@
 """
 Hamlib daemon supervisor
 =========================
-Starts/stops rigctld and rotctld based on USB device presence, so a
-replugged/re-enumerated radio or rotator controller is picked up
-automatically instead of leaving a stale daemon holding a dead file
-descriptor (see CLAUDE.md for the background).
+Starts/stops rotctld based on USB device presence, so a replugged/
+re-enumerated rotator controller is picked up automatically instead of
+leaving a stale daemon holding a dead file descriptor (see CLAUDE.md for
+the background). Used to manage rigctld too, until the rig moved to
+direct Ethernet control (icom_net.py) with no serial daemon at all.
 
 No polling: uses inotify (via ctypes, no external dependency) on the
 parent directory of each configured device path, so a plug/unplug is
@@ -18,7 +19,7 @@ noticed the instant udev creates or removes the symlink.
 
 Each device path should be a *stable* symlink — either the distro's
 own `/dev/serial/by-id/...` entries (check with `ls /dev/serial/by-id/`
-before filling in RIG_DEVICE/ROT_DEVICE below) or a custom udev
+before filling in ROT_DEVICE below) or a custom udev
 SYMLINK+= rule, NOT a raw /dev/ttyUSBn path, since the kernel-assigned
 number is exactly what changes across a replug.
 
@@ -28,7 +29,7 @@ Usage:
     service — see run-recorded-contest-session.sh, which starts this in
     a tmux window alongside the logger/bridge and tears it down with the
     rest of the session. Handles SIGHUP as well as SIGTERM/SIGINT so
-    killing that tmux window/session stops rigctld/rotctld cleanly too.
+    killing that tmux window/session stops rotctld cleanly too.
 """
 
 from __future__ import annotations
@@ -46,14 +47,6 @@ from pathlib import Path
 # ============================================================
 # Configuration
 # ============================================================
-RIG_DEVICE = Path(
-    "/dev/serial/by-id/"
-    "usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_IC-9700_13013358_A-if00-port0"
-)
-RIG_MODEL = "3081"  # Icom IC-9700 (RIG_MODEL_IC9700)
-RIG_BAUD = "115200"
-RIGCTLD_PORT = 4532
-
 ROT_DEVICE = Path("/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0")
 ROT_MODEL = "603"  # Yaesu GS-232B-compatible (custom Arduino)
 ROT_BAUD = "9600"
@@ -143,21 +136,6 @@ class Daemon:
 def build_daemons() -> list[Daemon]:
     return [
         Daemon(
-            name="rigctld",
-            device=RIG_DEVICE,
-            cmd=[
-                "rigctld",
-                "-m",
-                RIG_MODEL,
-                "-r",
-                str(RIG_DEVICE),
-                "-s",
-                RIG_BAUD,
-                "-t",
-                str(RIGCTLD_PORT),
-            ],
-        ),
-        Daemon(
             name="rotctld",
             device=ROT_DEVICE,
             cmd=[
@@ -222,7 +200,7 @@ def main() -> None:
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
     # Killing the tmux window/session this runs in delivers SIGHUP (pty
-    # hangup), not SIGTERM — without this, rigctld/rotctld could be left
+    # hangup), not SIGTERM — without this, rotctld could be left
     # running orphaned instead of stopped via Daemon.stop().
     signal.signal(signal.SIGHUP, shutdown)
 
