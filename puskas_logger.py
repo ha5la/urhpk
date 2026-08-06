@@ -45,6 +45,7 @@ import icom_net
 # Configuration
 # ──────────────────────────────────────────────────────────────
 RADIO_HOST = "icom9700"  # credentials in ~/.netrc under this machine name
+RIG_SERVER_PORT = 4532  # serve rig state in rigctld dialect (for the bridge)
 RADIO_CONNECT_TIMEOUT_S = 5.0
 RADIO_STALE_S = 5.0  # no CI-V-socket traffic for this long = session dead
 RADIO_RECONNECT_S = 15.0  # quiet time the radio needs before accepting a new session
@@ -226,8 +227,15 @@ def _on_radio_update(freq_hz, mode, band) -> None:
     if freq_hz is None or mode is None:
         return
     with _rig_lock:
+        # freq_hz/raw_mode: what the rigctld-dialect server replies with --
+        # raw dial mode ("USB"), not the contest-normalized one ("SSB").
         _rig.update(
-            band=band, mode=_mode_str(mode), qrg=f"{freq_hz / 1e6:.3f}", online=True
+            band=band,
+            mode=_mode_str(mode),
+            qrg=f"{freq_hz / 1e6:.3f}",
+            online=True,
+            freq_hz=freq_hz,
+            raw_mode=mode,
         )
 
 
@@ -245,6 +253,10 @@ def _radio_thread():
             rig = icom_net.IcomNetRig(RADIO_HOST, user, password)
             rig.on_update(_on_radio_update)
             rig.connect(timeout=RADIO_CONNECT_TIMEOUT_S)
+            # Re-enabled on every (re)connect: scope data output is
+            # session-scoped on the radio's side.
+            rig.on_scope(_on_scope)
+            rig.enable_scope()
             with _rig_lock:
                 _radio["rig"] = rig
             while rig.last_rx_age() < RADIO_STALE_S:
@@ -253,7 +265,7 @@ def _radio_thread():
             pass
         with _rig_lock:
             _radio["rig"] = None
-            _rig.update(band="", mode="", qrg="", online=False)
+            _rig.update(band="", mode="", qrg="", online=False, freq_hz=0, raw_mode="")
         if rig is not None:
             try:
                 rig.close()
@@ -274,6 +286,80 @@ def current_rig() -> tuple[str, str, str, bool]:
         if _rig["online"]:
             return _rig["band"], _rig["mode"], _rig["qrg"], True
     return _rig_manual["band"], _rig_manual["mode"], "", False
+
+
+# ──────────────────────────────────────────────────────────────
+# Rig server — rigctld dialect on 4532, for on4kst_irc_bridge.py.
+# The radio holds only ONE network session (a second connect silently
+# kills the first — verified live), so the logger owns it and serves
+# other local consumers from its push-fresh cache. Replies are answered
+# from memory, so a live query costs microseconds — the bridge queries
+# at sked time instead of relying on a poll cache.
+# ──────────────────────────────────────────────────────────────
+
+
+def _rig_server_bind(port: int) -> socket.socket | None:
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        srv.bind(("127.0.0.1", port))
+    except OSError:
+        srv.close()
+        return None  # port taken (e.g. a real rigctld) — serve nothing
+    srv.listen(4)
+    return srv
+
+
+def _serve_rig_client(conn: socket.socket) -> None:
+    try:
+        with conn, conn.makefile("rb") as r:
+            for line in r:
+                cmd = line.strip()
+                with _rig_lock:
+                    online = _rig["online"]
+                    freq_hz = _rig.get("freq_hz", 0)
+                    raw_mode = _rig.get("raw_mode", "")
+                if cmd == b"f" and online:
+                    conn.sendall(f"{freq_hz}\n".encode())
+                elif cmd == b"m" and online:
+                    conn.sendall(f"{raw_mode}\n0\n".encode())
+                elif cmd == b"q":
+                    break
+                else:
+                    conn.sendall(b"RPRT -1\n")
+    except Exception:
+        pass
+
+
+def _rig_server_thread(srv: socket.socket) -> None:
+    while True:
+        try:
+            conn, _ = srv.accept()
+        except OSError:
+            return
+        threading.Thread(target=_serve_rig_client, args=(conn,), daemon=True).start()
+
+
+# ──────────────────────────────────────────────────────────────
+# Scope recorder — the radio's own spectrum sweeps to a .scope file
+# (contest_video.py --scope). Lives here because the logger owns the
+# radio's single network session; the icom_net CLI harness can't run
+# alongside it.
+# ──────────────────────────────────────────────────────────────
+_scope_rec: dict = {"path": None, "file": None}
+_scope_rec_lock = threading.Lock()
+
+
+def _on_scope(start_hz: int, end_hz: int, pixels: bytes) -> None:
+    with _scope_rec_lock:
+        if _scope_rec["path"] is None:
+            return
+        if _scope_rec["file"] is None:
+            _scope_rec["file"] = open(_scope_rec["path"], "ab")
+        icom_net.write_scope_record(
+            _scope_rec["file"], time.time(), start_hz, end_hz, pixels
+        )
+        _scope_rec["file"].flush()
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1864,6 +1950,15 @@ def main():
     t = threading.Thread(target=_radio_thread, daemon=True)
     t.start()
     threading.Thread(target=_rot_thread, daemon=True).start()
+    _rig_srv = _rig_server_bind(RIG_SERVER_PORT)
+    if _rig_srv is not None:
+        threading.Thread(
+            target=_rig_server_thread, args=(_rig_srv,), daemon=True
+        ).start()
+    _scope_rec["path"] = Path(
+        f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{lb.my_call}.scope"
+    )
+    print(f"Scope:     {_scope_rec['path']} (written once the radio connects)")
     _telem_path = Path(
         f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{lb.my_call}-telemetry.jsonl"
     )

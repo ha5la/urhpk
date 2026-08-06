@@ -1391,3 +1391,93 @@ class TestRadioUpdate:
     def test_cw_reverse_mode_maps_to_cw(self):
         # icom_net spells reverse CW "CW-R" (rigctld spelled it "CWR").
         assert pl._mode_str("CW-R") == "CW"
+
+
+class TestRigServer:
+    """The logger's rigctld-dialect TCP server (port 4532) -- what
+    on4kst_irc_bridge.py polls now that rigctld itself is gone."""
+
+    def _client(self, port):
+        import socket
+
+        s = socket.create_connection(("127.0.0.1", port), timeout=2.0)
+        return s, s.makefile("rb")
+
+    def _serve(self):
+        import threading
+
+        srv = pl._rig_server_bind(0)
+        assert srv is not None
+        threading.Thread(target=pl._rig_server_thread, args=(srv,), daemon=True).start()
+        return srv, srv.getsockname()[1]
+
+    def test_serves_f_and_m_like_rigctld(self):
+        # Exactly the byte flow on4kst_irc_bridge.fetch_rig_info() produces:
+        # "f\nm\n", then read freq line + mode line (passband line ignored).
+        with _rig_lock:
+            _rig.update(
+                band="2M",
+                mode="CW",
+                qrg="144.080",
+                online=True,
+                freq_hz=144_080_000,
+                raw_mode="CW",
+            )
+        srv, port = self._serve()
+        try:
+            s, r = self._client(port)
+            s.sendall(b"f\nm\n")
+            assert r.readline() == b"144080000\n"
+            assert r.readline() == b"CW\n"
+            assert r.readline() == b"0\n"
+            s.close()
+        finally:
+            srv.close()
+            with _rig_lock:
+                _rig.update(band="", mode="", qrg="", online=False)
+
+    def test_replies_rprt_error_when_radio_offline(self):
+        with _rig_lock:
+            _rig.update(band="", mode="", qrg="", online=False)
+        srv, port = self._serve()
+        try:
+            s, r = self._client(port)
+            s.sendall(b"f\n")
+            assert r.readline() == b"RPRT -1\n"
+            s.close()
+        finally:
+            srv.close()
+
+    def test_bind_yields_none_when_port_taken(self):
+        srv = pl._rig_server_bind(0)
+        assert srv is not None
+        try:
+            assert pl._rig_server_bind(srv.getsockname()[1]) is None
+        finally:
+            srv.close()
+
+
+class TestScopeRecorder:
+    def test_on_scope_appends_records_readable_by_icom_net(self, tmp_path):
+        import icom_net
+
+        path = tmp_path / "test.scope"
+        pl._scope_rec["path"] = path
+        try:
+            pl._on_scope(145_000_000, 146_000_000, bytes(range(100)))
+            pl._on_scope(432_000_000, 433_000_000, bytes(100))
+            records = icom_net.read_scope_records(path)
+            assert len(records) == 2
+            ts0, start0, end0, px0 = records[0]
+            assert (start0, end0, px0) == (145_000_000, 146_000_000, bytes(range(100)))
+            _, start1, end1, px1 = records[1]
+            assert (start1, end1, px1) == (432_000_000, 433_000_000, bytes(100))
+            assert ts0 > 0
+        finally:
+            if pl._scope_rec["file"] is not None:
+                pl._scope_rec["file"].close()
+            pl._scope_rec.update(path=None, file=None)
+
+    def test_on_scope_is_a_noop_without_a_configured_path(self):
+        pl._on_scope(145_000_000, 146_000_000, b"\x01\x02")
+        assert pl._scope_rec["file"] is None
