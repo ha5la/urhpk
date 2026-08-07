@@ -2930,3 +2930,46 @@ class TestHudChromeSplit:
         img = cv.draw_hud_frame(cv.hud_demo_state(), background=art)
         x, y, w, h = cv.HUD_SLOTS["score"]
         assert np.asarray(img.crop((x, y, x + w, y + h - 60)))[:, :, 0].max() > 100
+
+
+class TestMeterCalibration:
+    def test_vd_matches_the_multimeter_reading_it_was_checked_against(self):
+        # Raw 152 was measured on the real radio while a multimeter read
+        # 13.78 V -- Icom's own Vd curve lands within 1%.
+        assert abs(cv.vd_volts(152) - 13.78) < 0.15
+
+    def test_po_and_swr_hit_their_published_calibration_points(self):
+        assert cv.po_percent(213) == 100.0
+        assert cv.po_percent(143) == 50.0
+        assert cv.swr_ratio(0) == 1.0
+        assert cv.swr_ratio(48) == 1.5
+        assert cv.swr_ratio(120) == 3.0
+
+    def test_id_uses_the_measured_anchor_not_icoms_curve(self):
+        # Icom's IC-7300 curve gives 17.6 A for raw 171; the PSU showed 14 A
+        # total less a ~2 A receive baseline, so ~12 A of real PA drain.
+        assert cv.id_amps(171) == 12.0
+        assert cv.id_amps(0) == 0.0
+
+    def test_a_missing_reading_stays_missing_rather_than_becoming_zero(self):
+        # An old recording has no meter data at all; the PWR panel must show
+        # its placeholder rather than a confident 0.0 V.
+        assert cv.vd_volts(None) is None
+        assert cv.id_amps(None) is None
+
+    def test_meters_reach_the_hud_state(self, tmp_path):
+        f = tmp_path / "t.jsonl"
+        f.write_text(
+            '{"t": "2026-08-03T18:00:30.000000Z", "vd": 152, "id": 171,'
+            ' "swr": 28, "po": 213}\n'
+        )
+        telemetry = cv.load_telemetry(str(f))
+        assert (telemetry[0].vd, telemetry[0].id_raw) == (152, 171)
+        tl = cv.HudTimeline(
+            segs=[_hud_seg()],
+            offset_h=2,
+            meter_marks=cv.hud_meter_marks(telemetry, [_hud_seg()], 2),
+        )
+        assert tl.at(20.0).vd is None  # before the first reading
+        assert abs(tl.at(60.0).vd - 13.78) < 0.15
+        assert tl.at(60.0).id_a == 12.0

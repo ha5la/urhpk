@@ -295,6 +295,43 @@ def parse_scope_frame(frame: bytes) -> dict | None:
 
 
 # ============================================================
+# Meters (command 0x15)
+#
+# Polled, not pushed: confirmed from a live wfview packet capture against
+# this radio, where the only unsolicited traffic is freq/mode Transceive
+# frames and scope sweeps -- wfview queries the S-meter ~19 times a second
+# rather than being told. So there is no push option to find here, and a
+# recorder has to ask.
+#
+# Raw values are 0-255, sent as four BCD digits across two bytes. They are
+# recorded raw and converted only at render time (see contest_video.py's
+# meter curves): the calibration is the shakiest part of this data -- the
+# IC-7300's published Id curve is ~1.5x off against a measured 12 A -- and
+# raw values keep a better curve a one-line change rather than a ruined
+# recording.
+# ============================================================
+
+CIV_CMD_METER = 0x15
+# Deliberately not the S-meter (0x02): contest_video derives signal level
+# from the scope recording's own centre bins, which costs no extra polling
+# and is already captured. These four have no other source.
+CIV_METERS = {0x11: "po", 0x12: "swr", 0x15: "vd", 0x16: "id"}
+METER_POLL_S = 0.5  # these move slowly; the radio's own UI polls far faster
+METER_SETTLE_S = 0.2  # time allowed for replies before a snapshot is reported
+
+
+def parse_meter_frame(frame: bytes) -> tuple[str, int] | None:
+    """Parse a meter reply (cmd 0x15) into (name, raw 0-255), or None if the
+    frame is not one of the meters in CIV_METERS."""
+    if len(frame) < 6 or frame[2] != CIV_CMD_METER:
+        return None
+    name = CIV_METERS.get(frame[3])
+    if name is None:
+        return None
+    return name, _bcd_byte(frame[4]) * 100 + _bcd_byte(frame[5])
+
+
+# ============================================================
 # Wire packet layer
 #
 # All packets share a 16-byte outer envelope (len/type/seq LE, then
@@ -587,6 +624,10 @@ class IcomNetRig:
         self.scope_end_hz: int | None = None
         self.scope_pixels: bytes | None = None
         self._scope_listeners: list = []
+        self._meters: dict[str, int] = {}
+        self._meter_cbs: list = []
+        self._meter_thread: threading.Thread | None = None
+        self._meter_interval = METER_POLL_S
         self._scope_pending_range: tuple[int, int] | None = None
         self._scope_buf = bytearray()
 
@@ -658,6 +699,49 @@ class IcomNetRig:
         minute boundary (as puskas_logger's Alt+T already does)."""
         for payload in civ_clock_payloads(now):
             self._send_civ_command(CIV_CMD_SET_PARAM, payload)
+
+    def on_meters(self, callback) -> None:
+        """callback(dict) once per poll cycle, with the latest raw readings."""
+        self._meter_cbs.append(callback)
+
+    def enable_meters(self, interval: float = METER_POLL_S) -> None:
+        """Start polling the meters in CIV_METERS.
+
+        Off unless asked for, like enable_scope: it is the only outbound
+        traffic this client generates in steady state, and a consumer that
+        doesn't record meters shouldn't pay for it. Must be re-armed after a
+        reconnect, since the poll thread belongs to the session."""
+        if self._meter_thread is not None and self._meter_thread.is_alive():
+            return
+        self._meter_interval = interval
+        self._meter_thread = threading.Thread(target=self._meter_loop, daemon=True)
+        self._meter_thread.start()
+
+    def _meter_loop(self) -> None:
+        """Ask for every meter, let the replies land in _civ_loop, then report
+        one snapshot per cycle.
+
+        Reporting a snapshot rather than firing per reply is what lets a
+        recorder write one line per cycle instead of up to four, and keeps the
+        four values in a record genuinely simultaneous."""
+        while not self._stop.is_set():
+            for sub in CIV_METERS:
+                try:
+                    self._send_civ_command(CIV_CMD_METER, bytes([sub]))
+                except Exception:
+                    break
+            if self._stop.wait(METER_SETTLE_S):
+                return
+            with self._lock:
+                snapshot = dict(self._meters)
+            if snapshot:
+                for cb in tuple(self._meter_cbs):
+                    try:
+                        cb(snapshot)
+                    except Exception:
+                        pass
+            if self._stop.wait(max(0.0, self._meter_interval - METER_SETTLE_S)):
+                return
 
     def on_scope(self, callback) -> None:
         """callback(start_hz, end_hz, pixels: bytes) fires on each complete
@@ -970,6 +1054,11 @@ class IcomNetRig:
                         scope = parse_scope_frame(frame)
                         if scope is not None:
                             self._apply_scope_frame(scope)
+                            continue
+                        meter = parse_meter_frame(frame)
+                        if meter is not None:
+                            with self._lock:
+                                self._meters[meter[0]] = meter[1]
                             continue
                         update = parse_civ_update(frame)
                         if update is not None:

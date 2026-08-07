@@ -549,9 +549,23 @@ operator was watching, including signals never within earshot.
   full contest_video.py render). Both read the format via `icom_net.read_scope_records`,
   the format's single owner — `contest_video.py` doesn't reimplement the parser.
 
-### Meters and the rest of the CI-V surface (measured, not yet implemented)
+### Meters and the rest of the CI-V surface
 
-Findings from three `dumpcap` captures of a live **wfview** session against this radio
+`enable_meters()` polls Po/SWR/Vd/Id (`CIV_METERS`) at `METER_POLL_S` (0.5 s) and reports
+one snapshot per cycle via `on_meters`, rather than firing per reply — that keeps the four
+values in a record genuinely simultaneous and lets a recorder write one line per cycle
+instead of four. Off unless asked for, like `enable_scope`, and re-armed on every reconnect
+since the poll thread belongs to its session. The **S-meter (`15 02`) is deliberately not
+polled**: `contest_video.py` derives signal level from the scope recording's own centre
+bins, which costs no extra traffic and is already captured.
+
+`puskas_logger.py` writes raw readings into the event telemetry on change
+(`_telemetry_meter_record`). Unlike the old 1 Hz rig sampler this genuinely has to be
+sampled — the radio only reports meters when asked — so there is no lag-free source being
+needlessly re-sampled. While receiving, Po/SWR/Id sit at a flat zero and Vd barely moves,
+so change-only keeps an idle hour nearly silent.
+
+The findings behind all of it, from three `dumpcap` captures of a live **wfview** session against this radio
 (same technique as the scope research above — wfview is a known-good client, so capturing
 it answers "how does a working implementation do this" without needing our own session,
 and crucially without taking the radio's single session slot away from it). Nothing here

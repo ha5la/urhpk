@@ -1332,6 +1332,12 @@ class TelemetrySample:
     freq_hz: int | None
     mode: str | None
     az: float | None
+    # Raw 0-255 meter readings, converted only here at render time -- see the
+    # meter curves below for why the logger records them uncalibrated.
+    vd: int | None = None
+    id_raw: int | None = None
+    swr: int | None = None
+    po: int | None = None
     # An absent "az" key and an explicit `"az": null` both land as az=None but
     # mean opposite things -- silence about the rotator (a rig event) versus a
     # report that it went offline. Only the latter ends az's carry-forward.
@@ -1383,6 +1389,10 @@ def load_telemetry(path: str) -> list[TelemetrySample]:
                 rec.get("mode"),
                 rec.get("az"),
                 az_offline="az" in rec and rec["az"] is None,
+                vd=rec.get("vd"),
+                id_raw=rec.get("id"),
+                swr=rec.get("swr"),
+                po=rec.get("po"),
             )
         )
     return samples
@@ -2497,6 +2507,75 @@ def hud_s_marks(
     return marks
 
 
+# --- meter calibration ------------------------------------------------------
+#
+# The logger records raw 0-255 meter readings and conversion happens here, at
+# render time, deliberately: this is the least trustworthy data in the whole
+# pipeline, and keeping it raw on disk makes a corrected curve a one-line
+# change rather than a recording that has to be thrown away.
+#
+# Vd, SWR and Po use Icom's own published calibration points, and Vd was
+# checked against a multimeter on this radio -- raw 152 converts to 13.66 V
+# against a measured 13.78 V, 0.9% out. Po's 100% point was confirmed too
+# (raw 213 during a full-power transmission).
+#
+# Id is the exception and is NOT Icom's curve: theirs (0/97/146/241 ->
+# 0/10/15/25 A) reads 17.6 A for the raw 171 measured here, against ~12 A of
+# real PA drain (14 A total on the PSU less the radio's ~2 A receive
+# baseline). A single transmission can anchor a straight line through the
+# operating point but cannot resolve the curve's shape, so low readings are
+# the least trustworthy part of the least trustworthy data.
+_VD_CURVE = [(0, 0.0), (13, 10.0), (241, 16.0)]
+_ID_CURVE = [(0, 0.0), (171, 12.0)]
+_SWR_CURVE = [(0, 1.0), (48, 1.5), (80, 2.0), (120, 3.0)]
+_PO_CURVE = [(0, 0.0), (143, 50.0), (213, 100.0)]
+
+
+def _meter_value(curve: list[tuple[int, float]], raw: int | None) -> float | None:
+    """Piecewise-linear lookup, extrapolating from the last segment above the
+    curve's top point (Icom's own points stop short of full scale)."""
+    if raw is None:
+        return None
+    for (x0, y0), (x1, y1) in zip(curve, curve[1:]):
+        if raw <= x1 or (x1, y1) == curve[-1]:
+            return y0 + (raw - x0) * (y1 - y0) / (x1 - x0)
+    return curve[-1][1]
+
+
+def vd_volts(raw: int | None) -> float | None:
+    return _meter_value(_VD_CURVE, raw)
+
+
+def id_amps(raw: int | None) -> float | None:
+    return _meter_value(_ID_CURVE, raw)
+
+
+def swr_ratio(raw: int | None) -> float | None:
+    return _meter_value(_SWR_CURVE, raw)
+
+
+def po_percent(raw: int | None) -> float | None:
+    return _meter_value(_PO_CURVE, raw)
+
+
+def hud_meter_marks(
+    telemetry: list[TelemetrySample], segs: list[Segment], offset_h: int
+) -> list[tuple[float, TelemetrySample]]:
+    """(video_t, sample) for every telemetry line that carries meter readings.
+
+    Meters are change-only in the recording, like everything else in that
+    file, so a mark holds until the next one -- there is no staleness horizon
+    the way the scope-derived S-meter has, because an unchanging supply
+    voltage is a real reading rather than a gap in the data."""
+    marks = [
+        (audio_time_for(t.t + timedelta(hours=offset_h), segs), t)
+        for t in telemetry
+        if t.vd is not None or t.id_raw is not None
+    ]
+    marks.sort(key=lambda m: m[0])
+    return marks
+
+
 def wall_time_at(
     t: float, segs: list[Segment], starts: list[float] | None = None
 ) -> datetime | None:
@@ -2526,6 +2605,7 @@ class HudTimeline:
     target_spans: list[tuple[float, float, float]] = field(default_factory=list)
     state_events: list[tuple[float, float, SegState]] = field(default_factory=list)
     s_marks: list[tuple[float, float]] = field(default_factory=list)
+    meter_marks: list[tuple[float, TelemetrySample]] = field(default_factory=list)
     stream: list[tuple[float, str, bool]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -2534,6 +2614,7 @@ class HudTimeline:
         self._target_t = [s[0] for s in self.target_spans]
         self._state_t = [e[0] for e in self.state_events]
         self._s_t = [m[0] for m in self.s_marks]
+        self._meter_t = [m[0] for m in self.meter_marks]
         self._ticker_t = [e[0] for e in self.stream]
         self._ticker_texts = ticker_texts(self.stream, HUD_TICKER_CHARS)
 
@@ -2573,6 +2654,12 @@ class HudTimeline:
         if m and t - self.s_marks[m - 1][0] <= HUD_S_HOLD_S:
             st.s_level = self.s_marks[m - 1][1]
 
+        q = bisect.bisect_right(self._meter_t, t)
+        if q:
+            sample = self.meter_marks[q - 1][1]
+            st.vd = vd_volts(sample.vd)
+            st.id_a = id_amps(sample.id_raw)
+
         p = bisect.bisect_right(self._ticker_t, t)
         if p and t - self._ticker_t[p - 1] <= TICKER_HOLD_S:
             st.ticker = self._ticker_texts[p - 1]
@@ -2588,6 +2675,7 @@ def build_hud_timeline(
     state_events: list[tuple[float, float, SegState]] | None = None,
     scope_records: list[tuple[float, int, int, bytes]] | None = None,
     long_cw_spans: list[tuple[float, float, list[CharEvent]]] | None = None,
+    telemetry: list[TelemetrySample] | None = None,
 ) -> HudTimeline:
     return HudTimeline(
         segs=segs,
@@ -2596,6 +2684,7 @@ def build_hud_timeline(
         target_spans=hud_target_spans(qsos, windows, my_loc),
         state_events=state_events or [],
         s_marks=hud_s_marks(scope_records or [], segs, offset_h),
+        meter_marks=hud_meter_marks(telemetry or [], segs, offset_h),
         stream=ticker_stream(ticker_chunks(segs, state_events, long_cw_spans)),
     )
 
@@ -3803,6 +3892,7 @@ def main() -> None:
             state_events=state_events,
             scope_records=scope_records,
             long_cw_spans=long_cw_spans,
+            telemetry=telemetry,
         )
         state = timeline.at(args.hud_preview_t)
         draw_hud_frame(state, background=hud_bg).save(args.hud_preview)

@@ -258,10 +258,13 @@ def _radio_thread():
             rig = icom_net.IcomNetRig(RADIO_HOST, user, password)
             rig.on_update(_on_radio_update)
             rig.connect(timeout=RADIO_CONNECT_TIMEOUT_S)
-            # Re-enabled on every (re)connect: scope data output is
-            # session-scoped on the radio's side.
+            # Both re-enabled on every (re)connect: scope data output is
+            # session-scoped on the radio's side, and the meter poller is a
+            # thread belonging to the session it was started on.
             rig.on_scope(_on_scope)
             rig.enable_scope()
+            rig.on_meters(_on_radio_meters)
+            rig.enable_meters()
             with _rig_lock:
                 _radio["rig"] = rig
             while rig.last_rx_age() < RADIO_STALE_S:
@@ -539,6 +542,7 @@ def _clock_sync() -> None:
 
 _telem: dict = {"fh": None}
 _telem_lock = threading.Lock()
+_telem_meters: dict = {"last": None}
 
 
 def _utc_stamp(now: datetime) -> str:
@@ -571,6 +575,33 @@ def _telemetry_rig_record(now: datetime, freq_hz: int | None, mode: str | None) 
     disagreement" came from — it was this logger quantizing, not two sources
     reading the rig differently."""
     return {"t": _utc_stamp(now), "freq_hz": freq_hz, "mode": mode}
+
+
+def _telemetry_meter_record(now: datetime, meters: dict) -> dict:
+    """Raw meter readings, 0-255 exactly as the radio reports them.
+
+    Deliberately not converted to volts/amps/SWR here. The calibration is the
+    least trustworthy part of this data -- the IC-7300's published Id curve
+    reads ~1.5x high against a measured 12 A on this radio -- so the raw
+    numbers are recorded and contest_video.py converts at render time, which
+    makes a better curve a one-line change instead of a ruined recording."""
+    rec = {"t": _utc_stamp(now)}
+    rec.update({name: meters[name] for name in sorted(meters)})
+    return rec
+
+
+def _on_radio_meters(meters: dict) -> None:
+    """One line per *change*, matching the rest of the telemetry stream.
+
+    Unlike freq/mode this genuinely has to be sampled -- the radio only
+    reports meters when asked (confirmed on the wire) -- so there is no
+    lag-free source being needlessly re-sampled here, which was the objection
+    to the old 1 Hz rig sampler. While receiving, Po/SWR/Id sit at a flat zero
+    and Vd barely moves, so change-only keeps an idle hour nearly silent."""
+    if meters == _telem_meters["last"]:
+        return
+    _telem_meters["last"] = dict(meters)
+    _telemetry_write(_telemetry_meter_record(datetime.now(timezone.utc), meters))
 
 
 def _telemetry_rot_record(now: datetime, az: float | None) -> dict:
