@@ -2626,11 +2626,14 @@ HUD_SLOTS: dict[str, tuple[int, int, int, int]] = {
     "qsos": (288, 10, 140, 240),
     "freq": (436, 10, 300, 240),
     "meter": (744, 10, 140, 240),
-    "face": (892, 30, 200, 200),
-    "compass": (1100, 10, 200, 240),
-    "pwr": (1308, 10, 140, 240),
-    "stats": (1456, 10, 220, 240),
-    "ticker": (1684, 10, 226, 240),
+    "face": (892, 10, 190, 240),
+    "compass": (1090, 10, 190, 240),
+    # PWR and STATS are half-height so the CW ticker can span underneath them,
+    # matching the artwork -- a full-height ticker column of its own left it
+    # far too tall and narrow for 16 characters to be legible.
+    "pwr": (1288, 10, 190, 150),
+    "stats": (1486, 10, 424, 150),
+    "ticker": (1288, 168, 622, 82),
 }
 
 _HUD_FONTS: dict[tuple[int, bool], ImageFont.FreeTypeFont] = {}
@@ -2689,6 +2692,61 @@ def _fit_font(text: str, max_w: int, size: int, bold: bool = True):
         size = max(6, int(size * 0.92))
         font = _hud_font(size, bold)
     return font
+
+
+# Seven-segment digits come from DSEG7 (Debian's fonts-dseg, SIL OFL) rather
+# than being drawn as polygons -- an earlier version built each segment by
+# hand to avoid a font dependency, but the package is packaged, the glyphs are
+# better than hand-rolled ones, and it removed ~120 lines of geometry.
+# Unlit segments are deliberately *not* drawn. A dim all-segments layer
+# behind the value is how a real LED panel looks, and it was tried -- but the
+# artwork this HUD copies shows clean numerals, and in practice the ghost
+# behind a '1' (which lights only its two right-hand bars) read as a digit
+# being clipped by the panel edge rather than as an unlit cell.
+DSEG_FONT_PATH = "/usr/share/fonts/truetype/dseg/DSEG7Classic-Bold.ttf"
+# DSEG14 adds letters, for the rows that mix a caption into the value.
+DSEG14_FONT_PATH = "/usr/share/fonts/truetype/dseg/DSEG14Classic-Bold.ttf"
+
+_DSEG_FONTS: dict[tuple[str, int], ImageFont.FreeTypeFont] = {}
+
+
+def _dseg_font(size: int, path: str = DSEG_FONT_PATH) -> ImageFont.FreeTypeFont:
+    if (path, size) not in _DSEG_FONTS:
+        _DSEG_FONTS[(path, size)] = ImageFont.truetype(path, size)
+    return _DSEG_FONTS[(path, size)]
+
+
+def _all_segments(text: str) -> str:
+    """`text` with every segment lit. '.' and ':' have no advance width of
+    their own in DSEG7 (they overlay the preceding cell), so keeping them
+    keeps the lit and unlit strings exactly the same width."""
+    return "".join(ch if ch in ".: " else "8" for ch in text)
+
+
+def _seven_seg(
+    draw, text, x, y, max_w, max_h, colour, anchor="mm", path=DSEG_FONT_PATH
+) -> float:
+    """Draw `text` as segment digits, scaled down to fit max_w x max_h, and
+    return the rendered width.
+
+    Positioned by the *all-lit* string's box rather than by the value's own:
+    a value containing '-' (e.g. the "--.-" placeholder) has a box only as
+    tall as the middle segment, so anchoring on it would float the dashes
+    well above where the digits they replace would sit."""
+    if not text:
+        return 0.0
+    box = _all_segments(text)
+    size = max(6, round(max_h))
+    while True:
+        font = _dseg_font(size, path)
+        left, top, right, bottom = draw.textbbox((0, 0), box, font=font)
+        w, h = right - left, bottom - top
+        if size <= 6 or (w <= max_w and h <= max_h):
+            break
+        size = max(6, int(size * 0.93))
+    ax = x - w / 2 if anchor == "mm" else x - w if anchor == "rm" else x
+    draw.text((ax, y - h / 2 - top), text, font=font, fill=colour)
+    return w
 
 
 def _label(
@@ -2782,9 +2840,10 @@ def draw_hud_frame(
     def fs(px: float) -> int:
         return max(6, round(px * sx))
 
-    # Every readout is fitted to its own panel width (see _fit_font): the
-    # score gains a digit partway through a contest and the ticker's content
-    # is never a fixed width, so a fixed point size would overflow.
+    # Numeric readouts are seven-segment (see _seven_seg); text labels and
+    # the mixed-content ticker use the mono font, fitted to their own panel
+    # width (see _fit_font) since nothing here has a fixed width -- the score
+    # gains a digit partway through a contest.
     def iw(w: int) -> int:
         return w - fs(24)
 
@@ -2794,17 +2853,17 @@ def draw_hud_frame(
     colour = tuple(
         round(c + (255 - c) * state.score_flash) for c in HUD_RED
     )  # washes toward white at the moment of a QSO
-    _big(draw, x + w // 2, y + fs(46), f"{state.score}", fs(120), colour, iw(w))
+    _seven_seg(draw, f"{state.score}", x + w // 2, y + fs(96), iw(w), fs(112), colour)
     _label(draw, x + w // 2, y + h - fs(48), "SCORE", fs(30), iw(w))
 
     x, y, w, h = slots["qsos"]
-    _big(draw, x + w // 2, y + fs(46), f"{state.qsos}", fs(120), HUD_RED, iw(w))
+    _seven_seg(draw, f"{state.qsos}", x + w // 2, y + fs(96), iw(w), fs(112), HUD_RED)
     _label(draw, x + w // 2, y + h - fs(48), "QSOS", fs(30), iw(w))
 
     # --- QRG + band/mode chips
     x, y, w, h = slots["freq"]
     qrg = f"{state.freq_hz / 1e6:.3f}" if state.freq_hz else "---.---"
-    _big(draw, x + w // 2, y + fs(14), qrg, fs(58), HUD_AMBER, iw(w))
+    _seven_seg(draw, qrg, x + w // 2, y + fs(42), iw(w), fs(58), HUD_AMBER)
     _label(draw, x + w // 2, y + fs(78), "MHz", fs(24), iw(w))
     _chips(
         draw,
@@ -2846,7 +2905,7 @@ def draw_hud_frame(
     # bearing to the station being worked, so the swing onto target is visible.
     x, y, w, h = slots["compass"]
     r = min(w, h) // 2 - fs(22)
-    cx, cy = x + w // 2, y + h // 2 - fs(14)
+    cx, cy = x + w // 2, y + h // 2 - fs(18)
     draw.ellipse(
         [cx - r, cy - r, cx + r, cy + r], fill=(12, 11, 10), outline=HUD_BEVEL_HI
     )
@@ -2872,38 +2931,69 @@ def draw_hud_frame(
         )
     if state.rot_az is not None:
         _needle(draw, cx, cy, r - fs(26), state.rot_az, HUD_RED)
-    rot = f"{round(state.rot_az):03d}\u00b0" if state.rot_az is not None else "---"
-    _big(draw, cx, y + h - fs(52), rot, fs(32), HUD_RED, iw(w))
+    rot = f"{round(state.rot_az):03d}" if state.rot_az is not None else "---"
+    # DSEG7 has no degree glyph, so it is drawn alongside in the mono face and
+    # the digits are shifted left by half its width to keep the pair centred.
+    deg_w = fs(18) if state.rot_az is not None else 0
+    rot_w = _seven_seg(
+        draw, rot, cx - deg_w / 2, y + fs(194), iw(w) - deg_w, fs(34), HUD_RED
+    )
+    if deg_w:
+        draw.text(
+            (cx - deg_w / 2 + rot_w / 2 + fs(4), y + fs(194)),
+            "\u00b0",
+            font=_hud_font(fs(22), bold=False),
+            fill=HUD_RED,
+            anchor="lm",
+        )
+    _label(draw, cx, y + h - fs(26), "ROT", fs(22), iw(w))
 
-    # --- PWR: supply volts + PA current. No recording carries these yet --
-    # the radio only reports them when polled, which the logger doesn't do
-    # yet -- so this renders placeholders rather than being hidden, keeping
-    # the layout stable between old and new recordings.
+    # --- PWR: supply volts + PA current, units on the same line as the value
+    # to keep the panel short enough for the ticker to fit underneath. No
+    # recording carries these yet -- the radio only reports them when polled,
+    # which the logger doesn't do -- so this renders placeholders rather than
+    # hiding, which would shift the layout between old and new recordings.
     x, y, w, h = slots["pwr"]
-    vd = f"{state.vd:.1f}" if state.vd is not None else "--.-"
-    id_a = f"{state.id_a:.1f}" if state.id_a is not None else "--.-"
-    _big(draw, x + w // 2, y + fs(16), vd, fs(50), HUD_RED, iw(w))
-    _label(draw, x + w // 2, y + fs(70), "V", fs(24), iw(w))
-    _big(draw, x + w // 2, y + fs(106), id_a, fs(50), HUD_RED, iw(w))
-    _label(draw, x + w // 2, y + fs(160), "A", fs(24), iw(w))
-    _label(draw, x + w // 2, y + h - fs(48), "PWR", fs(28), iw(w))
-
-    # --- stats stack
-    x, y, w, h = slots["stats"]
-    utc = state.utc.strftime("%H:%M:%S") if state.utc else "--:--:--"
-    for i, text in enumerate(
+    for i, (value, unit) in enumerate(
         [
-            f"{utc} UTC",
-            f"RATE {state.rate_per_h:.0f}/h",
-            f"BEST {state.best_km} KM",
+            (f"{state.vd:.1f}" if state.vd is not None else "--.-", "V"),
+            (f"{state.id_a:.1f}" if state.id_a is not None else "--.-", "A"),
         ]
     ):
+        row_cy = y + fs(40) + i * fs(50)
+        _seven_seg(
+            draw, value, x + w // 2 - fs(14), row_cy, iw(w) - fs(28), fs(40), HUD_RED
+        )
         draw.text(
-            (x + w // 2, y + fs(44) + i * fs(76)),
-            text,
-            font=_fit_font(text, iw(w), fs(30)),
-            fill=HUD_RED,
-            anchor="mm",
+            (x + w - fs(14), row_cy),
+            unit,
+            font=_hud_font(fs(24), bold=False),
+            fill=HUD_LABEL,
+            anchor="rm",
+        )
+    _label(draw, x + w // 2, y + h - fs(26), "PWR", fs(22), iw(w))
+
+    # --- stats: a small mono caption on the left, the value in segments on
+    # the right, so the units live in the caption and the numbers stay big.
+    x, y, w, h = slots["stats"]
+    utc = state.utc.strftime("%H:%M:%S") if state.utc else "--:--:--"
+    rows = [
+        # Double spaces: DSEG14's space is only ~a quarter of a cell wide, so
+        # a single one leaves the caption jammed against the value.
+        f"{utc}  UTC",
+        f"RATE  {state.rate_per_h:.0f}  H",
+        f"ODX  {state.best_km}  KM",
+    ]
+    for i, row in enumerate(rows):
+        _seven_seg(
+            draw,
+            row,
+            x + w // 2,
+            y + fs(30) + i * fs(46),
+            iw(w),
+            fs(34),
+            HUD_RED,
+            path=DSEG14_FONT_PATH,
         )
 
     # --- CW ticker: fixed HUD_TICKER_CHARS-wide slot, right-aligned so new
@@ -2911,13 +3001,13 @@ def draw_hud_frame(
     # re-centring on every keyed letter.
     x, y, w, h = slots["ticker"]
     draw.text(
-        (x + w // 2, y + h // 2 - fs(16)),
+        (x + w // 2, y + h // 2 - fs(8)),
         state.ticker.rjust(HUD_TICKER_CHARS),
-        font=_fit_font("W" * HUD_TICKER_CHARS, iw(w), fs(30)),
+        font=_fit_font("W" * HUD_TICKER_CHARS, iw(w), fs(46)),
         fill=HUD_GREEN,
         anchor="mm",
     )
-    _label(draw, x + w // 2, y + h - fs(48), "CW", fs(28), iw(w))
+    _label(draw, x + w // 2, y + h - fs(28), "CW", fs(22), iw(w))
     return img
 
 

@@ -2826,13 +2826,17 @@ class TestHudSources:
 
 class TestHudLayout:
     def test_slots_stay_inside_the_bar_and_never_overlap(self):
-        rects = sorted(cv.HUD_SLOTS.values())
+        # A plain left-to-right check is not enough any more: PWR/STATS sit
+        # above the CW ticker and so share their x range with it.
+        rects = list(cv.HUD_SLOTS.values())
         for x, y, w, h in rects:
             assert x >= 0 and y >= 0
             assert x + w <= cv.HUD_W
             assert y + h <= cv.HUD_H
-        for (x0, _, w0, _), (x1, _, _, _) in zip(rects, rects[1:]):
-            assert x0 + w0 <= x1
+        for i, (ax, ay, aw, ah) in enumerate(rects):
+            for bx, by, bw, bh in rects[i + 1 :]:
+                apart = ax + aw <= bx or bx + bw <= ax or ay + ah <= by or by + bh <= ay
+                assert apart, f"{(ax, ay, aw, ah)} overlaps {(bx, by, bw, bh)}"
 
     def test_layout_scales_to_another_bar_size(self):
         scaled = cv.hud_layout(cv.HUD_W // 2, cv.HUD_H // 2)

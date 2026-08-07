@@ -1408,17 +1408,43 @@ is that the more important a value, the bigger it is drawn.
 - **The PWR panel renders placeholders rather than hiding itself** when Vd/Id are absent,
   which is every recording to date — a panel that appears and disappears between
   recordings would shift the whole layout.
-- **Every readout is fitted to its own panel width (`_fit_font`)**, because nothing on
-  this bar has a fixed width: the score gains a digit partway through a contest and a
-  callsign-shaped ticker line is wider than a report. Found by rendering the demo frame
-  and looking at it — a fixed point size spilled five-digit scores clean across the gutter
-  into the QSOS panel. The regression test asserts no lit pixels in that gutter, and was
-  confirmed red by monkeypatching `_fit_font` back to a plain fixed-size lookup.
+- **Every readout is fitted to its own panel (`_fit_font` for text, `_seven_seg`'s own
+  shrink loop for segment digits)**, because nothing on this bar has a fixed width: the
+  score gains a digit partway through a contest and a callsign-shaped ticker line is wider
+  than a report. Found by rendering the demo frame and looking at it — a fixed point size
+  spilled five-digit scores clean across the gutter into the QSOS panel. The regression
+  test asserts no lit pixels in that gutter, and was confirmed red by monkeypatching
+  `_fit_font` back to a plain fixed-size lookup.
+- **Numerals are real segment glyphs from DSEG (Debian `fonts-dseg`, SIL OFL)**: DSEG7 for
+  pure numbers (score, QSOs, QRG, volts, amps, bearing) and DSEG14, which has letters, for
+  the stats rows so their captions sit in the same face as their values. An earlier version
+  drew all seven segments as polygons by hand to avoid depending on a font at all; the
+  package turned out to be packaged for Debian and already installed, the glyphs are better
+  than hand-rolled ones, and it deleted ~120 lines of geometry. There is precedent for the
+  hardcoded path — `CAST_FONT_PATH` already points at DejaVu the same way.
+- **Unlit segments are deliberately not drawn.** A dim all-segments layer behind the value
+  is how a real LED panel looks, and it was implemented — but the artwork shows clean
+  numerals, and in practice the ghost behind a `1` (which lights only its two right-hand
+  bars) read as a digit being *clipped by the panel edge* rather than as an unlit cell.
+  `_all_segments` survives for positioning only, which is a subtler need: a value
+  containing `-` (the `--.-` placeholder) has a glyph box only as tall as the middle
+  segment, so anchoring on the value's own box floats the dashes well above where the
+  digits they replace would sit.
+- **DSEG14's space is only about a quarter of a cell wide**, so the stats rows use double
+  spaces between caption and value; a single one leaves them jammed together.
 - **The CW ticker shrinks to `HUD_TICKER_CHARS` (16)** in a fixed right-aligned slot, down
   from the full-width 84-character overlay — the value of a ticker is "something is
   arriving right now", not a readable backlog. `build_ass` and the HUD now share one
   source for it (`ticker_chunks` / `ticker_stream` / `ticker_texts`, extracted from
   `build_ass`) rather than each deriving the transcript independently.
+- **PWR and STATS are half-height so the ticker spans underneath them**, which is what the
+  artwork does. The first layout gave the ticker a full-height column of its own, leaving
+  it far too narrow for 16 characters to be legible while PWR and STATS were stretched
+  vertically to fill space they didn't need. Folding the V/A units onto the same line as
+  their values is what freed the height. The unbalanced left/right halves are the one
+  thing the artwork gets wrong on its own terms, and the one place to diverge from it;
+  everything else follows it closely, down to the portrait face recess.
+- **Best DX is labelled ODX**, the contest term, not "BEST".
 - **Two preview modes, both single-frame PNG**, because iterating layout against a full
   render is absurd: `--hud-demo OUT.png` needs no recording at all and draws the mockup's
   dummy values (this is what to check artwork against); `--hud-preview OUT.png
