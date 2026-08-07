@@ -425,3 +425,25 @@ def test_last_rx_age_is_fresh_while_connected_and_grows_when_radio_dies(fake_rad
         assert wait_until_sync(lambda: rig.last_rx_age() > 0.5, timeout=5.0)
     finally:
         rig.close()
+
+
+def test_close_joins_the_meter_poller_before_tearing_down_sockets(fake_radio):
+    # The meter poller sends a burst of four queries per cycle, so setting
+    # _stop alone leaves it able to be mid-burst while close() is already
+    # sending its goodbye and token-deregister packets -- putting meter
+    # queries on the wire *after* the disconnect, which is exactly what
+    # leaves the radio refusing the next session. close() must join it, which
+    # it only does for threads registered in _threads.
+    rig = IcomNetRig(
+        "127.0.0.1",
+        "testuser",
+        "testpass",
+        control_port=fake_radio.control_port,
+        civ_port=fake_radio.civ_port,
+    )
+    rig.connect(timeout=5.0)
+    rig.enable_meters(interval=0.05)
+    meter_thread = rig._meter_thread
+    assert meter_thread in rig._threads
+    rig.close()
+    assert not meter_thread.is_alive()

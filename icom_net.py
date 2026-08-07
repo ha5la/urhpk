@@ -723,11 +723,19 @@ class IcomNetRig:
         Off unless asked for, like enable_scope: it is the only outbound
         traffic this client generates in steady state, and a consumer that
         doesn't record meters shouldn't pay for it. Must be re-armed after a
-        reconnect, since the poll thread belongs to the session."""
+        reconnect, since the poll thread belongs to the session.
+
+        Registered in self._threads so close() *joins* it before touching any
+        socket. Setting _stop alone is not enough: this loop sends a burst of
+        four queries per cycle, so an unjoined one can still be mid-burst when
+        close() starts its teardown and put meter queries on the wire after the
+        goodbye and token-deregister packets -- exactly the kind of unclean
+        exit that leaves the radio refusing the next session."""
         if self._meter_thread is not None and self._meter_thread.is_alive():
             return
         self._meter_interval = interval
         self._meter_thread = threading.Thread(target=self._meter_loop, daemon=True)
+        self._threads.append(self._meter_thread)
         self._meter_thread.start()
 
     def _meter_loop(self) -> None:
