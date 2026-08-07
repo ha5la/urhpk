@@ -2639,10 +2639,18 @@ HUD_SLOTS: dict[str, tuple[int, int, int, int]] = {
 _HUD_FONTS: dict[tuple[int, bool], ImageFont.FreeTypeFont] = {}
 
 
+# The HUD's own label face, deliberately not shared with the cast renderer's
+# CAST_FONT_PATH: the two have unrelated reasons to change, and swapping in a
+# chunky 90s pixel font (DOOM's status bar labels are pixel art, not type)
+# should not touch how the terminal PiP renders.
+HUD_FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
+HUD_FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"
+
+
 def _hud_font(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
     key = (size, bold)
     if key not in _HUD_FONTS:
-        path = CAST_FONT_BOLD if bold else CAST_FONT_PATH
+        path = HUD_FONT_BOLD if bold else HUD_FONT_PATH
         _HUD_FONTS[key] = ImageFont.truetype(path, size)
     return _HUD_FONTS[key]
 
@@ -2698,14 +2706,15 @@ def _fit_font(text: str, max_w: int, size: int, bold: bool = True):
 # than being drawn as polygons -- an earlier version built each segment by
 # hand to avoid a font dependency, but the package is packaged, the glyphs are
 # better than hand-rolled ones, and it removed ~120 lines of geometry.
-# Unlit segments are deliberately *not* drawn. A dim all-segments layer
-# behind the value is how a real LED panel looks, and it was tried -- but the
-# artwork this HUD copies shows clean numerals, and in practice the ghost
-# behind a '1' (which lights only its two right-hand bars) read as a digit
-# being clipped by the panel edge rather than as an unlit cell.
+# Unlit segments are drawn too, very dim: that is what makes an LED panel
+# read as a panel rather than as numerals floating on black. Keep HUD_SEG_DIM
+# low -- at 0.16 the ghost behind a '1' (which lights only its two right-hand
+# bars) read as a digit being clipped by the panel edge rather than as an
+# unlit cell.
 DSEG_FONT_PATH = "/usr/share/fonts/truetype/dseg/DSEG7Classic-Bold.ttf"
 # DSEG14 adds letters, for the rows that mix a caption into the value.
 DSEG14_FONT_PATH = "/usr/share/fonts/truetype/dseg/DSEG14Classic-Bold.ttf"
+HUD_SEG_DIM = 0.12  # brightness of an unlit segment
 
 _DSEG_FONTS: dict[tuple[str, int], ImageFont.FreeTypeFont] = {}
 
@@ -2729,10 +2738,10 @@ def _seven_seg(
     """Draw `text` as segment digits, scaled down to fit max_w x max_h, and
     return the rendered width.
 
-    Positioned by the *all-lit* string's box rather than by the value's own:
-    a value containing '-' (e.g. the "--.-" placeholder) has a box only as
-    tall as the middle segment, so anchoring on it would float the dashes
-    well above where the digits they replace would sit."""
+    The all-lit string is both the unlit backdrop and the positioning
+    reference: a value containing '-' (e.g. the "--.-" placeholder) has a box
+    only as tall as the middle segment, so anchoring on the value's own box
+    would float the dashes well above where the digits they replace sit."""
     if not text:
         return 0.0
     box = _all_segments(text)
@@ -2745,7 +2754,11 @@ def _seven_seg(
             break
         size = max(6, int(size * 0.93))
     ax = x - w / 2 if anchor == "mm" else x - w if anchor == "rm" else x
-    draw.text((ax, y - h / 2 - top), text, font=font, fill=colour)
+    ay = y - h / 2 - top
+    draw.text(
+        (ax, ay), box, font=font, fill=tuple(round(c * HUD_SEG_DIM) for c in colour)
+    )
+    draw.text((ax, ay), text, font=font, fill=colour)
     return w
 
 

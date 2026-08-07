@@ -1422,14 +1422,24 @@ is that the more important a value, the bigger it is drawn.
   package turned out to be packaged for Debian and already installed, the glyphs are better
   than hand-rolled ones, and it deleted ~120 lines of geometry. There is precedent for the
   hardcoded path — `CAST_FONT_PATH` already points at DejaVu the same way.
-- **Unlit segments are deliberately not drawn.** A dim all-segments layer behind the value
-  is how a real LED panel looks, and it was implemented — but the artwork shows clean
-  numerals, and in practice the ghost behind a `1` (which lights only its two right-hand
-  bars) read as a digit being *clipped by the panel edge* rather than as an unlit cell.
-  `_all_segments` survives for positioning only, which is a subtler need: a value
-  containing `-` (the `--.-` placeholder) has a glyph box only as tall as the middle
-  segment, so anchoring on the value's own box floats the dashes well above where the
-  digits they replace would sit.
+- **Unlit segments are drawn too, very dim (`HUD_SEG_DIM`, 0.12)** — that is what makes an
+  LED panel read as a panel rather than as numerals floating on black. Keep the value low:
+  at 0.16 the ghost behind a `1` (which lights only its two right-hand bars) read as a
+  digit being *clipped by the panel edge* rather than as an unlit cell, which is why an
+  intermediate version dropped the layer entirely before it was tuned and restored.
+  `_all_segments` doubles as the positioning reference, a subtler need: a value containing
+  `-` (the `--.-` placeholder) has a glyph box only as tall as the middle segment, so
+  anchoring on the value's own box floats the dashes well above where the digits they
+  replace sit.
+- **The artwork has no font to match — its "text" is drawn, not typeset** (confirmed with
+  the generator directly). So the typography is ours to choose and the artwork can only
+  ever be *chrome*: request future iterations as texture and bevels with no text at all.
+  `HUD_FONT_PATH`/`HUD_FONT_BOLD` are the HUD's own label face, deliberately separate from
+  the cast renderer's `CAST_FONT_PATH`, so swapping in a chunky pixel font (DOOM's own
+  labels are pixel art, not type) is a one-line change that can't disturb the terminal PiP.
+  Debian's `fonts-dotgothic16` (OFL, TrueType, 16x16-bitmap-derived) is the candidate;
+  the authentic recommendations — DooM Font, Small Fonts, Px437 IBM VGA8 — are dafont or
+  font-pack downloads whose licences would need checking before living in this repo.
 - **DSEG14's space is only about a quarter of a cell wide**, so the stats rows use double
   spaces between caption and value; a single one leaves them jammed together.
 - **The CW ticker shrinks to `HUD_TICKER_CHARS` (16)** in a fixed right-aligned slot, down
