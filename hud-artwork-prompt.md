@@ -22,6 +22,7 @@ recess in the artwork:
 | Element | Drawn by |
 |---|---|
 | Score, QSOs, QRG, volts, amps, bearing, UTC, rate, ODX | DSEG7 segment font |
+| — with fixed cell counts: score 4½, QSOs 2½, QRG 7½ digits | `HUD_*_FIELD` |
 | Every fixed label and caption, including "UTC" / "RATE /H" / "ODX KM" | the artwork itself |
 | CW ticker | 5x7 dot-matrix font, `_FONT_5X7` |
 | Band/mode chips | baked **lit** in the artwork, dimmed per-pixel when inactive |
@@ -63,9 +64,16 @@ control panel, so if in doubt make the bar thinner rather than taller. It
 contains these panels in one horizontal row, left to right:
 
 1. Wide panel, empty dark recess, small label "SCORE" centred at its bottom.
-2. Narrower panel, empty dark recess, label "QSOS" at its bottom.
-3. Panel with an empty dark recess at the top and the small label "MHz" under
-   it; below that, two rows of small rectangular selector chips reading
+   The recess must be wide enough to hold four and a half seven-segment digits
+   (a half digit, then four full ones), and these are the largest numerals on
+   the whole bar.
+2. Narrower panel, empty dark recess, label "QSOS" at its bottom. Its recess
+   holds two and a half digits, at the same size as the SCORE digits, so it is
+   a little over half as wide as panel 1's.
+3. Panel whose empty dark recess holds seven and a half digits plus a decimal
+   point, in numerals somewhat smaller than SCORE's, with the small label
+   "MHz" under it; below that, two rows of small rectangular selector chips
+   reading
    [2M][70CM][23CM] and [SSB][CW][FM]. Draw ALL SIX chips brightly lit in
    amber — none dark.
 4. Narrow panel: an empty circular recess in the upper half, and below it a
@@ -76,13 +84,13 @@ contains these panels in one horizontal row, left to right:
 6. Panel with a circular compass rose showing only the letters N, E, S and W
    around its edge and NO needle or pointer of any kind. Below the circle,
    empty space, then the small label "ROT".
-7. Narrow panel with two empty value slots stacked vertically, each with a
-   small label to its right — "V" for the upper, "A" for the lower — and the
-   label "PWR" at the bottom.
+7. Narrow panel with two empty value slots stacked vertically, each holding
+   three digits and a decimal point, each with a small label to its right —
+   "V" for the upper, "A" for the lower — and the label "PWR" at the bottom.
 8. Panel, only about half the height of the bar, sitting in the upper half,
    containing three rows. Each row has a small grey caption on the left and
-   empty dark space on the right. The captions are "UTC", "RATE /H" and
-   "ODX KM".
+   empty dark space on the right, wide enough for eight digits. The captions
+   are "UTC", "RATE /H" and "ODX KM".
 9. Directly below panel 8, filling the bar's lower half and the same combined
    width as panels 7 and 8: a wide empty dark letterbox slot with the small
    label "CW" beneath it. This slot is a dot-matrix display whose dots are
@@ -151,6 +159,11 @@ accepting a generation:
   way of what the software draws there.
 - **Any of the six band/mode chips drawn dark.** They are dimmed at render
   time, which only works if all six start lit.
+- **A recess too narrow for its digit count.** The readouts are fixed-width
+  (a score gaining a digit must not resize the panel), so a recess sized for
+  three digits forces every digit smaller for the whole video. The half digit
+  is real: its cell can only ever show a 1, and is drawn half a cell narrower
+  than the others.
 
 The v1 prompt asked for dummy values everywhere and got them rendered cleanly,
 so the generator has no trouble filling recesses — which is exactly why the

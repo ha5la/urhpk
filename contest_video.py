@@ -2584,8 +2584,9 @@ HUD_SCORE_FIELD = "18888"
 HUD_QSOS_FIELD = "188"
 # The QRG is fixed-width for a different reason: 23cm is 1296.174, one cell
 # wider than 2m's 144.174, so without a field the digits resize on a band
-# change mid-video.
-HUD_QRG_FIELD = "8888.888"
+# change mid-video. Its leading cell is a half digit too -- the highest band
+# this radio has is 1296 MHz, so a thousands digit above 1 cannot occur.
+HUD_QRG_FIELD = "1888.888"
 
 # Reference-layout slots at HUD_W x HUD_H, left to right in DOOM's own order
 # (ammo | health | face | armor | arms). Replacing the placeholder background
@@ -2726,15 +2727,24 @@ def _seven_seg(
     box = _all_segments(text)
     if field is not None and len(text) <= len(field):
         box = field
+    # A leading "1" is a half digit: DSEG7 draws its two bars at the right of
+    # the cell, so the left half is always blank. Charging a full cell of width
+    # for it would shrink every other digit for nothing -- the visible extent
+    # is half a cell narrower than the advance, and the string is drawn shifted
+    # left by that much so the blank half falls outside the panel.
+    half = box.startswith("1")
     size = max(6, round(max_h))
     while True:
         font = _dseg_font(size)
         left, top, right, bottom = draw.textbbox((0, 0), box, font=font)
         w, h = right - left, bottom - top
-        if size <= 6 or (w <= max_w and h <= max_h):
+        visible = w - (0.5 * draw.textlength("8", font=font) if half else 0.0)
+        if size <= 6 or (visible <= max_w and h <= max_h):
             break
         size = max(6, int(size * 0.93))
-    ax = x - w / 2 if anchor == "mm" else x - w if anchor == "rm" else x
+    pad = 0.5 * draw.textlength("8", font=font) if half else 0.0
+    vis = w - pad
+    ax = x - vis / 2 - pad if anchor == "mm" else x - w if anchor == "rm" else x
     ay = y - h / 2 - top
     draw.text(
         (ax, ay), box, font=font, fill=tuple(round(c * HUD_SEG_DIM) for c in colour)
@@ -2889,17 +2899,22 @@ def _draw_matrix_text(draw, text: str, rect, colour) -> None:
     HUD_TICKER_CHARS), so the dot pitch never changes as text arrives."""
     x, y, w, h = rect
     cols = max(1, len(text) * (HUD_MATRIX_COLS + 1) - 1)  # one blank column between
-    pitch = min(w / cols, h / HUD_MATRIX_ROWS)
-    dot = max(1.0, pitch * 0.82)
-    ox = x + (w - pitch * cols) / 2
-    oy = y + (h - pitch * HUD_MATRIX_ROWS) / 2
+    # Integer pitch and dot size, not fractional: at fractional values PIL
+    # rounds each rectangle independently, so the gaps between dots come out
+    # one pixel wide in some columns and zero in others and the display stops
+    # reading as a grid. Snapping the whole lattice to whole pixels makes
+    # every gap identical at any output resolution.
+    pitch = max(2, int(min(w / cols, h / HUD_MATRIX_ROWS)))
+    dot = max(1, pitch - max(1, round(pitch * 0.18)))
+    ox = x + (w - pitch * cols) // 2
+    oy = y + (h - pitch * HUD_MATRIX_ROWS) // 2
     dim = tuple(round(c * HUD_SEG_DIM) for c in colour)
     for i, ch in enumerate(text):
         rows = _matrix_rows(ch)
         cx = ox + i * (HUD_MATRIX_COLS + 1) * pitch
         for r, row in enumerate(rows):
             for c, bit in enumerate(row):
-                dx, dy = cx + c * pitch, oy + r * pitch
+                dx, dy = int(cx + c * pitch), int(oy + r * pitch)
                 draw.rectangle(
                     [dx, dy, dx + dot - 1, dy + dot - 1],
                     fill=colour if bit == "1" else dim,
