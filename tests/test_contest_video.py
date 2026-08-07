@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 import numpy as np
 import pyte
-from PIL import ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 
 import contest_video as cv
 from contest_video import (
@@ -2871,3 +2871,36 @@ class TestHudDrawing:
         sx, _, sw, _ = cv.HUD_SLOTS["score"]
         gutter = img.crop((sx + sw, 0, cv.HUD_SLOTS["qsos"][0], cv.HUD_H))
         assert np.asarray(gutter)[:, :, 0].max() < 60  # no lit digits here
+
+
+class TestHudMatrixFont:
+    def test_every_character_the_decoder_can_emit_has_a_glyph(self):
+        # MORSE is the complete set the CW decoder can ever produce, so the
+        # font is finite and fully determined -- nothing can arrive that the
+        # ticker has no glyph for.
+        assert set(cv.MORSE.values()) <= set(cv._FONT_5X7)
+
+    def test_every_glyph_is_exactly_five_by_seven_bits(self):
+        # A mistyped row is a plausible-looking glyph rather than an error, so
+        # the shape of the table is checked here and the glyphs themselves were
+        # verified by rendering the whole set as a sheet and reading it.
+        for ch, bits in cv._FONT_5X7.items():
+            rows = bits.split()
+            assert len(rows) == cv.HUD_MATRIX_ROWS, ch
+            assert all(len(r) == cv.HUD_MATRIX_COLS for r in rows), ch
+            assert set("".join(rows)) <= {"0", "1"}, ch
+
+    def test_unlit_dots_are_still_drawn_so_an_idle_ticker_reads_as_a_display(self):
+        img = Image.new("RGB", (60, 84), (0, 0, 0))
+        cv._draw_matrix_text(ImageDraw.Draw(img), " ", (0, 0, 60, 84), cv.HUD_GREEN)
+        green = np.asarray(img)[:, :, 1]
+        assert green.max() > 0  # the dot grid is there
+        assert green.max() < cv.HUD_GREEN[1]  # but nothing is lit
+
+    def test_a_lit_glyph_reaches_full_brightness(self):
+        img = Image.new("RGB", (60, 84), (0, 0, 0))
+        cv._draw_matrix_text(ImageDraw.Draw(img), "8", (0, 0, 60, 84), cv.HUD_GREEN)
+        assert np.asarray(img)[:, :, 1].max() == cv.HUD_GREEN[1]
+
+    def test_an_unknown_character_falls_back_to_a_question_mark(self):
+        assert cv._matrix_rows("\u00e9") == cv._matrix_rows("?")

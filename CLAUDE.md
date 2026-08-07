@@ -1431,6 +1431,13 @@ is that the more important a value, the bigger it is drawn.
   `-` (the `--.-` placeholder) has a glyph box only as tall as the middle segment, so
   anchoring on the value's own box floats the dashes well above where the digits they
   replace sit.
+- **The artwork's generation prompt lives in `hud-artwork-prompt.md`**, along with what the
+  software draws (and therefore what the artwork must leave empty), why the sprite sheet
+  sits on flat magenta, and why a coordinate table baked into the image was rejected — an
+  image generator cannot measure its own output raster, so such a table would be
+  confabulated while looking authoritative. Sprite extraction is instead automatic:
+  non-magenta is sprite, magenta is not, so bounding boxes come from connected-component
+  detection and identity from left-to-right order.
 - **The artwork has no font to match — its "text" is drawn, not typeset** (confirmed with
   the generator directly). So the typography is ours to choose and the artwork can only
   ever be *chrome*: request future iterations as texture and bevels with no text at all.
@@ -1442,7 +1449,17 @@ is that the more important a value, the bigger it is drawn.
   font-pack downloads whose licences would need checking before living in this repo.
 - **DSEG14's space is only about a quarter of a cell wide**, so the stats rows use double
   spaces between caption and value; a single one leaves them jammed together.
-- **The CW ticker shrinks to `HUD_TICKER_CHARS` (16)** in a fixed right-aligned slot, down
+- **The CW ticker is a 5x7 dot-matrix display** (`_FONT_5X7`, `_draw_matrix_text`), every
+  dot drawn with the same lit/`HUD_SEG_DIM` treatment as the segment panels, so an idle
+  ticker still reads as a display. The glyph table is written out in the source rather than
+  taken from a font file because the set is tiny and *fully determined* — `MORSE` can only
+  decode to 44 characters plus space, which a test asserts — and at 5x7 each row is
+  directly readable where it is typed. A generated character sheet was considered and
+  rejected: rendering long specific character sequences is what image generators are worst
+  at, so 36 glyphs would be 36 chances to be wrong with no way to fix one without
+  regenerating everything. Glyphs were verified by rendering the whole set as a sheet and
+  reading it, since a mistyped row is a plausible-looking letter rather than an error.
+- **The ticker shrinks to `HUD_TICKER_CHARS` (16)** in a fixed right-aligned slot, down
   from the full-width 84-character overlay — the value of a ticker is "something is
   arriving right now", not a readable backlog. `build_ass` and the HUD now share one
   source for it (`ticker_chunks` / `ticker_stream` / `ticker_texts`, extracted from

@@ -2829,6 +2829,95 @@ def _draw_meter(draw, rect, level: float | None, segments: int = 18) -> None:
         draw.rectangle([sx, y, sx + round(sw) - 1, y + h - 1], fill=colour)
 
 
+# --- 5x7 dot-matrix font, for the CW ticker -------------------------------
+#
+# The ticker is a dot-matrix display, drawn dot by dot with the same lit/unlit
+# treatment as the segment panels above. Written out as a table rather than
+# taken from a font file: the glyph set is tiny and fully determined (MORSE
+# can only ever decode to these 44 characters plus space), and at 5x7 a table
+# is directly readable in the source -- each row of a glyph is visible as it
+# will be drawn. Rendered as a sheet and eyeballed, since a mistyped row is a
+# plausible-looking glyph rather than an error.
+HUD_MATRIX_COLS, HUD_MATRIX_ROWS = 5, 7
+_FONT_5X7 = {
+    " ": "00000 00000 00000 00000 00000 00000 00000",
+    "!": "00100 00100 00100 00100 00100 00000 00100",
+    "+": "00000 00100 00100 11111 00100 00100 00000",
+    ",": "00000 00000 00000 00000 00110 00100 01000",
+    "-": "00000 00000 00000 11111 00000 00000 00000",
+    ".": "00000 00000 00000 00000 00000 00110 00110",
+    "/": "00001 00010 00010 00100 01000 01000 10000",
+    "0": "01110 10001 10011 10101 11001 10001 01110",
+    "1": "00100 01100 00100 00100 00100 00100 01110",
+    "2": "01110 10001 00001 00010 00100 01000 11111",
+    "3": "11111 00010 00100 00010 00001 10001 01110",
+    "4": "00010 00110 01010 10010 11111 00010 00010",
+    "5": "11111 10000 11110 00001 00001 10001 01110",
+    "6": "00110 01000 10000 11110 10001 10001 01110",
+    "7": "11111 00001 00010 00100 01000 01000 01000",
+    "8": "01110 10001 10001 01110 10001 10001 01110",
+    "9": "01110 10001 10001 01111 00001 00010 01100",
+    "=": "00000 00000 11111 00000 11111 00000 00000",
+    "?": "01110 10001 00001 00010 00100 00000 00100",
+    "A": "01110 10001 10001 11111 10001 10001 10001",
+    "B": "11110 10001 10001 11110 10001 10001 11110",
+    "C": "01110 10001 10000 10000 10000 10001 01110",
+    "D": "11100 10010 10001 10001 10001 10010 11100",
+    "E": "11111 10000 10000 11110 10000 10000 11111",
+    "F": "11111 10000 10000 11110 10000 10000 10000",
+    "G": "01110 10001 10000 10111 10001 10001 01111",
+    "H": "10001 10001 10001 11111 10001 10001 10001",
+    "I": "01110 00100 00100 00100 00100 00100 01110",
+    "J": "00111 00010 00010 00010 00010 10010 01100",
+    "K": "10001 10010 10100 11000 10100 10010 10001",
+    "L": "10000 10000 10000 10000 10000 10000 11111",
+    "M": "10001 11011 10101 10101 10001 10001 10001",
+    "N": "10001 10001 11001 10101 10011 10001 10001",
+    "O": "01110 10001 10001 10001 10001 10001 01110",
+    "P": "11110 10001 10001 11110 10000 10000 10000",
+    "Q": "01110 10001 10001 10001 10101 10010 01101",
+    "R": "11110 10001 10001 11110 10100 10010 10001",
+    "S": "01111 10000 10000 01110 00001 00001 11110",
+    "T": "11111 00100 00100 00100 00100 00100 00100",
+    "U": "10001 10001 10001 10001 10001 10001 01110",
+    "V": "10001 10001 10001 10001 10001 01010 00100",
+    "W": "10001 10001 10001 10101 10101 11011 10001",
+    "X": "10001 10001 01010 00100 01010 10001 10001",
+    "Y": "10001 10001 01010 00100 00100 00100 00100",
+    "Z": "11111 00001 00010 00100 01000 10000 11111",
+}
+
+
+def _matrix_rows(ch: str) -> list[str]:
+    return _FONT_5X7.get(ch, _FONT_5X7["?"]).split()
+
+
+def _draw_matrix_text(draw, text: str, rect, colour) -> None:
+    """Draw `text` as a 5x7 dot-matrix display filling `rect`.
+
+    Every dot is drawn -- lit ones in `colour`, the rest at HUD_SEG_DIM --
+    so an unlit display still reads as a display, matching the segment
+    panels. The character count is fixed by the caller (the ticker pads to
+    HUD_TICKER_CHARS), so the dot pitch never changes as text arrives."""
+    x, y, w, h = rect
+    cols = max(1, len(text) * (HUD_MATRIX_COLS + 1) - 1)  # one blank column between
+    pitch = min(w / cols, h / HUD_MATRIX_ROWS)
+    dot = max(1.0, pitch * 0.82)
+    ox = x + (w - pitch * cols) / 2
+    oy = y + (h - pitch * HUD_MATRIX_ROWS) / 2
+    dim = tuple(round(c * HUD_SEG_DIM) for c in colour)
+    for i, ch in enumerate(text):
+        rows = _matrix_rows(ch)
+        cx = ox + i * (HUD_MATRIX_COLS + 1) * pitch
+        for r, row in enumerate(rows):
+            for c, bit in enumerate(row):
+                dx, dy = cx + c * pitch, oy + r * pitch
+                draw.rectangle(
+                    [dx, dy, dx + dot - 1, dy + dot - 1],
+                    fill=colour if bit == "1" else dim,
+                )
+
+
 def draw_hud_frame(
     state: HudState,
     W: int = HUD_W,
@@ -3009,16 +3098,15 @@ def draw_hud_frame(
             path=DSEG14_FONT_PATH,
         )
 
-    # --- CW ticker: fixed HUD_TICKER_CHARS-wide slot, right-aligned so new
-    # characters always arrive at the same place rather than the text
-    # re-centring on every keyed letter.
+    # --- CW ticker: a fixed HUD_TICKER_CHARS-wide dot-matrix display,
+    # right-aligned so new characters always arrive at the same place rather
+    # than the text re-centring on every keyed letter.
     x, y, w, h = slots["ticker"]
-    draw.text(
-        (x + w // 2, y + h // 2 - fs(8)),
+    _draw_matrix_text(
+        draw,
         state.ticker.rjust(HUD_TICKER_CHARS),
-        font=_fit_font("W" * HUD_TICKER_CHARS, iw(w), fs(46)),
-        fill=HUD_GREEN,
-        anchor="mm",
+        (x + fs(14), y + fs(8), w - fs(28), h - fs(44)),
+        HUD_GREEN,
     )
     _label(draw, x + w // 2, y + h - fs(28), "CW", fs(22), iw(w))
     return img
