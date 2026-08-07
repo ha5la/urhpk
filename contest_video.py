@@ -35,6 +35,7 @@ is handled without configuration.
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 import os
 import re
@@ -1311,6 +1312,10 @@ class TelemetrySample:
     freq_hz: int | None
     mode: str | None
     az: float | None
+    # An absent "az" key and an explicit `"az": null` both land as az=None but
+    # mean opposite things -- silence about the rotator (a rig event) versus a
+    # report that it went offline. Only the latter ends az's carry-forward.
+    az_offline: bool = False
 
 
 @dataclass
@@ -1321,8 +1326,26 @@ class SegState:
     az: float | None = None
 
 
+def _parse_telemetry_time(s: str) -> datetime:
+    """Both stamp precisions the format has carried: whole seconds (the
+    original 1 Hz sampler) and microseconds (the current change-driven
+    writer, matching the input log). Raises ValueError on anything else,
+    which load_telemetry treats as a bad line."""
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ"):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    raise ValueError(f"unrecognized telemetry timestamp: {s!r}")
+
+
 def load_telemetry(path: str) -> list[TelemetrySample]:
-    """Parse a puskas_logger `*-telemetry.jsonl` file."""
+    """Parse a puskas_logger `*-telemetry.jsonl` file.
+
+    Records are partial: the rig's own push events carry freq_hz/mode with
+    no az, the rotator poller's carry az alone. A missing key is simply
+    "this event says nothing about that field" -- build_state_events carries
+    each field forward across the events that don't mention it."""
     samples: list[TelemetrySample] = []
     for line in open(path, encoding="utf-8"):
         line = line.strip()
@@ -1330,11 +1353,17 @@ def load_telemetry(path: str) -> list[TelemetrySample]:
             continue
         try:
             rec = json.loads(line)
-            ts = datetime.strptime(rec["t"], "%Y-%m-%dT%H:%M:%SZ")
+            ts = _parse_telemetry_time(rec["t"])
         except (json.JSONDecodeError, KeyError, ValueError):
             continue
         samples.append(
-            TelemetrySample(ts, rec.get("freq_hz"), rec.get("mode"), rec.get("az"))
+            TelemetrySample(
+                ts,
+                rec.get("freq_hz"),
+                rec.get("mode"),
+                rec.get("az"),
+                az_offline="az" in rec and rec["az"] is None,
+            )
         )
     return samples
 
@@ -1495,13 +1524,21 @@ def build_state_events(
     still see the operator QSY with nothing to split the WAV on, so the
     WAV's own metadata (fixed at file-creation time) only captures the
     *starting* frequency/mode. Telemetry sub-divides the segment wherever a
-    later 1 Hz sample shows them actually changing -- seeded from the WAV's
+    later sample shows them actually changing -- seeded from the WAV's
     starting value, not from telemetry, so a segment with no telemetry
     change at all just keeps the WAV-sourced value for its whole span.
 
     az has no equivalent in the WAV metadata at all and is purely
     telemetry's own -- the median of whichever samples make up each
-    freq/mode run.
+    freq/mode run, falling back to the last azimuth seen before that run
+    began when the run holds no az sample of its own. That fallback is what
+    makes change-only telemetry work: the rotator poller writes a line only
+    when the azimuth actually moves, so a rotator parked on one bearing for
+    a whole QSO leaves no sample inside that run at all, and a median of
+    nothing would render as "ROT ---" despite the rotator being online and
+    pointing somewhere known. az is a step function -- it holds until the
+    next event. On an older, densely-sampled recording every run has samples
+    of its own, so the fallback never fires and the median stands.
 
     Comparing the two frequency sources exactly (Hz for Hz) is unsound:
     the WAV metadata and rigctld-via-telemetry don't agree to the exact
@@ -1515,6 +1552,19 @@ def build_state_events(
     FREQ_MATCH_TOLERANCE_HZ=500 safely separates "same frequency, two
     slightly disagreeing sources" from "the operator actually retuned"."""
     events: list[tuple[float, float, SegState]] = []
+    # Every event that *reports* on the rotator, offline ones included -- an
+    # explicit null is a real mark carrying None, so the carry-forward stops
+    # there instead of showing the last bearing for the rest of the video.
+    az_marks = sorted(
+        ((t.t, t.az) for t in telemetry if t.az is not None or t.az_offline),
+        key=lambda p: p[0],
+    )
+    az_times = [t for t, _ in az_marks]
+
+    def az_before(t: datetime) -> float | None:
+        i = bisect.bisect_right(az_times, t)
+        return az_marks[i - 1][1] if i else None
+
     for s in segs:
         if s.ptt is None and s.freq_hz is None and s.mode is None:
             continue
@@ -1549,6 +1599,7 @@ def build_state_events(
 
         seg_end = s.audio_t + _eff(s)
         for i, (key, samples) in enumerate(runs):
+            run_utc_start = utc_start if i == 0 else samples[0].t
             start = (
                 s.audio_t
                 if i == 0
@@ -1562,17 +1613,11 @@ def build_state_events(
             if end <= start:
                 continue
             freq_hz, mode = key
+            az = _median([t.az for t in samples if t.az is not None])
+            if az is None:
+                az = az_before(run_utc_start)
             events.append(
-                (
-                    start,
-                    end,
-                    SegState(
-                        ptt=s.ptt,
-                        freq_hz=freq_hz,
-                        mode=mode,
-                        az=_median([t.az for t in samples if t.az is not None]),
-                    ),
-                )
+                (start, end, SegState(ptt=s.ptt, freq_hz=freq_hz, mode=mode, az=az))
             )
     return events
 

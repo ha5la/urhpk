@@ -26,7 +26,8 @@ from puskas_logger import (
     _rig_lock,
     _rot,
     _rot_lock,
-    _telemetry_record,
+    _telemetry_rig_record,
+    _telemetry_rot_record,
     _update_loc_cache,
     _webcam_capture_cmd,
     _webcam_precise_name,
@@ -1249,40 +1250,44 @@ class TestLocatorOnlyBearing:
 
 
 class TestTelemetryRecord:
-    def _set_rig(self, qrg="144.174", mode="CW", online=True):
-        with _rig_lock:
-            _rig.update(band="2M", mode=mode, qrg=qrg, online=online)
+    """Telemetry is change-driven now: a rig event whenever icom_net pushes a
+    genuine freq/mode change, a rotator event whenever the polled azimuth
+    actually moves. Each record carries only its own source's fields --
+    contest_video.py carries the rest forward across events that don't
+    mention them."""
 
-    def _set_rot(self, az=135.0, online=True):
-        with _rot_lock:
-            _rot.update(az=az, online=online)
+    _T = datetime(2026, 7, 4, 9, 8, 15, 123456, tzinfo=timezone.utc)
 
-    def test_rig_and_rot_online(self):
-        import json
-
-        self._set_rig("144.174", "CW", online=True)
-        self._set_rot(135.0, online=True)
-        rec = json.loads(
-            _telemetry_record(datetime(2026, 7, 4, 9, 8, 15, tzinfo=timezone.utc))
-        )
-        assert rec["t"] == "2026-07-04T09:08:15Z"
+    def test_rig_record(self):
+        rec = _telemetry_rig_record(self._T, 144174000, "CW")
+        assert rec["t"] == "2026-07-04T09:08:15.123456Z"
         assert rec["freq_hz"] == 144174000
         assert rec["mode"] == "CW"
         assert "ptt" not in rec
-        assert rec["az"] == 135.0
+        assert "az" not in rec  # a rig event says nothing about the rotator
 
-    def test_rig_offline_fields_are_null(self):
-        import json
+    def test_rig_record_keeps_exact_hz(self):
+        # Not the toolbar's kHz-rounded `qrg` string the old 1 Hz sampler
+        # re-parsed: that rounding is exactly where contest_video's
+        # documented 160 Hz "WAV vs telemetry disagreement" came from
+        # (144299840 -> "144.300" -> 144300000), so it was this logger
+        # quantizing, not two sources reading the rig differently.
+        assert _telemetry_rig_record(self._T, 144299840, "SSB")["freq_hz"] == 144299840
 
-        self._set_rig(online=False)
-        self._set_rot(online=False)
-        rec = json.loads(
-            _telemetry_record(datetime(2026, 7, 4, 9, 8, 15, tzinfo=timezone.utc))
-        )
+    def test_rig_offline_record_is_null_fields(self):
+        rec = _telemetry_rig_record(self._T, None, None)
         assert rec["freq_hz"] is None
-        assert "ptt" not in rec
         assert rec["mode"] is None
-        assert rec["az"] is None
+
+    def test_rot_record(self):
+        rec = _telemetry_rot_record(self._T, 135.04)
+        assert rec["t"] == "2026-07-04T09:08:15.123456Z"
+        assert rec["az"] == 135.0
+        assert "freq_hz" not in rec  # nor a rotator event about the rig
+        assert "mode" not in rec
+
+    def test_rot_offline_record_is_null(self):
+        assert _telemetry_rot_record(self._T, None)["az"] is None
 
 
 class TestInputLog:

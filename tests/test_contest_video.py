@@ -1714,6 +1714,27 @@ class TestTelemetryAlignment:
         )
         assert samples[1].freq_hz is None
 
+    def test_load_telemetry_accepts_microsecond_timestamps(self, tmp_path):
+        # The logger's telemetry is written from the icom_net push callback
+        # and the rotator poller as they happen, with the same microsecond
+        # stamps as the input log -- not the whole seconds a 1 Hz sampler
+        # produced. Older recordings still carry whole-second stamps, so
+        # both have to parse; a strict whole-second format silently drops
+        # every line of a new recording via the ValueError branch above.
+        f = tmp_path / "telem.jsonl"
+        f.write_text(
+            '{"t": "2026-07-04T11:00:02.123456Z", "freq_hz": 144174000, '
+            '"mode": "CW"}\n'
+            '{"t": "2026-07-04T11:00:05Z", "az": 135.0}\n'
+        )
+        samples = load_telemetry(str(f))
+        assert len(samples) == 2
+        assert samples[0].t == datetime(2026, 7, 4, 11, 0, 2, 123456)
+        assert samples[0].freq_hz == 144174000
+        assert samples[0].az is None  # a rig event carries no az at all
+        assert samples[1].t == datetime(2026, 7, 4, 11, 0, 5)
+        assert samples[1].az == 135.0
+
     def _wav_seg(self, wall, dur, audio_t, freq_hz, mode, ptt):
         s = Segment("a", wall, dur, audio_t)
         s.freq_hz, s.mode, s.ptt = freq_hz, mode, ptt
@@ -1753,6 +1774,97 @@ class TestTelemetryAlignment:
         assert st.freq_hz == 144174000
         assert st.mode == "CW"
         assert st.az == 136.0  # median of 135/136/137
+
+    def test_az_carries_forward_into_a_run_with_no_az_sample(self):
+        # Telemetry is change-only now: the rotator poller writes a line
+        # when the azimuth actually moves, not once a second regardless.
+        # A rotator parked on one bearing for a whole QSO therefore leaves
+        # zero az samples inside that segment's span -- taking the median
+        # of nothing yields None, which renders as "ROT ---" even though
+        # the rotator was online and pointing somewhere known the whole
+        # time. az is a step function: it holds until the next event.
+        segs = [
+            self._wav_seg(
+                datetime(2026, 7, 4, 13, 0, 0), 10.0, 0.0, 144174000, "CW", True
+            )
+        ]
+        telemetry = [
+            TelemetrySample(datetime(2026, 7, 4, 10, 55, 0), None, None, 135.0),
+            TelemetrySample(datetime(2026, 7, 4, 11, 0, 0), 144174000, "CW", None),
+        ]
+        [(_, _, st)] = build_state_events(segs, telemetry, offset_h=2)
+        assert st.az == 135.0
+
+    def test_az_carried_forward_per_run_not_just_per_segment(self):
+        # The carry-forward is evaluated at each run's own start, against
+        # every az event so far -- not once per segment. A QSY mid-segment
+        # splits it into two runs; the second run inherits the azimuth set
+        # during the *first* run, not the one from before the segment began.
+        segs = [
+            self._wav_seg(
+                datetime(2026, 7, 4, 13, 0, 0), 10.0, 0.0, 144300000, "SSB", False
+            )
+        ]
+        telemetry = [
+            TelemetrySample(datetime(2026, 7, 4, 10, 59, 0), None, None, 90.0),
+            TelemetrySample(datetime(2026, 7, 4, 11, 0, 2), None, None, 200.0),
+            TelemetrySample(datetime(2026, 7, 4, 11, 0, 6), 432200000, "CW", None),
+        ]
+        events = build_state_events(segs, telemetry, offset_h=2)
+        assert [e[2].az for e in events] == [200.0, 200.0]
+
+    def test_explicit_az_null_ends_the_carry_forward(self):
+        # The rotator going offline is itself an event: the logger writes one
+        # explicit {"az": null} line at the transition and then stays quiet.
+        # That null has to *terminate* the carry-forward -- treating it as
+        # "this record just doesn't mention az" would sail straight past the
+        # rotator dying and keep showing its last bearing for the rest of the
+        # video, which is exactly the stale reading the badge must not show.
+        # ROT --- is the honest answer, matching the logger's own toolbar.
+        segs = [
+            self._wav_seg(
+                datetime(2026, 7, 4, 13, 0, 0), 10.0, 0.0, 144300000, "SSB", False
+            )
+        ]
+        telemetry = [
+            TelemetrySample(datetime(2026, 7, 4, 10, 59, 0), None, None, 135.0),
+            TelemetrySample(
+                datetime(2026, 7, 4, 10, 59, 30), None, None, None, az_offline=True
+            ),
+            TelemetrySample(datetime(2026, 7, 4, 11, 0, 5), 432200000, "CW", None),
+        ]
+        assert [e[2].az for e in build_state_events(segs, telemetry, offset_h=2)] == [
+            None,
+            None,
+        ]
+
+    def test_a_rig_event_does_not_count_as_an_az_reading(self):
+        # The mirror image: a rig event carries no "az" key at all, which is
+        # silence about the rotator, not a report that it went offline. It
+        # must not terminate the carry-forward the way an explicit null does.
+        segs = [
+            self._wav_seg(
+                datetime(2026, 7, 4, 13, 0, 0), 10.0, 0.0, 144300000, "SSB", False
+            )
+        ]
+        telemetry = [
+            TelemetrySample(datetime(2026, 7, 4, 10, 59, 0), None, None, 135.0),
+            TelemetrySample(datetime(2026, 7, 4, 10, 59, 30), 144300000, "SSB", None),
+        ]
+        [(_, _, st)] = build_state_events(segs, telemetry, offset_h=2)
+        assert st.az == 135.0
+
+    def test_load_telemetry_distinguishes_absent_az_from_null_az(self, tmp_path):
+        # Both land as az=None, but they mean opposite things: an absent key
+        # is silence, an explicit null is "the rotator went offline".
+        f = tmp_path / "telem.jsonl"
+        f.write_text(
+            '{"t": "2026-07-04T11:00:00.000000Z", "freq_hz": 144174000, "mode": "CW"}\n'
+            '{"t": "2026-07-04T11:00:01.000000Z", "az": null}\n'
+        )
+        silent, offline = load_telemetry(str(f))
+        assert (silent.az, silent.az_offline) == (None, False)
+        assert (offline.az, offline.az_offline) == (None, True)
 
     def test_small_wav_telemetry_disagreement_does_not_split(self):
         # Regression test for a real bug found right after switching to WAV

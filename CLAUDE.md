@@ -1087,11 +1087,56 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
     `FREQ_MATCH_TOLERANCE_HZ = 500` safely separates the two. Mode has no
     such problem (exact string match; "SSB" vs "CW" isn't a rounding
     question).
+    **The cause was later identified, and it was not the two sources
+    disagreeing at all**: the 1 Hz sampler built its `freq_hz` by re-parsing
+    the logger's own toolbar string (`f"{freq_hz / 1e6:.3f}"`), quantizing to
+    the nearest kHz — 144299840 → `"144.300"` → 144300000, exactly the
+    reported 160 Hz, and a bound of 500 Hz explains the observed clean gap
+    below 1000 Hz precisely. Telemetry now records the radio's own exact Hz
+    (see puskas_logger's Telemetry recorder section), so new recordings don't
+    have the disagreement; `FREQ_MATCH_TOLERANCE_HZ` stays for the older ones,
+    which do.
   - A segment with no WAV metadata at all (freq_hz/mode/ptt all `None` --
     not an IC-9700 recording, or a parse failure) is skipped rather than
     guessed at from telemetry alone. `az` has no equivalent in the WAV
-    metadata at all and is purely telemetry's own (median per run); missing
-    `az` falls back to `ROT ---`, matching the logger's own toolbar.
+    metadata at all and is purely telemetry's own — the median of whichever
+    samples fall in a run, **falling back to the last azimuth seen before
+    that run began** when the run holds none of its own; only a run with no
+    az anywhere before it falls back to `ROT ---`, matching the logger's own
+    toolbar. The carry-forward is what makes change-only telemetry work: the
+    rotator poller writes a line only when the azimuth actually moves, so a
+    rotator parked on one bearing for a whole QSO leaves no sample inside
+    that run at all, and a median of nothing would render `ROT ---` despite
+    the rotator being online and pointing somewhere known. az is a step
+    function — it holds until the next event, with no staleness *time*
+    horizon (deliberately: a horizon would be a tunable constant with no data
+    behind it, and freq/mode already carry forward unboundedly from their WAV
+    seed the same way). What ends it instead is an explicit event: **the
+    rotator going offline writes one `{"az": null}` line, and that null is a
+    real mark carrying `None`, not a record to skip.** `TelemetrySample`
+    therefore carries `az_offline` alongside `az`, since an *absent* `az` key
+    (a rig event — silence about the rotator) and an explicit `"az": null`
+    (the rotator died) both load as `az=None` while meaning opposite things:
+    silence must not end the carry-forward, a null must. Filtering `az_marks`
+    on `az is not None` alone was a real bug caught in review — it discarded
+    the offline marker and showed the last known bearing for the rest of the
+    video (regression test:
+    `test_explicit_az_null_ends_the_carry_forward`, with
+    `test_a_rig_event_does_not_count_as_an_az_reading` guarding the mirror
+    case). This also matters for the *old* dense recordings, which wrote
+    `"az": null` on every line while rotctld was offline — the whole July
+    round is 9313 such lines, so treating them as marks is what keeps it
+    correctly showing `ROT ---` throughout. It also fixed a pre-existing bug on the *dense* old
+    recordings, where a run shorter than the 1 Hz sample spacing could
+    contain no sample by luck: replaying the real August round found 184
+    such runs that used to show `ROT ---`, with run boundaries and freq/mode
+    byte-identical before and after.
+  - **`load_telemetry` accepts both stamp precisions** — whole seconds (the
+    original 1 Hz sampler) and microseconds (the current change-driven
+    writer). Note the failure mode if it didn't: `load_telemetry` swallows a
+    bad line via `except ValueError: continue`, so a strict whole-second
+    format would *silently* drop every line of a new recording rather than
+    erroring.
   - `--telemetry PATH` is therefore now *optional* for the whole badge --
     it only adds `az`/bearing and the within-segment freq/mode refinement.
     The RX/TX + starting QRG/mode badge works from the WAV files alone.
@@ -1551,14 +1596,46 @@ alongside the logger. Re-enabled on every reconnect (scope data output is
 session-scoped on the radio's side); file is lazily opened on the first sweep and
 flushed per sweep. ~30 sweeps/s on real hardware (~18 MB per 2 h session).
 
-**Telemetry recorder** (`*-telemetry.jsonl`, always on, one JSON line per
-second): `{"t", "freq_hz", "mode", "az"}` -- band/mode/QRG from the `icom_net`
-radio session, bearing from rotctld. No `ptt` field: it used to be queried and recorded
-here too, but the WAV recordings' own IC-9700 metadata already carries it
-straight from the rig with zero polling lag (see `contest_video.py`'s
-`read_wav_metadata`) -- this was in practice reconstructing, with more
-latency, something already recorded losslessly elsewhere, so it was removed
-rather than kept for redundancy.
+**Telemetry recorder** (`*-telemetry.jsonl`, always on, **one JSON line per
+actual change**, microsecond stamps): records are *partial* by source --
+`{"t", "freq_hz", "mode"}` written from the `icom_net` push callback,
+`{"t", "az"}` written by the rotctld poller. A field a line doesn't mention
+simply didn't change; `contest_video.py`'s `build_state_events` carries each
+one forward across the events that don't mention it.
+- **Was a 1 Hz sampler of `current_rig()`/`current_rot()`**, which made sense
+  while the rig sat behind rigctld and had to be polled anyway. Since the
+  switch to `icom_net`, freq/mode arrive as CI-V Transceive pushes and
+  `IcomNetRig._apply_update` already returns early on a no-op update — so the
+  callback *is* the change stream, and re-sampling it on a timer put back onto
+  a lag-free source exactly the latency `icom_net` exists to remove, blurred
+  any retune shorter than the poll interval, and wrote overwhelmingly
+  duplicate lines: on the real July round only **616 of 9313** lines carried
+  anything new.
+- **`freq_hz` is now the radio's own exact value**, not the toolbar's
+  kHz-rounded `qrg` string the sampler re-parsed. That rounding is the entire
+  source of `contest_video.py`'s long-documented 160/250/300/310 Hz "WAV vs
+  telemetry disagreement" — this logger was quantizing, not two sources
+  reading the rig differently.
+- **`az` stays polled, but change-gated**: it has no push source at all, since
+  Hamlib's rotator API never defined the async hook for any backend (see
+  `hamlib_supervisor.py`'s notes). Plain inequality, **no deadband** — the
+  rotator reports whole degrees, so there is no sub-degree jitter to suppress;
+  checked against the real August round, where every one of the 756 azimuth
+  changes was >= 1.0°.
+- **Offline transitions are events too, but only on a real transition**: the
+  radio going offline writes one `{"freq_hz": null, "mode": null}` line, gated
+  on having been online — `_radio_thread`'s loop also spins while the radio has
+  simply never been reachable, and a null line every `RADIO_RECONNECT_S` would
+  say nothing new.
+- Opened in `main()` **before** the radio/rotator threads start, since both
+  write to it the moment they have something and the radio's first push lands
+  within a second of connecting. `_telemetry_write` takes a lock: the radio's
+  CI-V receive thread and the rotator poller are genuinely concurrent writers.
+- No `ptt` field: it used to be queried and recorded here too, but the WAV
+  recordings' own IC-9700 metadata already carries it straight from the rig
+  with zero polling lag (see `contest_video.py`'s `read_wav_metadata`) -- this
+  was in practice reconstructing, with more latency, something already recorded
+  losslessly elsewhere, so it was removed rather than kept for redundancy.
 
 **Input-box logging** (`*-input.jsonl`, always on, feeds `contest_video.py --input-log`):
 - Event-triggered, not polled: `session.default_buffer.on_text_changed` fires

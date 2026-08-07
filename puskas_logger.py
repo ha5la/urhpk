@@ -237,6 +237,11 @@ def _on_radio_update(freq_hz, mode, band) -> None:
             freq_hz=freq_hz,
             raw_mode=mode,
         )
+    # Outside the lock: this flushes to disk, and _apply_update has already
+    # filtered out no-op updates, so every call here is a real change.
+    _telemetry_write(
+        _telemetry_rig_record(datetime.now(timezone.utc), freq_hz, _mode_str(mode))
+    )
 
 
 def _radio_thread():
@@ -264,8 +269,16 @@ def _radio_thread():
         except Exception:
             pass
         with _rig_lock:
+            was_online = _rig["online"]
             _radio["rig"] = None
             _rig.update(band="", mode="", qrg="", online=False, freq_hz=0, raw_mode="")
+        # Only on a real online→offline transition: this loop also runs while
+        # the radio has simply never been reachable, and a null line every
+        # RADIO_RECONNECT_S would say nothing new.
+        if was_online:
+            _telemetry_write(
+                _telemetry_rig_record(datetime.now(timezone.utc), None, None)
+            )
         if rig is not None:
             try:
                 rig.close()
@@ -400,14 +413,23 @@ def _read_rot() -> float | None:
 
 
 def _rot_thread():
+    # Last azimuth written to telemetry (None = offline/never seen). Plain
+    # inequality, no deadband: the rotator reports whole degrees, so there is
+    # no sub-degree jitter to suppress -- checked against the real August
+    # round, where every one of the 756 azimuth changes was >= 1.0°.
+    logged_az = None
     while True:
         try:
             az = _read_rot()
             with _rot_lock:
                 _rot.update(az=az, online=True)
         except Exception:
+            az = None
             with _rot_lock:
                 _rot.update(az=0.0, online=False)
+        if az != logged_az:
+            _telemetry_write(_telemetry_rot_record(datetime.now(timezone.utc), az))
+            logged_az = az
         time.sleep(ROTCTLD_POLL_S)
 
 
@@ -491,40 +513,68 @@ def _clock_sync() -> None:
 
 
 # ──────────────────────────────────────────────────────────────
-# Telemetry recorder — one JSON line per second to CWD
+# Telemetry recorder — one JSON line per actual change, to CWD.
+#
+# Records are partial: a rig event carries freq_hz/mode, a rotator event
+# carries az. A field a line doesn't mention simply didn't change, and
+# contest_video.py's build_state_events carries each one forward.
+#
+# This was a 1 Hz sampler of current_rig()/current_rot() while the rig was
+# behind rigctld and had to be polled anyway. freq/mode now arrive as
+# icom_net CI-V Transceive pushes -- and IcomNetRig._apply_update already
+# suppresses no-op updates, so the callback *is* the change stream. Sampling
+# it on a timer put back onto a lag-free source the very latency icom_net
+# exists to remove, blurred any retune shorter than the poll interval, and
+# wrote overwhelmingly duplicate lines: on the real July round only 616 of
+# 9313 lines carried anything new.
+#
+# az has no push source at all -- Hamlib's rotator API never defined the
+# async hook, for any backend (see hamlib_supervisor.py's notes) -- so it
+# stays polled, but only writes when the reading actually moves.
+#
+# No ptt field: the WAV recordings' own IC-9700 metadata already carries it
+# straight from the rig with zero lag (see contest_video.py's
+# read_wav_metadata).
 # ──────────────────────────────────────────────────────────────
 
-
-def _telemetry_record(now: datetime) -> str:
-    """Build one telemetry JSON line from the current rig/rotator state.
-
-    No ptt field: the WAV recordings' own IC-9700 metadata already carries
-    it, straight from the rig with zero polling lag (see contest_video.py's
-    read_wav_metadata) -- telemetry only needs to cover what the WAV
-    metadata *can't*: freq/mode drift within a long segment, and az, which
-    has no on-air equivalent at all.
-    """
-    _, mode, qrg, rig_online = current_rig()
-    az, rot_online = current_rot()
-    return json.dumps(
-        {
-            "t": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "freq_hz": round(float(qrg) * 1e6) if rig_online and qrg else None,
-            "mode": mode if rig_online else None,
-            "az": round(az, 1) if rot_online else None,
-        }
-    )
+_telem: dict = {"fh": None}
+_telem_lock = threading.Lock()
 
 
-def _telemetry_thread(path: Path) -> None:
-    with open(path, "a") as fh:
-        while True:
-            try:
-                fh.write(_telemetry_record(datetime.now(timezone.utc)) + "\n")
-                fh.flush()
-            except Exception:
-                pass
-            time.sleep(1.0)
+def _utc_stamp(now: datetime) -> str:
+    return now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _telemetry_open(path: Path) -> None:
+    with _telem_lock:
+        _telem["fh"] = open(path, "a")
+
+
+def _telemetry_write(rec: dict) -> None:
+    """Two threads write here — the radio's CI-V receive thread and the
+    rotator poller — so the lock guards a genuine race, not a theoretical one."""
+    with _telem_lock:
+        fh = _telem["fh"]
+        if fh is None:
+            return
+        try:
+            fh.write(json.dumps(rec) + "\n")
+            fh.flush()
+        except Exception:
+            pass
+
+
+def _telemetry_rig_record(now: datetime, freq_hz: int | None, mode: str | None) -> dict:
+    """freq_hz is the radio's own exact value, not the toolbar's kHz-rounded
+    `qrg` string the 1 Hz sampler used to re-parse. That rounding is where
+    contest_video's documented 160/250/300/310 Hz "WAV vs telemetry
+    disagreement" came from — it was this logger quantizing, not two sources
+    reading the rig differently."""
+    return {"t": _utc_stamp(now), "freq_hz": freq_hz, "mode": mode}
+
+
+def _telemetry_rot_record(now: datetime, az: float | None) -> dict:
+    return {"t": _utc_stamp(now), "az": round(az, 1) if az is not None else None}
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1962,6 +2012,14 @@ def main():
         loc_cache = load_loc_cache()
         lb = LogBook(my_call, my_loc, loc_cache)
 
+    # Opened before the radio/rotator threads start: both write to it the
+    # moment they have something, and the radio's first push arrives within
+    # a second of connecting.
+    _telem_path = Path(
+        f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{lb.my_call}-telemetry.jsonl"
+    )
+    _telemetry_open(_telem_path)
+
     t = threading.Thread(target=_radio_thread, daemon=True)
     t.start()
     threading.Thread(target=_rot_thread, daemon=True).start()
@@ -1974,10 +2032,6 @@ def main():
         f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{lb.my_call}.scope"
     )
     print(f"Scope:     {_scope_rec['path']} (written once the radio connects)")
-    _telem_path = Path(
-        f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{lb.my_call}-telemetry.jsonl"
-    )
-    threading.Thread(target=_telemetry_thread, args=(_telem_path,), daemon=True).start()
     print(f"Telemetry: {_telem_path}")
     _input_log_path = Path(
         f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{lb.my_call}-input.jsonl"
