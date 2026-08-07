@@ -2945,11 +2945,20 @@ class TestMeterCalibration:
         assert cv.swr_ratio(48) == 1.5
         assert cv.swr_ratio(120) == 3.0
 
-    def test_id_uses_the_measured_anchor_not_icoms_curve(self):
-        # Icom's IC-7300 curve gives 17.6 A for raw 171; the PSU showed 14 A
-        # total less a ~2 A receive baseline, so ~12 A of real PA drain.
-        assert cv.id_amps(171) == 12.0
+    def test_id_uses_the_measured_line_not_icoms_curve(self):
+        # Icom's IC-7300 curve gives 17.6 A for raw 171. Measured against a
+        # multimeter in series, PA drain fits a line through the origin at
+        # 0.0745 A/raw -- ~12.8 A there, and ~18 A full scale, not 25 A.
         assert cv.id_amps(0) == 0.0
+        assert abs(cv.id_amps(171) - 12.75) < 0.1
+        # The low-current cluster the line was fitted through, +-5%.
+        for raw, amps in ((55, 4.27), (61, 4.48), (64, 4.71)):
+            assert abs(cv.id_amps(raw) - amps) / amps < 0.05
+
+    def test_id_stays_linear_through_zero(self):
+        # Two points a factor of three apart in current agreed to 1% on the
+        # same through-origin slope, so a curve that bends is a regression.
+        assert abs(cv.id_amps(120) - 2 * cv.id_amps(60)) < 0.01
 
     def test_a_missing_reading_stays_missing_rather_than_becoming_zero(self):
         # An old recording has no meter data at all; the PWR panel must show
@@ -2972,4 +2981,4 @@ class TestMeterCalibration:
         )
         assert tl.at(20.0).vd is None  # before the first reading
         assert abs(tl.at(60.0).vd - 13.78) < 0.15
-        assert tl.at(60.0).id_a == 12.0
+        assert abs(tl.at(60.0).id_a - 12.75) < 0.1

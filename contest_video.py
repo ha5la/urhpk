@@ -2520,13 +2520,18 @@ def hud_s_marks(
 # (raw 213 during a full-power transmission).
 #
 # Id is the exception and is NOT Icom's curve: theirs (0/97/146/241 ->
-# 0/10/15/25 A) reads 17.6 A for the raw 171 measured here, against ~12 A of
-# real PA drain (14 A total on the PSU less the radio's ~2 A receive
-# baseline). A single transmission can anchor a straight line through the
-# operating point but cannot resolve the curve's shape, so low readings are
-# the least trustworthy part of the least trustworthy data.
+# 0/10/15/25 A) reads 17.6 A for a raw 171 that measures ~12.8 A of real PA
+# drain. Measured directly against a multimeter in series with the supply, at
+# raw 55/60/61/62/64 plus a 100%-power anchor at raw 171, PA drain (total
+# current less the 1.18 A measured receive baseline) fits a straight line
+# *through the origin* at 0.0745 A per raw unit, i.e. ~18 A full scale rather
+# than Icom's 25 A. The low cluster alone gives 0.0739 and adding the 100%
+# anchor gives 0.0745 -- two nearly independent estimates a factor of three
+# apart in current agreeing to 1%, which is what makes the straight line
+# through zero believable rather than merely fitted. Residuals are within
+# +-4.7%.
 _VD_CURVE = [(0, 0.0), (13, 10.0), (241, 16.0)]
-_ID_CURVE = [(0, 0.0), (171, 12.0)]
+_ID_CURVE = [(0, 0.0), (241, 17.96)]
 _SWR_CURVE = [(0, 1.0), (48, 1.5), (80, 2.0), (120, 3.0)]
 _PO_CURVE = [(0, 0.0), (143, 50.0), (213, 100.0)]
 
