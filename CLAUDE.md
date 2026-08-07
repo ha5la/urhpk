@@ -936,8 +936,35 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
     above). `parse_cast_header` reads it directly; `main()` computes the
     cast's start position in the output timeline with a single
     `audio_time_for(cast_wall + timedelta(hours=offset_h), segs)` call — no
+    `stream_start(cast_wall + timedelta(hours=offset_h), segs)` call — no
     `refine_webcam_start`-style cross-correlation needed, since there's no
-    second physical clock to drift against. For the same reason,
+    second physical clock to drift against.
+  - **A stream that began before the audio must be entered partway in, not
+    clamped to t=0.** `stream_start` is `audio_time_for` except for exactly
+    this case: `audio_time_for` clamps any wall time before the first WAV
+    segment to `segs[0].audio_t`, which pins the cast's own frame 0 to video
+    t=0 and makes everything in the PiP read late by the whole cast-to-WAV
+    gap — observed as the cast PiP's clock lagging the session by 25 s.
+    This is the **normal** case, not an edge case:
+    `run-recorded-contest-session.sh` starts asciinema before the radio
+    recorder is switched on, so every cast made through the documented
+    entrypoint begins ahead of the audio; the logger's `.scope` recorder
+    (starting when the radio connects) is in the same position, which is why
+    `--scope` goes through `stream_start` too. `render()` turns the negative
+    value into an `-ss` seek *into* that input
+    (`_stream_input_args`) rather than a negative `-itsoffset`, which ffmpeg
+    has no meaningful interpretation for — the frames before t=0 are simply
+    ones the output never shows. Verified against real ffmpeg rather than
+    just asserted on the command string: overlaying a timer-labelled clip
+    with `-ss 25` puts that clip's own t=25 at output t=0 and advances 1:1
+    from there (t=3 → 28, t=7 → 32), confirmed by pixel-matching the
+    composited PiP region back against the source clip's frames. The
+    `enable=` gates clamp to `max(start, 0.0)`, since a negative threshold
+    is trivially always true. One knowingly-accepted imprecision: with `-ss`,
+    the cast branch's `setpts` drift correction measures from the seek point
+    rather than the cast's true frame 0, losing `seek × cast_rate` of
+    correction — ~11 ms for a 25 s seek at the real measured drift rate, a
+    third of a frame at `RENDER_FPS`. For the same reason,
     `render()`'s cast branch has no `setpts` rate-correction term: the cast
     mp4 is `render_cast_video`'s own synthetic, constant-framerate output,
     not an independent recording device, so only a plain `fps=RENDER_FPS`

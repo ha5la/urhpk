@@ -2592,3 +2592,63 @@ class TestRenderScopeBackground:
         )
         fchain = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
         assert "[specbg]subtitles=" in fchain
+
+
+class TestStreamPrecedesAudio:
+    """A cast/scope stream that began *before* the first WAV segment must be
+    entered partway in, not clamped to video t=0 -- the clamp showed up as
+    the cast PiP's clock lagging the session by exactly cast-to-WAV gap
+    (25 s in the dry-run that caught it). run-recorded-contest-session.sh
+    guarantees this ordering: asciinema starts before the radio recorder."""
+
+    def _segs(self):
+        return [cv.Segment("a.wav", datetime(2026, 8, 6, 19, 16, 0), 330.0, 0.0)]
+
+    def test_stream_start_is_negative_before_first_segment(self):
+        assert cv.stream_start(datetime(2026, 8, 6, 19, 15, 35), self._segs()) == -25.0
+
+    def test_stream_start_matches_audio_time_for_inside_the_recording(self):
+        wall = datetime(2026, 8, 6, 19, 17, 0)
+        segs = self._segs()
+        assert cv.stream_start(wall, segs) == cv.audio_time_for(wall, segs)
+
+    def test_render_enters_cast_partway_on_negative_start(self, monkeypatch, tmp_path):
+        captured = {}
+        monkeypatch.setattr(
+            cv.subprocess, "run", lambda cmd, check=True: captured.update(cmd=cmd)
+        )
+        cv.render(
+            str(tmp_path / "a.wav"),
+            str(tmp_path / "a.ass"),
+            str(tmp_path / "out.mp4"),
+            1280,
+            720,
+            cast=str(tmp_path / "cast.mp4"),
+            cast_start=-25.0,
+        )
+        cmd = captured["cmd"]
+        i = cmd.index("-ss")
+        assert cmd[i + 1] == "25.000"
+        assert cmd[i + 2] == "-i"  # the seek applies to the cast input
+        assert "-25.000" not in cmd  # never a negative itsoffset
+
+    def test_render_enters_scope_partway_on_negative_start(self, monkeypatch, tmp_path):
+        captured = {}
+        monkeypatch.setattr(
+            cv.subprocess, "run", lambda cmd, check=True: captured.update(cmd=cmd)
+        )
+        cv.render(
+            str(tmp_path / "a.wav"),
+            str(tmp_path / "a.ass"),
+            str(tmp_path / "out.mp4"),
+            1280,
+            720,
+            scope=str(tmp_path / "scope.mp4"),
+            scope_start=-19.0,
+            scope_end=300.0,
+        )
+        cmd = captured["cmd"]
+        i = cmd.index("-ss")
+        assert cmd[i + 1] == "19.000"
+        assert cmd[i + 2] == "-i"
+        assert "-19.000" not in cmd

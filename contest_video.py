@@ -754,6 +754,25 @@ def audio_time_for(wall: datetime, segs: list[Segment]) -> float:
     return segs[-1].audio_t + _eff(segs[-1])
 
 
+def stream_start(wall: datetime, segs: list[Segment]) -> float:
+    """Where a side stream's own frame 0 belongs in the output timeline.
+
+    Same as audio_time_for once the recording has started, but *negative*
+    when the stream began before the first WAV segment -- audio_time_for
+    clamps that case to segs[0].audio_t, which is exactly wrong here. A cast
+    or scope recording clamped to 0 gets its frame 0 pinned to video t=0, so
+    everything in it reads late by the whole cast-to-WAV gap (25 s in the
+    dry-run that caught it, as the cast PiP's clock lagging the session).
+
+    This is the normal case, not an edge case: run-recorded-contest-session.sh
+    starts asciinema before the radio recorder is switched on, so every cast
+    made through the documented entrypoint begins ahead of the audio.
+    render() turns the negative value into an -ss seek *into* the stream."""
+    if wall < segs[0].wall:
+        return segs[0].audio_t - (segs[0].wall - wall).total_seconds()
+    return audio_time_for(wall, segs)
+
+
 def derive_utc_offset(segs: list[Segment], qsos: list[Qso]) -> int:
     """Integer-hour offset such that qso_utc + offset ~= wav local time."""
     if not qsos:
@@ -2300,6 +2319,18 @@ def scope_freq_periods(
     return [tuple(p) for p in periods]
 
 
+def _stream_input_args(start: float, path: str) -> list[str]:
+    """ffmpeg input args placing a side stream's frame 0 at `start`.
+
+    A negative start (the stream began before the audio -- see stream_start)
+    is an -ss seek *into* the stream, not a negative -itsoffset: ffmpeg has
+    no meaningful "shift these timestamps earlier than the output starts",
+    and the frames before t=0 are simply ones the output never shows."""
+    if start < 0:
+        return ["-ss", f"{-start:.3f}", "-i", path]
+    return ["-itsoffset", f"{start:.3f}", "-i", path]
+
+
 def render(
     wav: str,
     ass: str,
@@ -2358,12 +2389,12 @@ def render(
         # with the one proven mechanism already used for those PiPs' own
         # start gate, rather than mixing two different techniques for the
         # same class of problem.
-        cmd += ["-itsoffset", f"{scope_start:.3f}", "-i", scope]
+        cmd += _stream_input_args(scope_start, scope)
         fchain += (
             f";[{scope_idx}:v]scale={W}:{H},fps={RENDER_FPS},format=yuv420p,"
             f"tpad=stop_mode=clone:stop_duration=99999[scopebg]"
             f";[{bg}][scopebg]overlay=x=0:y=0:"
-            f"enable='between(t,{scope_start:.3f},{scope_end:.3f})'[bg2]"
+            f"enable='between(t,{max(scope_start, 0.0):.3f},{scope_end:.3f})'[bg2]"
         )
         bg = "bg2"
     fchain += f";[{bg}]subtitles='{ass_esc}':fontsdir=/usr/share/fonts[v0]"
@@ -2383,7 +2414,7 @@ def render(
         cast_w = round(W * CAST_PIP_WIDTH_FRAC)
         cast_x = round(W * CAST_PIP_X_FRAC)
         cast_y = round(H * CAST_PIP_Y_FRAC)
-        cmd += ["-itsoffset", f"{cast_start:.3f}", "-i", cast]
+        cmd += _stream_input_args(cast_start, cast)
         # format=yuva420p + colorchannelmixer=aa lowers the PiP's alpha so the
         # overlay blends it over the waterfall (a little transparency, not a
         # wash) -- overlay honours the top input's own alpha channel.
@@ -2392,7 +2423,7 @@ def render(
             f"format=yuva420p,colorchannelmixer=aa={CAST_PIP_ALPHA},"
             f"tpad=stop_mode=clone:stop_duration=99999[castpip]"
             f";[{cur}][castpip]overlay=x={cast_x}:y={cast_y}:"
-            f"enable='gte(t,{cast_start:.3f})'[v1]"
+            f"enable='gte(t,{max(cast_start, 0.0):.3f})'[v1]"
         )
         cur = "v1"
     if webcam:
@@ -2604,7 +2635,7 @@ def main() -> None:
     cast_rate = 0.0
     if args.cast:
         cast_wall, cast_cols, cast_rows = parse_cast_header(args.cast)
-        cast_start = audio_time_for(cast_wall + timedelta(hours=offset_h), segs)
+        cast_start = stream_start(cast_wall + timedelta(hours=offset_h), segs)
         print(
             f"  cast: {cast_cols}x{cast_rows} terminal, synced to start at "
             f"{cast_start:.0f}s in the output (exact -- Unix-epoch timestamp; "
@@ -2626,7 +2657,7 @@ def main() -> None:
             last_wall = datetime.fromtimestamp(
                 scope_records[-1][0], tz=timezone.utc
             ).replace(tzinfo=None) + timedelta(hours=offset_h)
-            scope_start = audio_time_for(first_wall, segs)
+            scope_start = stream_start(first_wall, segs)
             scope_end = audio_time_for(last_wall, segs)
             print(
                 f"  scope: {len(scope_records)} sweeps, synced to "
