@@ -1521,6 +1521,22 @@ is that the more important a value, the bigger it is drawn.
   Debian's `fonts-dotgothic16` (OFL, TrueType, 16x16-bitmap-derived) is the candidate;
   the authentic recommendations — DooM Font, Small Fonts, Px437 IBM VGA8 — are dafont or
   font-pack downloads whose licences would need checking before living in this repo.
+- **The ticker scrolls on a clock, and that replaced the whole flush mechanism.** A
+  character's position comes from *when it was keyed*: it enters at the right edge when
+  the scroll reaches its own column and leaves on the left `HUD_TICKER_SPAN_S` (8 s)
+  later. Nothing clears it, because staleness is structurally impossible rather than
+  guarded against — which retired `TICKER_HOLD_S`, `ticker_texts`, the flush flag in
+  `ticker_stream` and the inter-over separator, all of which existed only to stop a
+  static transcript going stale. The regression tests for text leaking across a genuine
+  gap and across many short non-CW segments went with them: those bugs cannot recur, and
+  one test asserting a later burst never shares the display with an earlier one covers
+  the property that remains.
+  Two details that matter. It scrolls a whole **dot column** at a time, not a fraction of
+  one — a physical matrix panel has no sub-dot positions — so `HudTimeline.at` returns
+  (column offset, character) pairs rather than a string. And a character's position is
+  `max(keying time, previous + one cell)`, so an operator keying faster than the display
+  drains queues characters one cell apart instead of piling them on top of each other,
+  exactly as a physical ticker does.
 - **The CW ticker is a 5x7 dot-matrix display** (`_FONT_5X7`, `_draw_matrix_text`), every
   dot drawn with the same lit/`HUD_SEG_DIM` treatment as the segment panels, so an idle
   ticker still reads as a display. The glyph table is written out in the source rather than
@@ -1531,9 +1547,10 @@ is that the more important a value, the bigger it is drawn.
   at, so 36 glyphs would be 36 chances to be wrong with no way to fix one without
   regenerating everything. Glyphs were verified by rendering the whole set as a sheet and
   reading it, since a mistyped row is a plausible-looking letter rather than an error.
-- **The ticker shrinks to `HUD_TICKER_CHARS` (16)** in a fixed right-aligned slot, down
-  from the full-width 84-character overlay — the value of a ticker is "something is
-  arriving right now", not a readable backlog. `build_ass` and the HUD now share one
+- **The ticker is `HUD_TICKER_CHARS` (20) cells wide**, down from the full-width
+  84-character overlay — the value of a ticker is "something is arriving right now", not
+  a readable backlog. 20 rather than 16 simply because the panel has room; the final
+  artwork's own slot width is what will settle it. `build_ass` and the HUD now share one
   source for it (`ticker_chunks` / `ticker_stream` / `ticker_texts`, extracted from
   `build_ass`) rather than each deriving the transcript independently.
 - **PWR and STATS are half-height so the ticker spans underneath them**, which is what the
@@ -1925,7 +1942,8 @@ the radio's own spectrum sweeps via `enable_scope()`/`on_scope` to the `.scope` 
 one network session (see icom_net's notes) — the CLI harness recorder can't run
 alongside the logger. Re-enabled on every reconnect (scope data output is
 session-scoped on the radio's side); file is lazily opened on the first sweep and
-flushed per sweep. ~30 sweeps/s on real hardware (~18 MB per 2 h session).
+flushed per sweep. Measured on real hardware: 29.4 sweeps/s at 493 bytes each
+(18-byte header + 475 pixels) = ~14.5 kB/s, so **~105 MB per 2 h session**.
 
 **Telemetry recorder** (`*-telemetry.jsonl`, always on, **one JSON line per
 actual change**, microsecond stamps): records are *partial* by source --

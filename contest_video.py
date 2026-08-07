@@ -1699,7 +1699,6 @@ def match_qso_times(
 # ---------------------------------------------------------------------------
 
 RESOLUTIONS = {"1080p": (1920, 1080), "720p": (1280, 720)}
-TICKER_HOLD_S = 3.0  # ticker clears if no new character arrives within this long
 
 
 def _bursts(segs: list[Segment]) -> list[list[Segment]]:
@@ -1883,37 +1882,20 @@ def ticker_chunks(
 
 def ticker_stream(
     chunks: list[tuple[float, float, list[CharEvent]]],
-) -> list[tuple[float, str, bool]]:
-    """(absolute video time, character, flush-before) for every decoded
-    character. Flushing is decided uniformly by the real time gap since the
-    previous chunk (> MAX_OVER_S -- the same threshold used everywhere else to
-    tell a genuine over from a genuine gap), rather than per-segment
-    bookkeeping: two CW sub-ranges recovered from the *same* long segment
-    (e.g. two separate exchanges we listened in on) are otherwise
-    indistinguishable from one continuous burst."""
-    stream: list[tuple[float, str, bool]] = []
-    prev_end: float | None = None
-    for start, end, events in chunks:
-        is_burst_start = prev_end is None or start - prev_end > MAX_OVER_S
-        if not is_burst_start and stream:
-            stream.append((start, " ", False))  # gap between overs, same burst
-        for j, e in enumerate(events):
-            stream.append((start + e.t, e.ch, is_burst_start and j == 0))
-        prev_end = end
+) -> list[tuple[float, str]]:
+    """(absolute video time, character) for every decoded character.
+
+    There is no flush marker and no separator inserted between overs. Both
+    used to exist because the ticker held a static transcript that had to be
+    cleared before it went stale; the display now scrolls on a clock (see
+    HudTimeline.at), so a gap between overs *is* a gap on screen and text from
+    an earlier burst has physically left the display long before a later one
+    arrives. Time does both jobs."""
+    stream: list[tuple[float, str]] = []
+    for start, _, events in chunks:
+        for e in events:
+            stream.append((start + e.t, e.ch))
     return stream
-
-
-def ticker_texts(stream: list[tuple[float, str, bool]], keep: int) -> list[str]:
-    """The visible transcript after each stream event -- the last `keep`
-    characters of the running transcript, which a flush resets to empty."""
-    out: list[str] = []
-    transcript = ""
-    for _, ch, flush in stream:
-        if flush:
-            transcript = ""
-        transcript += ch
-        out.append(transcript[-keep:])
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -2219,7 +2201,8 @@ def render_scope_video(
 # not drawing code.
 # ---------------------------------------------------------------------------
 
-HUD_TICKER_CHARS = 16  # fixed-width ticker slot; ~5s of CW at contest speeds
+HUD_TICKER_CHARS = 20  # cells in the ticker display
+HUD_TICKER_SPAN_S = 8.0  # seconds for a character to cross it
 HUD_RATE_WINDOW_S = 600.0  # trailing window behind the QSOs/hour readout
 HUD_SCORE_ANIM_S = 0.6  # score count-up + panel flash after each QSO
 HUD_S_CENTRE_BINS = 3  # scope bins taken as "the tuned frequency"
@@ -2270,7 +2253,10 @@ class HudState:
     rot_az: float | None = None  # where the rotator actually points
     target_az: float | None = None  # bearing to the station being worked
     s_level: float | None = None  # 0..1, from the scope's own centre bins
-    ticker: str = ""
+    # (column offset from the display's left edge, character) for whatever is
+    # currently on the scrolling matrix -- not a string, because a character
+    # sits at a dot-column position rather than in a slot.
+    ticker: list[tuple[int, str]] = field(default_factory=list)
     vd: float | None = None  # volts -- no recording carries these yet; the
     id_a: float | None = None  # panel renders "---" until the logger records them
 
@@ -2481,7 +2467,15 @@ class HudTimeline:
         self._s_t = [m[0] for m in self.s_marks]
         self._meter_t = [m[0] for m in self.meter_marks]
         self._ticker_t = [e[0] for e in self.stream]
-        self._ticker_texts = ticker_texts(self.stream, HUD_TICKER_CHARS)
+        # Where each character sits on the strip, in dot columns. Its keying
+        # time places it; the max() keeps a fast operator's characters from
+        # overlapping by queueing them one cell apart instead, which is what a
+        # physical ticker does when fed faster than it scrolls.
+        self._ticker_cols: list[float] = []
+        prev = -1e9
+        for t, _ in self.stream:
+            prev = max(t * HUD_TICKER_COLS_PER_S, prev + HUD_TICKER_CELL_COLS)
+            self._ticker_cols.append(prev)
 
     def at(self, t: float) -> HudState:
         st = HudState(t=t, utc=None)
@@ -2525,9 +2519,20 @@ class HudTimeline:
             st.vd = vd_volts(sample.vd)
             st.id_a = id_amps(sample.id_raw)
 
+        # Everything still on the display: a character enters at the right
+        # edge when the scroll reaches its own column and leaves on the left
+        # HUD_TICKER_SPAN_S later, with no clearing rule needed -- staleness
+        # is structurally impossible rather than guarded against.
+        width = HUD_TICKER_CHARS * HUD_TICKER_CELL_COLS
+        scroll = t * HUD_TICKER_COLS_PER_S
         p = bisect.bisect_right(self._ticker_t, t)
-        if p and t - self._ticker_t[p - 1] <= TICKER_HOLD_S:
-            st.ticker = self._ticker_texts[p - 1]
+        for i in range(p - 1, -1, -1):
+            offset = round(self._ticker_cols[i] - scroll) + width
+            if offset <= -HUD_MATRIX_COLS:
+                break
+            if offset < width:
+                st.ticker.append((offset, self.stream[i][1]))
+        st.ticker.reverse()
         return st
 
 
@@ -2837,6 +2842,10 @@ def _draw_meter(draw, rect, level: float | None, segments: int = 18) -> None:
 # will be drawn. Rendered as a sheet and eyeballed, since a mistyped row is a
 # plausible-looking glyph rather than an error.
 HUD_MATRIX_COLS, HUD_MATRIX_ROWS = 5, 7
+# The display scrolls a whole dot column at a time, which is what a real
+# dot-matrix panel does -- there are no sub-dot positions on one.
+HUD_TICKER_CELL_COLS = HUD_MATRIX_COLS + 1
+HUD_TICKER_COLS_PER_S = HUD_TICKER_CHARS * HUD_TICKER_CELL_COLS / HUD_TICKER_SPAN_S
 _FONT_5X7 = {
     " ": "00000 00000 00000 00000 00000 00000 00000",
     "!": "00100 00100 00100 00100 00100 00000 00100",
@@ -2890,35 +2899,38 @@ def _matrix_rows(ch: str) -> list[str]:
     return _FONT_5X7.get(ch, _FONT_5X7["?"]).split()
 
 
-def _draw_matrix_text(draw, text: str, rect, colour) -> None:
-    """Draw `text` as a 5x7 dot-matrix display filling `rect`.
+def _draw_matrix_text(draw, cells, rect, colour, width_chars) -> None:
+    """Draw a `width_chars`-wide 5x7 dot-matrix display.
 
-    Every dot is drawn -- lit ones in `colour`, the rest at HUD_SEG_DIM --
-    so an unlit display still reads as a display, matching the segment
-    panels. The character count is fixed by the caller (the ticker pads to
-    HUD_TICKER_CHARS), so the dot pitch never changes as text arrives."""
+    Every dot is drawn -- lit ones in `colour`, the rest at HUD_SEG_DIM -- so
+    an idle display still reads as a display. `cells` are (column offset,
+    character) pairs from HudTimeline.at; offsets are whole dot columns, and a
+    character partly past either edge is simply clipped there, which is how
+    text scrolls onto and off a real panel."""
     x, y, w, h = rect
-    cols = max(1, len(text) * (HUD_MATRIX_COLS + 1) - 1)  # one blank column between
+    cols = max(1, width_chars * HUD_TICKER_CELL_COLS - 1)
     # Integer pitch and dot size, not fractional: at fractional values PIL
-    # rounds each rectangle independently, so the gaps between dots come out
-    # one pixel wide in some columns and zero in others and the display stops
-    # reading as a grid. Snapping the whole lattice to whole pixels makes
-    # every gap identical at any output resolution.
+    # rounds each rectangle independently, so gaps come out a pixel wide in
+    # some columns and zero in others and the display stops reading as a grid.
     pitch = max(2, int(min(w / cols, h / HUD_MATRIX_ROWS)))
     dot = max(1, pitch - max(1, round(pitch * 0.18)))
     ox = x + (w - pitch * cols) // 2
     oy = y + (h - pitch * HUD_MATRIX_ROWS) // 2
     dim = tuple(round(c * HUD_SEG_DIM) for c in colour)
-    for i, ch in enumerate(text):
-        rows = _matrix_rows(ch)
-        cx = ox + i * (HUD_MATRIX_COLS + 1) * pitch
-        for r, row in enumerate(rows):
-            for c, bit in enumerate(row):
-                dx, dy = int(cx + c * pitch), int(oy + r * pitch)
-                draw.rectangle(
-                    [dx, dy, dx + dot - 1, dy + dot - 1],
-                    fill=colour if bit == "1" else dim,
-                )
+
+    def put(col: int, row: int, fill) -> None:
+        if 0 <= col < cols:
+            dx, dy = ox + col * pitch, oy + row * pitch
+            draw.rectangle([dx, dy, dx + dot - 1, dy + dot - 1], fill=fill)
+
+    for col in range(cols):
+        for row in range(HUD_MATRIX_ROWS):
+            put(col, row, dim)
+    for offset, ch in cells:
+        for row, bits in enumerate(_matrix_rows(ch)):
+            for c, bit in enumerate(bits):
+                if bit == "1":
+                    put(offset + c, row, colour)
 
 
 def _dim_region(img: Image.Image, rect, factor: float) -> None:
@@ -3176,9 +3188,10 @@ def draw_hud_frame(
     x, y, w, h = slots["ticker"]
     _draw_matrix_text(
         draw,
-        state.ticker.rjust(HUD_TICKER_CHARS),
+        state.ticker,
         (x + fs(14), y + fs(8), w - fs(28), h - fs(44)),
         HUD_GREEN,
+        HUD_TICKER_CHARS,
     )
     return img
 
@@ -3200,7 +3213,9 @@ def hud_demo_state() -> HudState:
         rot_az=135,
         target_az=118,
         s_level=0.62,
-        ticker="TU 5NN JN86SR",
+        ticker=[
+            (i * HUD_TICKER_CELL_COLS + 4, c) for i, c in enumerate("TU 5NN JN86SR")
+        ],
         vd=13.8,
         id_a=12.4,
     )
@@ -3243,7 +3258,7 @@ def hud_frame_key(state: HudState) -> tuple:
         None if state.rot_az is None else round(state.rot_az),
         None if state.target_az is None else round(state.target_az),
         None if state.s_level is None else round(state.s_level * 18),
-        state.ticker,
+        tuple(state.ticker),
         None if state.vd is None else round(state.vd, 1),
         None if state.id_a is None else round(state.id_a, 1),
     )

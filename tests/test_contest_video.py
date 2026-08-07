@@ -2465,19 +2465,6 @@ class TestHudTimeline:
         assert tl.at(5.0 + cv.HUD_S_HOLD_S).s_level == 0.5
         assert tl.at(5.0 + cv.HUD_S_HOLD_S + 0.1).s_level is None
 
-    def test_ticker_keeps_the_last_characters_and_clears_after_the_hold(self):
-        seg = _hud_seg(dur=10.0)
-        seg.events = [
-            CharEvent(i * 0.1, ch) for i, ch in enumerate("ABCDEFGHIJKLMNOPQRST")
-        ]
-        tl = cv.HudTimeline(
-            segs=[seg], stream=cv.ticker_stream(cv.ticker_chunks([seg], None, None))
-        )
-        last_t = seg.events[-1].t
-        assert tl.at(last_t).ticker == "EFGHIJKLMNOPQRST"
-        assert len(tl.at(last_t).ticker) == cv.HUD_TICKER_CHARS
-        assert tl.at(last_t + cv.TICKER_HOLD_S + 0.1).ticker == ""
-
     def test_utc_is_the_local_wall_clock_less_the_derived_offset(self):
         tl = cv.HudTimeline(segs=[_hud_seg()], offset_h=2)
         assert tl.at(30.0).utc == datetime(2026, 8, 3, 18, 0, 30)
@@ -2597,18 +2584,6 @@ class TestHudMatrixFont:
             assert len(rows) == cv.HUD_MATRIX_ROWS, ch
             assert all(len(r) == cv.HUD_MATRIX_COLS for r in rows), ch
             assert set("".join(rows)) <= {"0", "1"}, ch
-
-    def test_unlit_dots_are_still_drawn_so_an_idle_ticker_reads_as_a_display(self):
-        img = Image.new("RGB", (60, 84), (0, 0, 0))
-        cv._draw_matrix_text(ImageDraw.Draw(img), " ", (0, 0, 60, 84), cv.HUD_GREEN)
-        green = np.asarray(img)[:, :, 1]
-        assert green.max() > 0  # the dot grid is there
-        assert green.max() < cv.HUD_GREEN[1]  # but nothing is lit
-
-    def test_a_lit_glyph_reaches_full_brightness(self):
-        img = Image.new("RGB", (60, 84), (0, 0, 0))
-        cv._draw_matrix_text(ImageDraw.Draw(img), "8", (0, 0, 60, 84), cv.HUD_GREEN)
-        assert np.asarray(img)[:, :, 1].max() == cv.HUD_GREEN[1]
 
     def test_an_unknown_character_falls_back_to_a_question_mark(self):
         assert cv._matrix_rows("\u00e9") == cv._matrix_rows("?")
@@ -2785,113 +2760,105 @@ class TestHudRender:
         assert "overlay=x=main_w-w-" in graph
 
 
-def _transcripts(segs, state_events=None, long_cw_spans=None):
-    """The running ticker transcript after each decoded character.
-
-    Deliberately keeps far more characters than the HUD's own 16-cell display
-    shows: these tests are about the *flush* removing stale text, and a short
-    window would let old characters scroll off by themselves and pass the
-    assertions for the wrong reason."""
-    stream = cv.ticker_stream(cv.ticker_chunks(segs, state_events, long_cw_spans))
-    return cv.ticker_texts(stream, 999)
+def _cw_segs():
+    return [
+        Segment(
+            "a", datetime(2026, 7, 4, 13, 0, 0), 5.0, 0.0,
+            events=[CharEvent(0.5, "H"), CharEvent(0.6, "I")],
+        )
+    ]  # fmt: skip
 
 
-def _assert_flushed_before(texts, marker, stale):
-    seen = False
-    for text in texts:
-        if marker in text:
-            seen = True
-        if seen:
-            for ch in stale:
-                assert ch not in text, f"{ch!r} leaked past {marker!r}: {text!r}"
-    assert seen, f"{marker!r} never reached the ticker"
+def _ticker_at(t, segs, state_events=None, long_cw_spans=None):
+    tl = cv.HudTimeline(
+        segs=segs,
+        stream=cv.ticker_stream(cv.ticker_chunks(segs, state_events, long_cw_spans)),
+    )
+    return "".join(ch for _, ch in tl.at(t).ticker)
 
 
-class TestTickerFlush:
-    def test_disjoint_long_cw_spans_are_separate_bursts(self):
-        # Two CW exchanges recovered from within the *same* long segment,
-        # ~150s apart -- more than a genuine gap (MAX_OVER_S) -- must not be
-        # shown as one continuous, un-flushed transcript: they're unrelated
-        # exchanges we happened to follow one after the other.
-        long_seg = Segment("a", datetime(2026, 7, 4, 13, 0, 0), 300.0, 0.0)
-        spans = [
-            (30.0, 85.0, [CharEvent(0.0, "A"), CharEvent(1.0, "B")]),
-            (203.0, 260.0, [CharEvent(0.0, "X"), CharEvent(1.0, "Y")]),
-        ]
-        _assert_flushed_before(_transcripts([long_seg], long_cw_spans=spans), "X", "AB")
+class TestTickerScrolling:
+    def test_characters_march_off_the_display_on_their_own(self):
+        # The whole point of scrolling on a clock: no clearing rule, no flush,
+        # no staleness horizon. A character keyed at t=0.5 has physically left
+        # a HUD_TICKER_SPAN_S-wide display well before t=30, so the leak bugs
+        # the old static transcript needed guarding against cannot occur.
+        segs = _cw_segs()
+        assert "H" in _ticker_at(1.0, segs)
+        assert _ticker_at(cv.HUD_TICKER_SPAN_S + 2.0, segs) == ""
 
-    def test_does_not_leak_across_a_genuine_gap(self):
-        # Regression test for a real bug: the ticker used to flush at a QSO's
-        # EDI-log time (minute precision only) minus a fixed lead, which could
-        # land seconds *into* the next real over -- so that over's opening
-        # characters got appended to the previous QSO's leftover transcript
-        # instead of starting fresh. The flush must trigger at the first
-        # character of a real over following a genuine listening gap.
+    def test_a_later_burst_never_shares_the_display_with_an_earlier_one(self):
         segs = [
             Segment(
                 "a", datetime(2026, 7, 4, 13, 0, 0), 10.0, 0.0,
                 events=[CharEvent(1.0, "A"), CharEvent(2.0, "B")],
             ),
-            Segment("b", datetime(2026, 7, 4, 13, 0, 10), 474.0, 10.0),  # listening
+            Segment("b", datetime(2026, 7, 4, 13, 0, 10), 474.0, 10.0),
             Segment(
                 "c", datetime(2026, 7, 4, 13, 7, 4), 5.0, 484.0,
                 events=[CharEvent(0.01, "X"), CharEvent(0.6, "Y")],
             ),
         ]  # fmt: skip
-        _assert_flushed_before(_transcripts(segs), "X", "AB")
+        shown = _ticker_at(484.5, segs)
+        assert "X" in shown and "A" not in shown and "B" not in shown
 
-    def test_does_not_leak_across_many_short_non_cw_segments(self):
-        # Regression test for a real bug found watching an actual rendered
-        # video: a fresh CW QSO still showed the tail of one decoded four
-        # minutes earlier. In between the operator worked several SSB/FM
-        # contacts, each individually short, so no *single* segment ever
-        # looked like a genuine gap to the old per-segment flush logic. The
-        # decision must key on real time since the last *included* CW chunk.
-        segs = [
-            Segment(
-                "a", datetime(2026, 7, 4, 16, 37, 44), 10.0, 0.0,
-                events=[CharEvent(1.0, "A"), CharEvent(2.0, "B")],
-            )
-        ]  # fmt: skip
-        t = 10.0
-        for i in range(20):  # ~2.5 minutes of short overs, none > MAX_OVER_S
-            segs.append(Segment(f"b{i}", datetime(2026, 7, 4, 16, 37, 54), 8.0, t))
-            t += 8.0
-        segs.append(
-            Segment(
-                "c", datetime(2026, 7, 4, 16, 42, 0), 5.0, t,
-                events=[CharEvent(0.01, "X"), CharEvent(0.6, "Y")],
-            )
+    def test_fast_keying_queues_instead_of_overlapping(self):
+        # Fed faster than it scrolls, a physical ticker queues characters one
+        # cell apart rather than piling them on top of each other.
+        seg = Segment(
+            "a", datetime(2026, 7, 4, 13, 0, 0), 5.0, 0.0,
+            events=[CharEvent(i * 0.01, c) for i, c in enumerate("ABCDE")],
         )  # fmt: skip
-        state_events = [
-            (0.0, 10.0, SegState(mode="CW")),
-            (10.0, t, SegState(mode="FM")),
-            (t, t + 5.0, SegState(mode="CW")),
-        ]
-        _assert_flushed_before(_transcripts(segs, state_events), "X", "AB")
+        tl = cv.HudTimeline(
+            segs=[seg], stream=cv.ticker_stream(cv.ticker_chunks([seg], None, None))
+        )
+        offsets = [o for o, _ in tl.at(0.2).ticker]
+        assert len(set(offsets)) == len(offsets)
+        assert all(
+            b - a >= cv.HUD_TICKER_CELL_COLS for a, b in zip(offsets, offsets[1:])
+        )
 
 
 class TestTickerModeGating:
     def _segs(self):
-        return [
-            Segment(
-                "a", datetime(2026, 7, 4, 13, 0, 0), 5.0, 0.0,
-                events=[CharEvent(0.5, "H"), CharEvent(0.6, "I")],
-            )
-        ]  # fmt: skip
+        return _cw_segs()
 
     def test_hidden_when_telemetry_says_not_cw(self):
         # The decoder runs blind on every segment and a strong tone in voice
         # audio can occasionally slip past gate_events; telemetry's own mode
         # is ground truth where we have it.
         state = [(0.0, 5.0, SegState(False, 144300000, "SSB", None))]
-        assert _transcripts(self._segs(), state) == []
+        assert _ticker_at(1.0, self._segs(), state) == ""
 
     def test_shown_when_telemetry_says_cw(self):
         state = [(0.0, 5.0, SegState(False, 144174000, "CW", None))]
-        assert _transcripts(self._segs(), state)[-1] == "HI"
+        assert _ticker_at(1.0, self._segs(), state) == "HI"
 
     def test_shown_when_mode_is_unknown(self):
         # No positive evidence it is *not* CW -- e.g. no --telemetry at all --
         # so keep the decode rather than suppressing it.
-        assert _transcripts(self._segs(), None)[-1] == "HI"
+        assert _ticker_at(1.0, self._segs(), None) == "HI"
+
+
+class TestMatrixDisplay:
+    def _render(self, cells, chars=4):
+        img = Image.new("RGB", (chars * 24, 40), (0, 0, 0))
+        cv._draw_matrix_text(
+            ImageDraw.Draw(img), cells, (0, 0, chars * 24, 40), cv.HUD_GREEN, chars
+        )
+        return np.asarray(img)[:, :, 1]
+
+    def test_unlit_dots_are_still_drawn_so_an_idle_display_reads_as_one(self):
+        green = self._render([])
+        assert green.max() > 0  # the dot grid is there
+        assert green.max() < cv.HUD_GREEN[1]  # but nothing is lit
+
+    def test_a_lit_glyph_reaches_full_brightness(self):
+        assert self._render([(0, "8")]).max() == cv.HUD_GREEN[1]
+
+    def test_a_character_scrolling_off_the_edge_is_clipped_not_wrapped(self):
+        # Partly past the left edge: some columns drawn, nothing appearing on
+        # the far right.
+        green = self._render([(-2, "8")])
+        assert green[:, -10:].max() < cv.HUD_GREEN[1]
+        assert green.max() == cv.HUD_GREEN[1]
