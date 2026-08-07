@@ -3360,16 +3360,20 @@ def render(
     # indices computed up front so each branch below references its own
     # input by number regardless of which others are present, rather than
     # each branch guessing its own index from what came before it.
-    next_idx = 1
-    scope_idx = cast_idx = webcam_idx = hud_idx = None
-    if scope:
-        scope_idx, next_idx = next_idx, next_idx + 1
-    if cast:
-        cast_idx, next_idx = next_idx, next_idx + 1
-    if webcam:
-        webcam_idx, next_idx = next_idx, next_idx + 1
-    if hud:
-        hud_idx, next_idx = next_idx, next_idx + 1
+    # An input's index is taken at the moment it is appended rather than from
+    # a separate list that has to be kept in the same order as the branches
+    # below. Those two silently drifted apart the moment the HUD branch was
+    # inserted ahead of the cast branch, and every stream then read another
+    # stream's clip: the HUD was drawn at the cast PiP's position and size,
+    # the terminal was squeezed into the webcam's face recess, and the webcam
+    # was stretched full-width along the bottom where the HUD belongs. The
+    # filter-graph string assertions all still passed, because each branch
+    # was individually well-formed.
+    def add_input(args: list[str]) -> int:
+        idx = sum(1 for a in cmd if a == "-i")
+        cmd.extend(args)
+        return idx
+
     hud_h = hud_height(H)
 
     # Full-screen scrolling waterfall, dimmed to ~half luma so it reads as an
@@ -3398,7 +3402,7 @@ def render(
         # with the one proven mechanism already used for those PiPs' own
         # start gate, rather than mixing two different techniques for the
         # same class of problem.
-        cmd += _stream_input_args(scope_start, scope)
+        scope_idx = add_input(_stream_input_args(scope_start, scope))
         fchain += (
             f";[{scope_idx}:v]scale={W}:{H},fps={RENDER_FPS},format=yuv420p,"
             f"tpad=stop_mode=clone:stop_duration=99999[scopebg]"
@@ -3413,7 +3417,7 @@ def render(
         # independent clock, so its t=0 already is the output's t=0. Composited
         # before the webcam branch so the webcam lands on top of it, inside the
         # face recess.
-        cmd += ["-i", hud]
+        hud_idx = add_input(["-i", hud])
         fchain += (
             f";[{hud_idx}:v]scale={W}:{hud_h},fps={RENDER_FPS},"
             f"tpad=stop_mode=clone:stop_duration=99999[hudbar]"
@@ -3435,7 +3439,7 @@ def render(
         cast_w = round(W * CAST_PIP_WIDTH_FRAC)
         cast_x = round(W * CAST_PIP_X_FRAC)
         cast_y = round(H * CAST_PIP_Y_FRAC)
-        cmd += _stream_input_args(cast_start, cast)
+        cast_idx = add_input(_stream_input_args(cast_start, cast))
         # format=yuva420p + colorchannelmixer=aa lowers the PiP's alpha so the
         # overlay blends it over the waterfall (a little transparency, not a
         # wash) -- overlay honours the top input's own alpha channel.
@@ -3507,7 +3511,7 @@ def render(
             margin = round(W * PIP_MARGIN_FRAC)
             pip_x, pip_y = f"main_w-w-{margin}", f"main_h-h-{margin}"
             fit = f"scale={pip_w}:-2"
-        cmd += ["-itsoffset", f"{webcam_start:.3f}", "-i", webcam]
+        webcam_idx = add_input(["-itsoffset", f"{webcam_start:.3f}", "-i", webcam])
         fchain += (
             f";[{webcam_idx}:v]setpts=PTS/{1 - webcam_rate:.8f},fps={RENDER_FPS},"
             f"{fit},tpad=stop_mode=clone:stop_duration=99999[pip]"

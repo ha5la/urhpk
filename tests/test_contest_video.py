@@ -4,6 +4,7 @@ No ffmpeg is invoked; the decoder is exercised against a synthesized CW WAV so
 the test is fully reproducible (fixed WPM, pitch, sample rate)."""
 
 import json
+import re
 import struct
 import wave
 from datetime import datetime, timezone
@@ -2920,3 +2921,47 @@ class TestSideStreamTrimming:
             self._cast(tmp_path, 30.0), str(tmp_path / "o.mp4"), fps=1.0
         )
         assert len(frames) == 31
+
+
+class TestRenderInputIndices:
+    def _sources(self, **kw):
+        """For each branch's own output label, the file that is really the
+        ffmpeg input its filter chain reads from."""
+        cmd = _render_cmd(**kw)
+        files = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-i"]
+        graph = cmd[cmd.index("-filter_complex") + 1]
+        out = {}
+        for label in ("scopebg", "hudbar", "castpip", "pip"):
+            m = re.search(r"\[(\d+):v\]((?!\[\d+:v\]).)*?\[" + label + r"\]", graph)
+            if m:
+                out[label] = files[int(m.group(1))]
+        return out
+
+    def test_every_branch_reads_its_own_clip(self):
+        # Regression for a real bug seen in a rendered frame: indices were
+        # assigned in one order and inputs appended in another, so the HUD was
+        # drawn at the cast PiP's position and size, the terminal ended up in
+        # the webcam's face recess and the webcam was stretched full-width
+        # along the bottom. Every branch's own filter string was well-formed,
+        # so only the *combination* was wrong -- which is why this asserts
+        # which file each chain reads, not merely that all four are used.
+        assert self._sources(
+            scope="s.mp4", scope_start=1.0, scope_end=9.0,
+            cast="c.mp4", webcam="w.mp4", hud="h.mp4",
+        ) == {
+            "scopebg": "s.mp4",
+            "hudbar": "h.mp4",
+            "castpip": "c.mp4",
+            "pip": "w.mp4",
+        }  # fmt: skip
+
+    def test_indices_stay_correct_with_only_some_streams(self):
+        assert self._sources(cast="c.mp4", hud="h.mp4") == {
+            "castpip": "c.mp4",
+            "hudbar": "h.mp4",
+        }
+        assert self._sources(webcam="w.mp4", hud="h.mp4") == {
+            "pip": "w.mp4",
+            "hudbar": "h.mp4",
+        }
+        assert self._sources(hud="h.mp4") == {"hudbar": "h.mp4"}
