@@ -2862,3 +2862,61 @@ class TestMatrixDisplay:
         green = self._render([(-2, "8")])
         assert green[:, -10:].max() < cv.HUD_GREEN[1]
         assert green.max() == cv.HUD_GREEN[1]
+
+
+class TestSideStreamTrimming:
+    def _cast(self, tmp_path, duration):
+        f = tmp_path / "s.cast"
+        lines = [json.dumps({"version": 2, "width": 20, "height": 4, "timestamp": 0})]
+        t = 0.0
+        while t <= duration:
+            lines.append(json.dumps([t, "o", "x"]))
+            t += 1.0
+        f.write_text("\n".join(lines) + "\n")
+        return str(f)
+
+    def test_cast_render_stops_at_the_cut_instead_of_replaying_it_all(
+        self, tmp_path, monkeypatch
+    ):
+        # A --duration preview shows the first minutes of a session, so
+        # replaying the whole cast is wasted work -- and it is the slowest
+        # stage, so it dominates exactly the case the flag exists to speed up.
+        frames = []
+
+        class FakeProc:
+            stdin = type(
+                "S",
+                (),
+                {"write": lambda _, b: frames.append(b), "close": lambda _: None},
+            )()
+
+            def wait(self):
+                return 0
+
+        monkeypatch.setattr(cv.subprocess, "Popen", lambda *a, **k: FakeProc())
+        cast = self._cast(tmp_path, 60.0)
+        cv.render_cast_video(cast, str(tmp_path / "o.mp4"), fps=1.0)
+        full = len(frames)
+        frames.clear()
+        cv.render_cast_video(cast, str(tmp_path / "o.mp4"), fps=1.0, max_duration=10.0)
+        assert len(frames) < full / 4
+        assert len(frames) == 11  # 0..10s inclusive at 1 fps
+
+    def test_no_limit_still_renders_the_whole_cast(self, tmp_path, monkeypatch):
+        frames = []
+
+        class FakeProc:
+            stdin = type(
+                "S",
+                (),
+                {"write": lambda _, b: frames.append(b), "close": lambda _: None},
+            )()
+
+            def wait(self):
+                return 0
+
+        monkeypatch.setattr(cv.subprocess, "Popen", lambda *a, **k: FakeProc())
+        cv.render_cast_video(
+            self._cast(tmp_path, 30.0), str(tmp_path / "o.mp4"), fps=1.0
+        )
+        assert len(frames) == 31

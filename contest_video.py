@@ -1216,7 +1216,12 @@ class _CastStream(pyte.ByteStream):
     }
 
 
-def render_cast_video(cast_path: str, out_path: str, fps: float = CAST_FPS) -> None:
+def render_cast_video(
+    cast_path: str,
+    out_path: str,
+    fps: float = CAST_FPS,
+    max_duration: float | None = None,
+) -> None:
     """Replay an asciinema cast into a standalone mp4 (its own timeline
     starting at t=0, matching the cast's own start) -- an intermediate
     file in the same spirit as concat_audio's wav, so the main render()
@@ -1238,6 +1243,13 @@ def render_cast_video(cast_path: str, out_path: str, fps: float = CAST_FPS) -> N
         events = [json.loads(line) for line in f]
     W, H = header["width"], header["height"]
     duration = events[-1][0] if events else 0.0
+    # A --duration preview only shows the first minutes of a session, so
+    # replaying the whole cast is wasted work -- and it is the slowest stage
+    # in the pipeline, so it dominates exactly the case the flag exists to
+    # make cheap. Measured: a 20-minute cut of a 121-minute session spent
+    # ~40 minutes here to use ~7 of it.
+    if max_duration is not None:
+        duration = min(duration, max_duration)
 
     font = ImageFont.truetype(CAST_FONT_PATH, CAST_FONT_SIZE)
     font_b = ImageFont.truetype(CAST_FONT_BOLD, CAST_FONT_SIZE)
@@ -2035,6 +2047,8 @@ CAST_PIP_X_FRAC = 0.0104
 CAST_PIP_Y_FRAC = 0.11  # clears the RX/TX badge above it
 CAST_PIP_ALPHA = 0.85  # slightly transparent so the waterfall shows
 # faintly through the terminal PiP; 1.0 = opaque
+STREAM_TRIM_MARGIN_S = 5.0  # slack when trimming a side stream to the cut,
+# so tpad's last-frame cloning never shows at the end of a preview
 RENDER_FPS = 30  # output frame rate; the webcam PiP is resampled to
 # this too (see render) so both branches share one
 # real-time clock
@@ -2096,6 +2110,7 @@ def render_scope_video(
     H: int,
     fps: int = RENDER_FPS,
     span_s: float = SCOPE_WATERFALL_SPAN_S,
+    max_duration: float | None = None,
 ) -> None:
     """Render a .scope recording into a standalone full-canvas waterfall
     clip, whose t=0 is exactly the first sweep's own timestamp -- that's
@@ -2131,6 +2146,8 @@ def render_scope_video(
     canvas = np.zeros((H, W, 3), dtype=np.uint8)
     t0 = records[0][0]
     duration = records[-1][0] - t0
+    if max_duration is not None:  # same reasoning as render_cast_video's
+        duration = min(duration, max_duration)
     row_dt = span_s / H
 
     cmd = [
@@ -3960,8 +3977,14 @@ def main() -> None:
     cast_video = None
     if args.cast and cast_start is not None:
         cast_video = stem + ".cast.mp4"
+        # How much of the cast's own timeline the cut can ever display.
+        # render() positions it with -itsoffset cast_start and stretches it by
+        # cast_rate, so clip time tau shows at cast_start + tau/(1-cast_rate);
+        # invert that at tau = total. The margin keeps tpad's frame-cloning
+        # from being visible at the very end of a preview.
+        cast_span = (total - cast_start) * (1 - cast_rate) + STREAM_TRIM_MARGIN_S
         print("rendering terminal-session PiP ...")
-        render_cast_video(args.cast, cast_video)
+        render_cast_video(args.cast, cast_video, max_duration=cast_span)
 
     hud_video = None
     if not args.no_hud:
@@ -3990,8 +4013,16 @@ def main() -> None:
     scope_video = None
     if scope_records and scope_start is not None:
         scope_video = stem + ".scope.mp4"
+        # The overlay is gated to scope_end, so anything past it is invisible.
+        scope_span = min(total, scope_end or total) - scope_start
         print("rendering scope waterfall background ...")
-        render_scope_video(args.scope, scope_video, W, H)
+        render_scope_video(
+            args.scope,
+            scope_video,
+            W,
+            H,
+            max_duration=scope_span + STREAM_TRIM_MARGIN_S,
+        )
 
     print("rendering (this takes a while) ...")
     render(
