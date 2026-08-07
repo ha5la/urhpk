@@ -1574,8 +1574,24 @@ is that the more important a value, the bigger it is drawn.
   error — every string-level test used the 1080p reference height, which is already even.
   One function rather than the same rounding in `main()` and `render()`, which must agree
   exactly or the bar gets scaled to a height it wasn't drawn at.
-- **Still to do**: slicing sprites from the artwork once it exists, and retiring the ASS
-  overlay stage (see below).
+- **The ASS subtitle stage is gone entirely.** The HUD subsumed all three overlays it
+  still produced: the RX/TX badge became the lamp, the CW ticker became the dot-matrix
+  display, and the scope frequency-range label was dropped outright — the HUD's own QRG
+  readout says what the waterfall is centred on, which is enough. That removed
+  `build_ass`, `_ass_time`, `_wrap`, `_esc`, `VIS_CHARS`/`CPL`, the three style
+  definitions, `scope_freq_periods`, the `subtitles=` filter, the intermediate `.ass`
+  file and `render()`'s `ass` parameter — one whole pipeline stage and one fewer ffmpeg
+  filter. `--keep-ass` became `--keep-intermediates`.
+- **The ticker's own behaviour survived the deletion**, because `ticker_chunks` /
+  `ticker_stream` / `ticker_texts` had already been extracted from `build_ass` for the
+  HUD to share. The regression tests that used to assert flush behaviour by
+  string-matching Dialogue lines were rewritten against those functions rather than
+  deleted — they cover real bugs (a ticker leaking across a genuine gap, and across many
+  short non-CW segments) that no longer have anything to do with subtitles. They keep 999
+  characters of transcript rather than the HUD's 16, deliberately: with a 16-cell window
+  stale characters would scroll off by themselves and the assertions would pass for the
+  wrong reason.
+- **Still to do**: slicing sprites from the artwork once it exists.
 
 ## Uploading a rendered video to YouTube
 `contest_video.py` only renders the mp4 + `.chapters.txt` + `.srt` — it does not upload.

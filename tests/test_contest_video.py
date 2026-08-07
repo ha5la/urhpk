@@ -37,10 +37,8 @@ from contest_video import (
     _rms_envelope,
     _scope_colormap,
     _srt_time,
-    _wrap,
     _yt_time,
     audio_time_for,
-    build_ass,
     build_chapters,
     build_srt,
     build_state_events,
@@ -64,7 +62,6 @@ from contest_video import (
     refine_webcam_start,
     remap_audio_t,
     render_scope_video,
-    scope_freq_periods,
     sync_webcam_start,
     trim_to_duration,
     webcam_start_from_log,
@@ -442,7 +439,6 @@ class TestRenderWebcamSync:
         monkeypatch.setattr(cv.subprocess, "run", fake_run)
         cv.render(
             str(tmp_path / "a.wav"),
-            str(tmp_path / "a.ass"),
             str(tmp_path / "out.mp4"),
             1920,
             1080,
@@ -471,7 +467,6 @@ class TestRenderWebcamSync:
         monkeypatch.setattr(cv.subprocess, "run", fake_run)
         cv.render(
             str(tmp_path / "a.wav"),
-            str(tmp_path / "a.ass"),
             str(tmp_path / "out.mp4"),
             1920,
             1080,
@@ -493,7 +488,6 @@ class TestRenderWebcamSync:
         )
         cv.render(
             str(tmp_path / "a.wav"),
-            str(tmp_path / "a.ass"),
             str(tmp_path / "out.mp4"),
             1280,
             720,
@@ -511,7 +505,6 @@ class TestRenderWebcamSync:
         )
         cv.render(
             str(tmp_path / "a.wav"),
-            str(tmp_path / "a.ass"),
             str(tmp_path / "out.mp4"),
             1280,
             720,
@@ -534,7 +527,6 @@ class TestRenderWebcamSync:
         )
         cv.render(
             str(tmp_path / "a.wav"),
-            str(tmp_path / "a.ass"),
             str(tmp_path / "out.mp4"),
             1280,
             720,
@@ -632,32 +624,6 @@ class TestLongSegmentCwRecovery:
         )
         remap_audio_t([other])
         assert other.eff_dur == GAP_KEEP_S
-
-    def test_ticker_treats_disjoint_long_cw_spans_as_separate_bursts(self):
-        # Two CW exchanges recovered from within the *same* long segment,
-        # ~150s apart -- more than a genuine gap (MAX_OVER_S) -- must not
-        # be shown as one continuous, un-flushed transcript: they're
-        # unrelated exchanges we happened to follow one after the other.
-        long_seg = Segment("a", datetime(2026, 7, 4, 13, 0, 0), 300.0, 0.0)
-        long_cw_spans = [
-            (30.0, 85.0, [CharEvent(0.0, "A"), CharEvent(1.0, "B")]),
-            (203.0, 260.0, [CharEvent(0.0, "X"), CharEvent(1.0, "Y")]),
-        ]
-        ass = build_ass([long_seg], 1920, 1080, long_cw_spans=long_cw_spans)
-        texts = [
-            line.rsplit(",", 1)[-1]
-            for line in ass.splitlines()
-            if line.startswith("Dialogue:") and ",Ticker," in line
-        ]
-        seen_x = False
-        for text in texts:
-            if "X" in text:
-                seen_x = True
-            if seen_x:
-                assert "A" not in text and "B" not in text, (
-                    f"first exchange leaked into the second: {text!r}"
-                )
-        assert seen_x, "second exchange's characters never reached the ticker"
 
 
 class TestEdi:
@@ -1200,128 +1166,12 @@ class TestTimeline:
 
 
 class TestAss:
-    def test_wrap_keeps_last_lines(self):
-        wrapped = _wrap("AAAA BBBB CCCC DDDD EEEE", cpl=9, keep=2)
-        assert wrapped.count("\\N") == 1  # exactly two lines
-        assert wrapped.endswith("EEEE")
-
-    def test_build_ass_has_events_and_resolution(self):
-        segs = [
-            Segment(
-                "a",
-                datetime(2026, 7, 4, 13, 0, 0),
-                60.0,
-                0.0,
-                events=[CharEvent(1.0, "H"), CharEvent(1.5, "I")],
-            )
-        ]
-        ass = build_ass(segs, 1920, 1080)
-        assert "PlayResX: 1920" in ass
-        assert "Dialogue:" in ass
-
     def _ticker_texts(self, ass: str) -> list[str]:
         texts = []
         for line in ass.splitlines():
             if line.startswith("Dialogue:") and ",Ticker," in line:
                 texts.append(line.rsplit(",", 1)[-1])
         return texts
-
-    def test_ticker_does_not_leak_across_a_genuine_gap(self):
-        # Regression test for a real bug: the ticker used to flush at a QSO's
-        # EDI-log time (minute precision only) minus a fixed lead, which could
-        # land seconds *into* the next real over -- so that over's opening
-        # characters got appended to the previous QSO's leftover transcript
-        # instead of starting fresh. The flush must instead trigger exactly
-        # at the first character of a real over that follows a genuine
-        # listening gap (dur > MAX_OVER_S, no events), regardless of any QSO
-        # timestamp.
-        segs = [
-            Segment(
-                "a",
-                datetime(2026, 7, 4, 13, 0, 0),
-                10.0,
-                0.0,
-                events=[CharEvent(1.0, "A"), CharEvent(2.0, "B")],
-            ),  # QSO 1 tail
-            Segment(
-                "b", datetime(2026, 7, 4, 13, 0, 10), 474.0, 10.0
-            ),  # real listening gap
-            Segment(
-                "c",
-                datetime(2026, 7, 4, 13, 7, 4),
-                5.0,
-                484.0,
-                events=[CharEvent(0.01, "X"), CharEvent(0.6, "Y")],
-            ),  # QSO 2 begins
-        ]
-        ass = build_ass(segs, 1920, 1080)
-        texts = self._ticker_texts(ass)
-        # every ticker event from segment c onward must be free of QSO 1's
-        # leftover characters -- once 'X' (segment c's first char) appears,
-        # no event may still contain 'A' or 'B'
-        seen_x = False
-        for text in texts:
-            if "X" in text:
-                seen_x = True
-            if seen_x:
-                assert "A" not in text and "B" not in text, (
-                    f"QSO 1 leftover leaked into segment c's ticker: {text!r}"
-                )
-        assert seen_x, "segment c's characters never reached the ticker"
-
-    def test_ticker_does_not_leak_across_many_short_non_cw_segments(self):
-        # Regression test for a real bug found watching an actual rendered
-        # video: at 16:42:04Z a fresh CW QSO started, but the ticker still
-        # showed the tail end of a CW QSO decoded over four minutes
-        # earlier. Between the two CW QSOs the operator worked several
-        # SSB/FM contacts, each individually short (dur <= MAX_OVER_S) --
-        # so no *single* segment in between ever looked like a "genuine
-        # gap" to the old flush logic, which only checked whether the one
-        # immediately-preceding segment was long. Real elapsed time across
-        # all of them combined was well over four minutes. The flush
-        # decision must be based on the real time gap since the last
-        # *included* (CW) chunk, not on any one segment in between.
-        # Verified red before green: the old per-segment `prev_was_gap`
-        # logic (git 68d57c1) produces the final transcript 'AB XY' on
-        # this exact data -- 'A'/'B' never flushed away before 'X'/'Y'.
-        segs = [
-            Segment(
-                "a",
-                datetime(2026, 7, 4, 16, 37, 44),
-                10.0,
-                0.0,
-                events=[CharEvent(1.0, "A"), CharEvent(2.0, "B")],
-            ),  # CW QSO 1 tail
-        ]
-        t = 10.0
-        for i in range(20):  # ~2.5 minutes of short FM/SSB overs, none > MAX_OVER_S
-            segs.append(Segment(f"b{i}", datetime(2026, 7, 4, 16, 37, 54), 8.0, t))
-            t += 8.0
-        segs.append(
-            Segment(
-                "c",
-                datetime(2026, 7, 4, 16, 42, 0),
-                5.0,
-                t,
-                events=[CharEvent(0.01, "X"), CharEvent(0.6, "Y")],
-            )
-        )  # CW QSO 2
-        state_events = [
-            (0.0, 10.0, SegState(mode="CW")),
-            (10.0, t, SegState(mode="FM")),
-            (t, t + 5.0, SegState(mode="CW")),
-        ]
-        ass = build_ass(segs, 1920, 1080, state_events)
-        texts = self._ticker_texts(ass)
-        seen_x = False
-        for text in texts:
-            if "X" in text:
-                seen_x = True
-            if seen_x:
-                assert "A" not in text and "B" not in text, (
-                    f"CW QSO 1 leftover leaked across the short-segment stretch: {text!r}"
-                )
-        assert seen_x, "CW QSO 2's characters never reached the ticker"
 
     def test_cluster_starts_marks_first_segment_and_after_long_gap_only(self):
         segs = [
@@ -1948,83 +1798,6 @@ class TestTelemetryAlignment:
         assert len(events) == 1
         assert events[0][2].freq_hz == 144174000
 
-    def test_build_ass_state_badge_is_just_rx_tx_no_rig_info(self):
-        # The QRG/mode/rotator second line was dropped as redundant with the
-        # terminal PiP's toolbar (and it overlapped the cast box at 720p).
-        segs = [Segment("a", datetime(2026, 7, 4, 13, 0, 0), 10.0, 0.0)]
-        ass = build_ass(
-            segs,
-            1920,
-            1080,
-            state_events=[(0.0, 10.0, SegState(True, 144174000, "CW", 135.0))],
-        )
-        assert "Style: State" in ass
-        assert "TX" in ass
-        assert "144.174 MHz" not in ass
-        assert "ROT" not in ass
-
-    def test_build_ass_omits_badge_when_ptt_unknown(self):
-        segs = [Segment("a", datetime(2026, 7, 4, 13, 0, 0), 10.0, 0.0)]
-        ass = build_ass(segs, 1920, 1080, state_events=[(0.0, 10.0, SegState())])
-        assert ",State," not in ass
-
-    def test_ticker_hidden_when_telemetry_says_not_cw(self):
-        # Regression test for the "hide the CW ticker outside CW" request:
-        # a segment with decoded (gated-trusted) characters must not show
-        # them in the ticker if telemetry confirms the rig was on SSB/FM at
-        # the time -- the decoder runs blind on every segment and a strong
-        # tone in voice audio can occasionally still slip past gate_events.
-        segs = [
-            Segment(
-                "a",
-                datetime(2026, 7, 4, 13, 0, 0),
-                5.0,
-                0.0,
-                events=[CharEvent(0.5, "H"), CharEvent(0.6, "I")],
-            )
-        ]
-        ass = build_ass(
-            segs,
-            1920,
-            1080,
-            state_events=[(0.0, 5.0, SegState(False, 144300000, "SSB", None))],
-        )
-        assert "Style: Ticker" in ass
-        assert ",Ticker," not in ass
-
-    def test_ticker_shown_when_telemetry_says_cw(self):
-        segs = [
-            Segment(
-                "a",
-                datetime(2026, 7, 4, 13, 0, 0),
-                5.0,
-                0.0,
-                events=[CharEvent(0.5, "H"), CharEvent(0.6, "I")],
-            )
-        ]
-        ass = build_ass(
-            segs,
-            1920,
-            1080,
-            state_events=[(0.0, 5.0, SegState(False, 144174000, "CW", None))],
-        )
-        assert ",Ticker," in ass
-
-    def test_ticker_shown_when_mode_unknown(self):
-        # No positive evidence it's *not* CW -- keep existing behaviour
-        # (e.g. no --telemetry passed at all) rather than suppressing.
-        segs = [
-            Segment(
-                "a",
-                datetime(2026, 7, 4, 13, 0, 0),
-                5.0,
-                0.0,
-                events=[CharEvent(0.5, "H"), CharEvent(0.6, "I")],
-            )
-        ]
-        ass = build_ass(segs, 1920, 1080, state_events=None)
-        assert ",Ticker," in ass
-
 
 def _text(t, text):
     return InputLogEvent(t, "text", text=text)
@@ -2379,51 +2152,6 @@ class TestScopeFreqPeriods:
             Segment("b", datetime(2026, 7, 4, 11, 1, 0), 60.0, 60.0),
         ]
 
-    def test_single_constant_range_spans_last_sweep_only(self):
-        records = [
-            (_epoch(2026, 7, 4, 11, 0, 5), 144_000_000, 146_000_000, b""),
-            (_epoch(2026, 7, 4, 11, 0, 10), 144_000_000, 146_000_000, b""),
-        ]
-        periods = scope_freq_periods(records, self._segs(), offset_h=0)
-        assert periods == [(5.0, 10.0, 144_000_000, 146_000_000)]
-
-    def test_range_change_splits_into_two_periods(self):
-        # Real usage: the operator QSYs or changes span mid-recording -- the
-        # label must track that, not just show whatever the first sweep had.
-        records = [
-            (_epoch(2026, 7, 4, 11, 0, 0), 144_000_000, 146_000_000, b""),
-            (_epoch(2026, 7, 4, 11, 0, 30), 144_000_000, 146_000_000, b""),
-            (_epoch(2026, 7, 4, 11, 1, 0), 432_000_000, 434_000_000, b""),
-            (_epoch(2026, 7, 4, 11, 1, 30), 432_000_000, 434_000_000, b""),
-        ]
-        periods = scope_freq_periods(records, self._segs(), offset_h=0)
-        assert periods == [
-            (0.0, 30.0, 144_000_000, 146_000_000),
-            (60.0, 90.0, 432_000_000, 434_000_000),
-        ]
-
-    def test_last_period_does_not_extend_past_its_own_last_sweep(self):
-        # Regression test for a real bug caught only by rendering an actual
-        # end-to-end video and inspecting the frames: an earlier version
-        # extended the last period to the video's full duration so the label
-        # wouldn't "vanish" once the recording stopped -- but the scope
-        # *background* itself doesn't persist past its own last sweep either
-        # (see render()'s enable='between(scope_start,scope_end)'), so that
-        # extension made the label show a stale frequency range over what
-        # was actually the fallback audio-spectrum background. Neither this
-        # function's own unit tests nor render()'s filter_complex string
-        # checks caught it in isolation -- the bug was in how the two
-        # independently-correct pieces combined.
-        records = [
-            (_epoch(2026, 7, 4, 11, 0, 0), 144_000_000, 146_000_000, b""),
-            (_epoch(2026, 7, 4, 11, 0, 5), 144_000_000, 146_000_000, b""),
-        ]
-        periods = scope_freq_periods(records, self._segs(), offset_h=0)
-        assert periods[-1][1] == 5.0
-
-    def test_empty_records_returns_empty(self):
-        assert scope_freq_periods([], self._segs(), offset_h=0) == []
-
 
 class TestScopeColormap:
     def test_colormap_shape_and_endpoints(self):
@@ -2438,21 +2166,6 @@ class TestScopeColormap:
         assert len(resized) == 6
         assert resized[0] == 10
         assert resized[-1] == 90
-
-
-class TestScopeFreqLabelInAss:
-    def test_scope_periods_produce_dialogue_lines(self):
-        segs = [Segment("a", datetime(2026, 7, 4, 11, 0, 0), 60.0, 0.0)]
-        ass = build_ass(
-            segs, 1920, 1080, scope_periods=[(0.0, 30.0, 144_100_000, 146_100_000)]
-        )
-        assert "144.100-146.100 MHz" in ass
-        assert ass.count("ScopeFreq") >= 2  # style def + at least one Dialogue
-
-    def test_no_scope_periods_omits_scopefreq_dialogue(self):
-        segs = [Segment("a", datetime(2026, 7, 4, 11, 0, 0), 60.0, 0.0)]
-        ass = build_ass(segs, 1920, 1080)
-        assert ass.count("ScopeFreq") == 1  # just the style def, no Dialogue lines
 
 
 class TestRenderScopeVideoTiming:
@@ -2521,7 +2234,9 @@ class TestRenderScopeVideoTiming:
 
 
 class TestRenderScopeBackground:
-    def test_scope_branch_overlays_before_subtitles(self, monkeypatch, tmp_path):
+    def test_scope_branch_overlays_onto_the_audio_background(
+        self, monkeypatch, tmp_path
+    ):
         captured = {}
 
         def fake_run(cmd, check=True):
@@ -2530,7 +2245,6 @@ class TestRenderScopeBackground:
         monkeypatch.setattr(cv.subprocess, "run", fake_run)
         cv.render(
             str(tmp_path / "a.wav"),
-            str(tmp_path / "a.ass"),
             str(tmp_path / "out.mp4"),
             1920,
             1080,
@@ -2541,10 +2255,10 @@ class TestRenderScopeBackground:
         fchain = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
         assert "[1:v]scale=1920:1080" in fchain
         assert "enable='between(t,5.000,50.000)'" in fchain
-        # subtitles must be applied to the scope-overlaid background, not
-        # directly to the raw showspectrum output -- otherwise the scope
-        # image would be drawn on top of (covering) the ticker/badge text.
-        assert "[bg2]subtitles=" in fchain
+        # The scope overlay replaces the audio-derived background, so it is
+        # the layer the PiPs and HUD sit on -- it must not be composited on
+        # top of them.
+        assert "[specbg][scopebg]overlay=" in fchain
 
     def test_scope_shifts_cast_and_webcam_input_indices(self, monkeypatch, tmp_path):
         captured = {}
@@ -2555,7 +2269,6 @@ class TestRenderScopeBackground:
         monkeypatch.setattr(cv.subprocess, "run", fake_run)
         cv.render(
             str(tmp_path / "a.wav"),
-            str(tmp_path / "a.ass"),
             str(tmp_path / "out.mp4"),
             1920,
             1080,
@@ -2574,9 +2287,7 @@ class TestRenderScopeBackground:
         assert "[2:v]setpts=" in fchain
         assert "[3:v]setpts=" in fchain
 
-    def test_no_scope_keeps_subtitles_directly_on_showspectrum(
-        self, monkeypatch, tmp_path
-    ):
+    def test_no_scope_leaves_the_audio_background_alone(self, monkeypatch, tmp_path):
         captured = {}
 
         def fake_run(cmd, check=True):
@@ -2585,13 +2296,12 @@ class TestRenderScopeBackground:
         monkeypatch.setattr(cv.subprocess, "run", fake_run)
         cv.render(
             str(tmp_path / "a.wav"),
-            str(tmp_path / "a.ass"),
             str(tmp_path / "out.mp4"),
             1920,
             1080,
         )
         fchain = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
-        assert "[specbg]subtitles=" in fchain
+        assert "scopebg" not in fchain
 
 
 class TestStreamPrecedesAudio:
@@ -2619,7 +2329,6 @@ class TestStreamPrecedesAudio:
         )
         cv.render(
             str(tmp_path / "a.wav"),
-            str(tmp_path / "a.ass"),
             str(tmp_path / "out.mp4"),
             1280,
             720,
@@ -2639,7 +2348,6 @@ class TestStreamPrecedesAudio:
         )
         cv.render(
             str(tmp_path / "a.wav"),
-            str(tmp_path / "a.ass"),
             str(tmp_path / "out.mp4"),
             1280,
             720,
@@ -3022,7 +2730,7 @@ def _render_cmd(**kw):
     real = cv.subprocess.run
     cv.subprocess.run = fake_run
     try:
-        cv.render("a.wav", "a.ass", "o.mp4", 1920, 1080, **kw)
+        cv.render("a.wav", "o.mp4", 1920, 1080, **kw)
     finally:
         cv.subprocess.run = real
     return captured["cmd"]
@@ -3075,3 +2783,115 @@ class TestHudRender:
             _render_cmd(webcam="w.mp4").index("-filter_complex") + 1
         ]
         assert "overlay=x=main_w-w-" in graph
+
+
+def _transcripts(segs, state_events=None, long_cw_spans=None):
+    """The running ticker transcript after each decoded character.
+
+    Deliberately keeps far more characters than the HUD's own 16-cell display
+    shows: these tests are about the *flush* removing stale text, and a short
+    window would let old characters scroll off by themselves and pass the
+    assertions for the wrong reason."""
+    stream = cv.ticker_stream(cv.ticker_chunks(segs, state_events, long_cw_spans))
+    return cv.ticker_texts(stream, 999)
+
+
+def _assert_flushed_before(texts, marker, stale):
+    seen = False
+    for text in texts:
+        if marker in text:
+            seen = True
+        if seen:
+            for ch in stale:
+                assert ch not in text, f"{ch!r} leaked past {marker!r}: {text!r}"
+    assert seen, f"{marker!r} never reached the ticker"
+
+
+class TestTickerFlush:
+    def test_disjoint_long_cw_spans_are_separate_bursts(self):
+        # Two CW exchanges recovered from within the *same* long segment,
+        # ~150s apart -- more than a genuine gap (MAX_OVER_S) -- must not be
+        # shown as one continuous, un-flushed transcript: they're unrelated
+        # exchanges we happened to follow one after the other.
+        long_seg = Segment("a", datetime(2026, 7, 4, 13, 0, 0), 300.0, 0.0)
+        spans = [
+            (30.0, 85.0, [CharEvent(0.0, "A"), CharEvent(1.0, "B")]),
+            (203.0, 260.0, [CharEvent(0.0, "X"), CharEvent(1.0, "Y")]),
+        ]
+        _assert_flushed_before(_transcripts([long_seg], long_cw_spans=spans), "X", "AB")
+
+    def test_does_not_leak_across_a_genuine_gap(self):
+        # Regression test for a real bug: the ticker used to flush at a QSO's
+        # EDI-log time (minute precision only) minus a fixed lead, which could
+        # land seconds *into* the next real over -- so that over's opening
+        # characters got appended to the previous QSO's leftover transcript
+        # instead of starting fresh. The flush must trigger at the first
+        # character of a real over following a genuine listening gap.
+        segs = [
+            Segment(
+                "a", datetime(2026, 7, 4, 13, 0, 0), 10.0, 0.0,
+                events=[CharEvent(1.0, "A"), CharEvent(2.0, "B")],
+            ),
+            Segment("b", datetime(2026, 7, 4, 13, 0, 10), 474.0, 10.0),  # listening
+            Segment(
+                "c", datetime(2026, 7, 4, 13, 7, 4), 5.0, 484.0,
+                events=[CharEvent(0.01, "X"), CharEvent(0.6, "Y")],
+            ),
+        ]  # fmt: skip
+        _assert_flushed_before(_transcripts(segs), "X", "AB")
+
+    def test_does_not_leak_across_many_short_non_cw_segments(self):
+        # Regression test for a real bug found watching an actual rendered
+        # video: a fresh CW QSO still showed the tail of one decoded four
+        # minutes earlier. In between the operator worked several SSB/FM
+        # contacts, each individually short, so no *single* segment ever
+        # looked like a genuine gap to the old per-segment flush logic. The
+        # decision must key on real time since the last *included* CW chunk.
+        segs = [
+            Segment(
+                "a", datetime(2026, 7, 4, 16, 37, 44), 10.0, 0.0,
+                events=[CharEvent(1.0, "A"), CharEvent(2.0, "B")],
+            )
+        ]  # fmt: skip
+        t = 10.0
+        for i in range(20):  # ~2.5 minutes of short overs, none > MAX_OVER_S
+            segs.append(Segment(f"b{i}", datetime(2026, 7, 4, 16, 37, 54), 8.0, t))
+            t += 8.0
+        segs.append(
+            Segment(
+                "c", datetime(2026, 7, 4, 16, 42, 0), 5.0, t,
+                events=[CharEvent(0.01, "X"), CharEvent(0.6, "Y")],
+            )
+        )  # fmt: skip
+        state_events = [
+            (0.0, 10.0, SegState(mode="CW")),
+            (10.0, t, SegState(mode="FM")),
+            (t, t + 5.0, SegState(mode="CW")),
+        ]
+        _assert_flushed_before(_transcripts(segs, state_events), "X", "AB")
+
+
+class TestTickerModeGating:
+    def _segs(self):
+        return [
+            Segment(
+                "a", datetime(2026, 7, 4, 13, 0, 0), 5.0, 0.0,
+                events=[CharEvent(0.5, "H"), CharEvent(0.6, "I")],
+            )
+        ]  # fmt: skip
+
+    def test_hidden_when_telemetry_says_not_cw(self):
+        # The decoder runs blind on every segment and a strong tone in voice
+        # audio can occasionally slip past gate_events; telemetry's own mode
+        # is ground truth where we have it.
+        state = [(0.0, 5.0, SegState(False, 144300000, "SSB", None))]
+        assert _transcripts(self._segs(), state) == []
+
+    def test_shown_when_telemetry_says_cw(self):
+        state = [(0.0, 5.0, SegState(False, 144174000, "CW", None))]
+        assert _transcripts(self._segs(), state)[-1] == "HI"
+
+    def test_shown_when_mode_is_unknown(self):
+        # No positive evidence it is *not* CW -- e.g. no --telemetry at all --
+        # so keep the decode rather than suppressing it.
+        assert _transcripts(self._segs(), None)[-1] == "HI"

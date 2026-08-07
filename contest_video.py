@@ -1699,36 +1699,7 @@ def match_qso_times(
 # ---------------------------------------------------------------------------
 
 RESOLUTIONS = {"1080p": (1920, 1080), "720p": (1280, 720)}
-VIS_CHARS = 84  # characters kept in the decode ticker window
-CPL = 42  # characters per ticker line
 TICKER_HOLD_S = 3.0  # ticker clears if no new character arrives within this long
-
-
-def _ass_time(t: float) -> str:
-    t = max(0.0, t)
-    h = int(t // 3600)
-    m = int((t % 3600) // 60)
-    s = t % 60
-    return f"{h:d}:{m:02d}:{s:05.2f}"
-
-
-def _wrap(text: str, cpl: int, keep: int) -> str:
-    lines: list[str] = []
-    cur = ""
-    for tok in text.split(" "):
-        piece = tok if not cur else cur + " " + tok
-        if len(piece) > cpl and cur:
-            lines.append(cur)
-            cur = tok
-        else:
-            cur = piece
-    if cur:
-        lines.append(cur)
-    return "\\N".join(lines[-keep:])
-
-
-def _esc(s: str) -> str:
-    return s.replace("\\", "\\\\").replace("{", "(").replace("}", ")")
 
 
 def _bursts(segs: list[Segment]) -> list[list[Segment]]:
@@ -1876,10 +1847,6 @@ def qso_windows(
     return windows
 
 
-STATE_TX_HEX = "0000FF"  # ASS \c is &HbbggrrH -- this is pure red
-STATE_RX_HEX = "00FF00"  # pure green
-
-
 def _mode_at(t: float, state_events: list[tuple[float, float, SegState]]) -> str | None:
     for start, end, st in state_events:
         if start <= t < end:
@@ -1947,94 +1914,6 @@ def ticker_texts(stream: list[tuple[float, str, bool]], keep: int) -> list[str]:
         transcript += ch
         out.append(transcript[-keep:])
     return out
-
-
-def build_ass(
-    segs: list[Segment],
-    W: int,
-    H: int,
-    state_events: list[tuple[float, float, SegState]] | None = None,
-    long_cw_spans: list[tuple[float, float, list[CharEvent]]] | None = None,
-    scope_periods: list[tuple[float, float, int, int]] | None = None,
-) -> str:
-    """The RX/TX badge and CW ticker are the only overlays left here --
-    everything else the video used to render itself (timestamp, QSO
-    panels, running score, band/mode/callsign text, what was typed) is
-    now visible directly in the terminal-session PIP (see render_cast_video),
-    which shows the actual logger UI rather than a reconstruction of it.
-    RX/TX status is the one thing that PIP *can't* show: puskas_logger has
-    no idea what the rig's PTT state was at any given instant until the WAV
-    recordings are downloaded from the SD card and their IC-9700 metadata
-    read back offline, well after the session ends."""
-    sx = W / 1920  # scale factor from the 1080p reference layout
-    fs_ticker = int(40 * sx)
-    fs_hdr = int(40 * sx)
-
-    head = f"""[Script Info]
-ScriptType: v4.00+
-PlayResX: {W}
-PlayResY: {H}
-WrapStyle: 2
-ScaledBorderAndShadow: yes
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Ticker,DejaVu Sans Mono,{fs_ticker},&H00FFFF66,&H000000FF,&H00000000,&H8C100C08,-1,0,0,0,100,100,0,0,3,10,0,2,60,60,20,1
-Style: State,DejaVu Sans Mono,{fs_hdr},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,2,7,60,60,40,1
-Style: ScopeFreq,DejaVu Sans Mono,{fs_hdr},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,2,9,60,60,40,1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
-    lines: list[str] = [head]
-
-    def ev(start, end, style, text, layer=0):
-        lines.append(
-            f"Dialogue: {layer},{_ass_time(start)},{_ass_time(end)},"
-            f"{style},,0,0,0,,{text}"
-        )
-
-    total = segs[-1].audio_t + _eff(segs[-1]) if segs else 0.0
-
-    # --- rig/rotator state (top-left): timed per build_state_events, which
-    # sub-divides within a WAV segment wherever telemetry itself shows the
-    # state actually changing (see its docstring). No event at all when ptt
-    # is unknown for that stretch.
-    if state_events is not None:
-        for start, end, st in state_events:
-            if st.ptt is None:
-                continue
-            hexcol = STATE_TX_HEX if st.ptt else STATE_RX_HEX
-            label = "TX" if st.ptt else "RX"
-            # Just the RX/TX dot -- the QRG/mode/rotator line that used to sit
-            # under it was dropped as redundant: the same info is legible in the
-            # terminal-session PiP's own toolbar, and its second line overlapped
-            # the cast box at 720p.
-            ev(start, end, "State", f"{{\\c&H{hexcol}&}}● {label}")
-
-    # --- scope waterfall frequency range (top-right): only present with
-    # --scope, one Dialogue per stretch the range stayed constant (see
-    # scope_freq_periods) -- the operator can QSY or change span mid-
-    # recording, so this can't just be shown once as static text.
-    if scope_periods:
-        for start, end, start_hz, end_hz in scope_periods:
-            ev(start, end, "ScopeFreq", f"{start_hz / 1e6:.3f}-{end_hz / 1e6:.3f} MHz")
-
-    # --- decode ticker: rolling window, flushed at the start of every fresh
-    # burst of on-air activity -- not at a QSO's EDI timestamp, which is
-    # only minute-precision and would flush mid-over. See ticker_chunks /
-    # ticker_stream for how the content and the flush points are found; the
-    # HUD's own 16-character ticker reads the same stream.
-    stream = ticker_stream(ticker_chunks(segs, state_events, long_cw_spans))
-    texts = ticker_texts(stream, VIS_CHARS)
-    for i, (t, _, _) in enumerate(stream):
-        end = stream[i + 1][0] if i + 1 < len(stream) else total
-        end = min(end, t + TICKER_HOLD_S)  # clear rather than show stale text in gaps
-        if end <= t:
-            continue
-        ev(t, end, "Ticker", _wrap(texts[i], CPL, 2))
-
-    return "".join(x if x.endswith("\n") else x + "\n" for x in lines)
 
 
 # ---------------------------------------------------------------------------
@@ -2326,40 +2205,6 @@ def render_scope_video(
     finally:
         proc.stdin.close()
         proc.wait()
-
-
-def scope_freq_periods(
-    records: list[tuple[float, int, int, bytes]],
-    segs: list[Segment],
-    offset_h: int,
-) -> list[tuple[float, float, int, int]]:
-    """(video_start_t, video_end_t, start_hz, end_hz) for each stretch during
-    which the scope's own frequency range stayed constant -- the operator can
-    QSY or change span mid-recording, and the on-screen label (see build_ass)
-    needs to track that, not just show whatever the first sweep happened to
-    show. Deliberately does *not* extend the last period past the last real
-    sweep: an earlier version extended it to the video's full duration so the
-    label wouldn't "vanish" once the scope recording stopped -- but the scope
-    *background* itself doesn't persist past its own last sweep either (see
-    render()'s enable='between(scope_start,scope_end)'), so a label outliving
-    it just shows a stale frequency range over what's actually the fallback
-    audio-spectrum background. Caught rendering a real (small, synthetic)
-    end-to-end video and inspecting actual frames -- the two other test
-    layers (unit tests on this function alone, and string-matching the
-    filter_complex) both looked correct in isolation and neither would have
-    caught this, since the bug is in how two independently-correct pieces
-    combine."""
-    periods: list[list] = []
-    for ts, start_hz, end_hz, _ in records:
-        wall = datetime.fromtimestamp(ts, tz=timezone.utc).replace(
-            tzinfo=None
-        ) + timedelta(hours=offset_h)
-        t = audio_time_for(wall, segs)
-        if periods and (start_hz, end_hz) == (periods[-1][2], periods[-1][3]):
-            periods[-1][1] = t
-        else:
-            periods.append([t, t, start_hz, end_hz])
-    return [tuple(p) for p in periods]
 
 
 # ---------------------------------------------------------------------------
@@ -3448,7 +3293,6 @@ def _stream_input_args(start: float, path: str) -> list[str]:
 
 def render(
     wav: str,
-    ass: str,
     out: str,
     W: int,
     H: int,
@@ -3463,7 +3307,6 @@ def render(
     scope_end: float = 0.0,
     hud: str | None = None,
 ) -> None:
-    ass_esc = ass.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
     cmd = ["ffmpeg", "-y", "-hide_banner", "-stats", "-loglevel", "warning", "-i", wav]
 
     # Inputs are added in this order when present: scope, cast, webcam --
@@ -3516,8 +3359,7 @@ def render(
             f"enable='between(t,{max(scope_start, 0.0):.3f},{scope_end:.3f})'[bg2]"
         )
         bg = "bg2"
-    fchain += f";[{bg}]subtitles='{ass_esc}':fontsdir=/usr/share/fonts[v0]"
-    cur = "v0"
+    cur = bg
     if hud:
         # No -itsoffset: unlike every other side stream here, the HUD clip is
         # generated *from* the output timeline rather than captured against an
@@ -3677,9 +3519,9 @@ def main() -> None:
         help=f"trim silent gaps between QSOs to {GAP_KEEP_S:.0f}s each",
     )
     ap.add_argument(
-        "--keep-ass",
+        "--keep-intermediates",
         action="store_true",
-        help="keep intermediate .ass/.wav for inspection",
+        help="keep the intermediate .wav and side-stream clips for inspection",
     )
     ap.add_argument(
         "--telemetry",
@@ -4036,10 +3878,6 @@ def main() -> None:
     elif scope_end is not None:
         scope_end = min(scope_end, total)
 
-    scope_periods = (
-        scope_freq_periods(scope_records, segs, offset_h) if scope_records else None
-    )
-
     # Resolved to absolute video-timeline time only now, using each
     # segment's final audio_t (post-remap, if --skip-gaps was used).
     long_cw_spans = [
@@ -4058,18 +3896,6 @@ def main() -> None:
         print(
             f"  {matched}/{len(qsos)} QSOs got an exact submit time from the input log"
         )
-
-    ass_text = build_ass(
-        segs,
-        W,
-        H,
-        state_events,
-        long_cw_spans=long_cw_spans,
-        scope_periods=scope_periods,
-    )
-    ass_path = os.path.splitext(args.out)[0] + ".ass"
-    with open(ass_path, "w") as fh:
-        fh.write(ass_text)
 
     stem = os.path.splitext(args.out)[0]
     windows = qso_windows(qsos, segs, offset_h, total, qso_times)
@@ -4140,7 +3966,6 @@ def main() -> None:
     print("rendering (this takes a while) ...")
     render(
         wav,
-        ass_path,
         args.out,
         W,
         H,
@@ -4156,9 +3981,8 @@ def main() -> None:
         hud=hud_video,
     )
 
-    if not args.keep_ass:
+    if not args.keep_intermediates:
         os.remove(wav)
-        os.remove(ass_path)
         if cast_video:
             os.remove(cast_video)
         if scope_video:
