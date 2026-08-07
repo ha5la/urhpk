@@ -2715,17 +2715,15 @@ def _fit_font(text: str, max_w: int, size: int, bold: bool = True):
 # bars) read as a digit being clipped by the panel edge rather than as an
 # unlit cell.
 DSEG_FONT_PATH = "/usr/share/fonts/truetype/dseg/DSEG7Classic-Bold.ttf"
-# DSEG14 adds letters, for the rows that mix a caption into the value.
-DSEG14_FONT_PATH = "/usr/share/fonts/truetype/dseg/DSEG14Classic-Bold.ttf"
 HUD_SEG_DIM = 0.12  # brightness of an unlit segment
 
-_DSEG_FONTS: dict[tuple[str, int], ImageFont.FreeTypeFont] = {}
+_DSEG_FONTS: dict[int, ImageFont.FreeTypeFont] = {}
 
 
-def _dseg_font(size: int, path: str = DSEG_FONT_PATH) -> ImageFont.FreeTypeFont:
-    if (path, size) not in _DSEG_FONTS:
-        _DSEG_FONTS[(path, size)] = ImageFont.truetype(path, size)
-    return _DSEG_FONTS[(path, size)]
+def _dseg_font(size: int) -> ImageFont.FreeTypeFont:
+    if size not in _DSEG_FONTS:
+        _DSEG_FONTS[size] = ImageFont.truetype(DSEG_FONT_PATH, size)
+    return _DSEG_FONTS[size]
 
 
 def _all_segments(text: str) -> str:
@@ -2735,9 +2733,7 @@ def _all_segments(text: str) -> str:
     return "".join(ch if ch in ".: " else "8" for ch in text)
 
 
-def _seven_seg(
-    draw, text, x, y, max_w, max_h, colour, anchor="mm", path=DSEG_FONT_PATH
-) -> float:
+def _seven_seg(draw, text, x, y, max_w, max_h, colour, anchor="mm") -> float:
     """Draw `text` as segment digits, scaled down to fit max_w x max_h, and
     return the rendered width.
 
@@ -2750,7 +2746,7 @@ def _seven_seg(
     box = _all_segments(text)
     size = max(6, round(max_h))
     while True:
-        font = _dseg_font(size, path)
+        font = _dseg_font(size)
         left, top, right, bottom = draw.textbbox((0, 0), box, font=font)
         w, h = right - left, bottom - top
         if size <= 6 or (w <= max_w and h <= max_h):

@@ -21,8 +21,8 @@ recess in the artwork:
 
 | Element | Drawn by |
 |---|---|
-| Score, QSOs, QRG, volts, amps, bearing | DSEG7 segment font |
-| UTC / rate / ODX rows | DSEG14 segment font |
+| Score, QSOs, QRG, volts, amps, bearing, UTC, rate, ODX | DSEG7 segment font |
+| Every fixed label and caption, including "UTC" / "RATE /H" / "ODX KM" | the artwork itself |
 | CW ticker | 5x7 dot-matrix font, `_FONT_5X7` |
 | Band/mode chips | baked **lit** in the artwork, dimmed per-pixel when inactive |
 | RX/TX lamp, S-meter fill, both compass needles | sprites cut from the bottom region |

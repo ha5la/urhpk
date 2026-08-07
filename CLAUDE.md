@@ -1428,9 +1428,10 @@ is that the more important a value, the bigger it is drawn.
   spilled five-digit scores clean across the gutter into the QSOS panel. The regression
   test asserts no lit pixels in that gutter, and was confirmed red by monkeypatching
   `_fit_font` back to a plain fixed-size lookup.
-- **Numerals are real segment glyphs from DSEG (Debian `fonts-dseg`, SIL OFL)**: DSEG7 for
-  pure numbers (score, QSOs, QRG, volts, amps, bearing) and DSEG14, which has letters, for
-  the stats rows so their captions sit in the same face as their values. An earlier version
+- **Numerals are real segment glyphs from DSEG7 (Debian `fonts-dseg`, SIL OFL)** — every
+  value on the bar is numeric, so the alphabetic DSEG14 the stats rows briefly used is
+  gone: once their captions became chrome (see the chrome/values split above) there was
+  nothing left to render that needed letters. An earlier version
   drew all seven segments as polygons by hand to avoid depending on a font at all; the
   package turned out to be packaged for Debian and already installed, the glyphs are better
   than hand-rolled ones, and it deleted ~120 lines of geometry. There is precedent for the
@@ -1460,8 +1461,6 @@ is that the more important a value, the bigger it is drawn.
   Debian's `fonts-dotgothic16` (OFL, TrueType, 16x16-bitmap-derived) is the candidate;
   the authentic recommendations — DooM Font, Small Fonts, Px437 IBM VGA8 — are dafont or
   font-pack downloads whose licences would need checking before living in this repo.
-- **DSEG14's space is only about a quarter of a cell wide**, so the stats rows use double
-  spaces between caption and value; a single one leaves them jammed together.
 - **The CW ticker is a 5x7 dot-matrix display** (`_FONT_5X7`, `_draw_matrix_text`), every
   dot drawn with the same lit/`HUD_SEG_DIM` treatment as the segment panels, so an idle
   ticker still reads as a display. The glyph table is written out in the source rather than
