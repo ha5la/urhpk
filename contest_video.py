@@ -3296,6 +3296,94 @@ def hud_demo_state() -> HudState:
     )
 
 
+HUD_H_FRAC = HUD_H / 1080  # bar height as a fraction of the frame, from the
+# 1080p reference layout; scaled for other resolutions.
+
+
+def hud_height(H: int) -> int:
+    """The bar's pixel height for a given frame height, forced even.
+
+    libx264 refuses an odd dimension, and 720p lands on 173 -- found only by
+    rendering an actual clip at 720p, since the 1080p reference height is
+    already even and every string-level test used it. One function rather than
+    the same rounding in main() and render(), which must agree exactly or the
+    bar is scaled to a different height than it was drawn at."""
+    return 2 * round(H * HUD_H_FRAC / 2)
+
+
+def hud_frame_key(state: HudState) -> tuple:
+    """What the HUD's pixels actually depend on, for frame reuse.
+
+    Everything except `t` itself, with the continuously-varying values
+    quantised to the resolution they are *drawn* at: the meter is 18 discrete
+    segments and a needle rounded to the nearest degree moves well under a
+    pixel. Without this the scope-derived signal level alone would force a
+    fresh draw ~30 times a second."""
+    return (
+        state.utc.replace(microsecond=0) if state.utc else None,
+        state.score,
+        round(state.score_flash, 2),
+        state.qsos,
+        round(state.rate_per_h),
+        state.best_km,
+        state.freq_hz,
+        state.mode,
+        state.band,
+        state.ptt,
+        None if state.rot_az is None else round(state.rot_az),
+        None if state.target_az is None else round(state.target_az),
+        None if state.s_level is None else round(state.s_level * 18),
+        state.ticker,
+        None if state.vd is None else round(state.vd, 1),
+        None if state.id_a is None else round(state.id_a, 1),
+    )
+
+
+def render_hud_video(
+    timeline: HudTimeline,
+    out_path: str,
+    W: int,
+    H: int,
+    duration: float,
+    fps: int = RENDER_FPS,
+    background: Image.Image | None = None,
+) -> int:
+    """Render the HUD bar to its own clip, to be composited by render().
+
+    Same separate-stage-then-composite pattern as render_cast_video and
+    render_scope_video: PIL frames piped straight into ffmpeg as rawvideo,
+    no intermediate PNGs. Its t=0 is the output timeline's t=0, so render()
+    needs no -itsoffset for it at all -- unlike every other side stream here,
+    this one is generated *from* that timeline rather than captured against
+    an independent clock.
+
+    Returns the number of frames actually drawn, which is what the reuse
+    optimisation is measured by."""
+    cmd = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "warning",
+        "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", f"{fps}",
+        "-i", "-", "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+        "-pix_fmt", "yuv420p", out_path,
+    ]  # fmt: skip
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    drawn = 0
+    try:
+        last_key = None
+        frame = None
+        for i in range(max(1, int(duration * fps))):
+            state = timeline.at(i / fps)
+            key = hud_frame_key(state)
+            if key != last_key or frame is None:
+                frame = draw_hud_frame(state, W, H, background).tobytes()
+                last_key = key
+                drawn += 1
+            proc.stdin.write(frame)
+    finally:
+        proc.stdin.close()
+        proc.wait()
+    return drawn
+
+
 def _stream_input_args(start: float, path: str) -> list[str]:
     """ffmpeg input args placing a side stream's frame 0 at `start`.
 
@@ -3323,6 +3411,7 @@ def render(
     scope: str | None = None,
     scope_start: float = 0.0,
     scope_end: float = 0.0,
+    hud: str | None = None,
 ) -> None:
     ass_esc = ass.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
     cmd = ["ffmpeg", "-y", "-hide_banner", "-stats", "-loglevel", "warning", "-i", wav]
@@ -3332,13 +3421,16 @@ def render(
     # input by number regardless of which others are present, rather than
     # each branch guessing its own index from what came before it.
     next_idx = 1
-    scope_idx = cast_idx = webcam_idx = None
+    scope_idx = cast_idx = webcam_idx = hud_idx = None
     if scope:
         scope_idx, next_idx = next_idx, next_idx + 1
     if cast:
         cast_idx, next_idx = next_idx, next_idx + 1
     if webcam:
         webcam_idx, next_idx = next_idx, next_idx + 1
+    if hud:
+        hud_idx, next_idx = next_idx, next_idx + 1
+    hud_h = hud_height(H)
 
     # Full-screen scrolling waterfall, dimmed to ~half luma so it reads as an
     # ambient background and the text stays crisp on top. overlap=0.8 makes it
@@ -3376,6 +3468,19 @@ def render(
         bg = "bg2"
     fchain += f";[{bg}]subtitles='{ass_esc}':fontsdir=/usr/share/fonts[v0]"
     cur = "v0"
+    if hud:
+        # No -itsoffset: unlike every other side stream here, the HUD clip is
+        # generated *from* the output timeline rather than captured against an
+        # independent clock, so its t=0 already is the output's t=0. Composited
+        # before the webcam branch so the webcam lands on top of it, inside the
+        # face recess.
+        cmd += ["-i", hud]
+        fchain += (
+            f";[{hud_idx}:v]scale={W}:{hud_h},fps={RENDER_FPS},"
+            f"tpad=stop_mode=clone:stop_duration=99999[hudbar]"
+            f";[{cur}][hudbar]overlay=x=0:y=main_h-h[vhud]"
+        )
+        cur = "vhud"
     if cast:
         # cast is our own render_cast_video output -- a synthetic, constant-
         # framerate file we just encoded, so no drift *of its own* -- but
@@ -3449,13 +3554,25 @@ def render(
         # webcam_rate defaults to 0.0 (identity scaling) when no rate was
         # determined (e.g. --webcam-offset was used instead, or
         # cross-correlation found no confident match).
-        pip_w = round(W * PIP_WIDTH_FRAC)
-        margin = round(W * PIP_MARGIN_FRAC)
+        # With a HUD the webcam belongs in its face recess, exactly where
+        # DOOM's portrait sits -- not in the bottom-right corner, which the
+        # bar now covers. Cropped to the recess's own aspect (a centre crop of
+        # a webcam pointed at the operator *is* a face portrait) rather than
+        # letterboxed, which would leave bars inside the frame.
+        if hud:
+            fx, fy, fw, fh = hud_layout(W, hud_h)["face"]
+            pip_x, pip_y = fx, H - hud_h + fy
+            fit = f"crop=min(iw\\,ih*{fw}/{fh}):min(ih\\,iw*{fh}/{fw}),scale={fw}:{fh}"
+        else:
+            pip_w = round(W * PIP_WIDTH_FRAC)
+            margin = round(W * PIP_MARGIN_FRAC)
+            pip_x, pip_y = f"main_w-w-{margin}", f"main_h-h-{margin}"
+            fit = f"scale={pip_w}:-2"
         cmd += ["-itsoffset", f"{webcam_start:.3f}", "-i", webcam]
         fchain += (
             f";[{webcam_idx}:v]setpts=PTS/{1 - webcam_rate:.8f},fps={RENDER_FPS},"
-            f"scale={pip_w}:-2,tpad=stop_mode=clone:stop_duration=99999[pip]"
-            f";[{cur}][pip]overlay=x=main_w-w-{margin}:y=main_h-h-{margin}:"
+            f"{fit},tpad=stop_mode=clone:stop_duration=99999[pip]"
+            f";[{cur}][pip]overlay=x={pip_x}:y={pip_y}:"
             f"enable='gte(t,{webcam_start:.3f})'[v]"
         )
         cur = "v"
@@ -3591,6 +3708,11 @@ def main() -> None:
         type=float,
         default=0.0,
         help="video-time position (seconds) sampled by --hud-preview",
+    )
+    ap.add_argument(
+        "--no-hud",
+        action="store_true",
+        help="skip the HUD bar entirely (the pre-HUD look: overlays only)",
     )
     ap.add_argument(
         "--hud-background",
@@ -3935,6 +4057,30 @@ def main() -> None:
         print("rendering terminal-session PiP ...")
         render_cast_video(args.cast, cast_video)
 
+    hud_video = None
+    if not args.no_hud:
+        hud_video = stem + ".hud.mp4"
+        hud_h = hud_height(H)
+        print("rendering HUD ...")
+        timeline = build_hud_timeline(
+            segs,
+            qsos,
+            windows,
+            mywwl,
+            offset_h,
+            state_events=state_events,
+            scope_records=scope_records,
+            long_cw_spans=long_cw_spans,
+            telemetry=telemetry,
+        )
+        drawn = render_hud_video(
+            timeline, hud_video, W, hud_h, total, background=hud_bg
+        )
+        frames = max(1, int(total * RENDER_FPS))
+        print(
+            f"  {drawn} frames drawn for {frames} ({frames / max(1, drawn):.0f}x reuse)"
+        )
+
     scope_video = None
     if scope_records and scope_start is not None:
         scope_video = stem + ".scope.mp4"
@@ -3957,6 +4103,7 @@ def main() -> None:
         scope=scope_video,
         scope_start=scope_start or 0.0,
         scope_end=scope_end or 0.0,
+        hud=hud_video,
     )
 
     if not args.keep_ass:
@@ -3966,6 +4113,8 @@ def main() -> None:
             os.remove(cast_video)
         if scope_video:
             os.remove(scope_video)
+        if hud_video:
+            os.remove(hud_video)
     print(f"wrote {args.out}")
 
 

@@ -3009,3 +3009,69 @@ class TestMeterCalibration:
         assert tl.at(45.0).vd is not None  # while the radio was there
         assert tl.at(120.0).vd is None  # and gone once it dropped
         assert tl.at(120.0).id_a is None
+
+
+def _render_cmd(**kw):
+    """render()'s ffmpeg command, without running it."""
+    captured = {}
+
+    def fake_run(cmd, **_):
+        captured["cmd"] = cmd
+        return None
+
+    real = cv.subprocess.run
+    cv.subprocess.run = fake_run
+    try:
+        cv.render("a.wav", "a.ass", "o.mp4", 1920, 1080, **kw)
+    finally:
+        cv.subprocess.run = real
+    return captured["cmd"]
+
+
+class TestHudRender:
+    def test_frame_key_ignores_time_but_tracks_everything_drawn(self):
+        a = cv.hud_demo_state()
+        b = cv.hud_demo_state()
+        b.t = a.t + 5.0
+        assert cv.hud_frame_key(a) == cv.hud_frame_key(b)  # t alone changes nothing
+        b.score = a.score + 1
+        assert cv.hud_frame_key(a) != cv.hud_frame_key(b)
+
+    def test_frame_key_quantises_the_continuously_varying_values(self):
+        # The meter is 18 discrete segments and a needle rounded to a degree
+        # moves under a pixel; without this the scope-derived signal level
+        # would force a fresh draw ~30 times a second for no visible gain.
+        a = cv.hud_demo_state()
+        b = cv.hud_demo_state()
+        b.s_level = a.s_level + 0.001
+        b.rot_az = a.rot_az + 0.2
+        assert cv.hud_frame_key(a) == cv.hud_frame_key(b)
+        b.s_level = a.s_level + 0.2
+        assert cv.hud_frame_key(a) != cv.hud_frame_key(b)
+
+    def test_bar_height_is_even_at_every_supported_resolution(self):
+        # libx264 refuses an odd dimension and 720p rounds to 173. Found by
+        # rendering a real 720p clip, not by any string-level assertion --
+        # the 1080p reference height is already even.
+        for _, H in cv.RESOLUTIONS.values():
+            assert cv.hud_height(H) % 2 == 0
+
+    def test_render_places_the_hud_bar_along_the_bottom(self):
+        cmd = _render_cmd(hud="h.mp4")
+        graph = cmd[cmd.index("-filter_complex") + 1]
+        assert "[hudbar]overlay=x=0:y=main_h-h" in graph
+
+    def test_the_webcam_moves_into_the_face_recess_when_a_hud_is_present(self):
+        # Bottom-right is under the bar now, so the corner PiP would be hidden.
+        face = cv.hud_layout(1920, cv.hud_height(1080))["face"]
+        graph = _render_cmd(hud="h.mp4", webcam="w.mp4")[
+            _render_cmd(hud="h.mp4", webcam="w.mp4").index("-filter_complex") + 1
+        ]
+        assert f"scale={face[2]}:{face[3]}" in graph
+        assert f"overlay=x={face[0]}:" in graph
+
+    def test_without_a_hud_the_webcam_keeps_its_corner(self):
+        graph = _render_cmd(webcam="w.mp4")[
+            _render_cmd(webcam="w.mp4").index("-filter_complex") + 1
+        ]
+        assert "overlay=x=main_w-w-" in graph

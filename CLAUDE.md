@@ -1555,10 +1555,27 @@ is that the more important a value, the bigger it is drawn.
   collides with the cast PiP (73% width x 1.69 aspect = 830px tall). The workable budget
   is ~260px (24%, 7.4:1), at which the cast PiP only has to shrink from 0.73 to ~0.70
   width. `HUD_W`/`HUD_H` are 1920x260 for that reason.
-- **Not yet done**: `render_hud_video` (the per-frame pass, to follow `render_cast_video`'s
-  PIL-to-ffmpeg-pipe pattern), compositing into `render()`'s filter graph, moving the
-  webcam into the face slot, and the logger-side meter recorder that would fill the PWR
-  panel.
+- **`render_hud_video` renders the bar to its own clip**, same separate-stage-then-
+  composite pattern as `render_cast_video`/`render_scope_video`. It needs no `-itsoffset`
+  at all, unlike every other side stream: the clip is generated *from* the output timeline
+  rather than captured against an independent clock, so its t=0 already is the output's.
+- **Frames are reused whenever nothing visible changed** (`hud_frame_key`): everything the
+  drawing depends on except `t`, with the continuously-varying values quantised to the
+  resolution they are actually drawn at — 18 meter segments, needles to the nearest degree.
+  Without that quantisation the scope-derived signal level alone forces a fresh draw ~30
+  times a second for sub-pixel differences. On a short synthetic clip this drew 22 frames
+  out of 120; over a real session the clock's once-a-second tick is the dominant driver.
+- **The webcam moves into the face recess when a HUD is present**, centre-cropped to the
+  recess's aspect rather than letterboxed (a centre crop of a webcam pointed at the
+  operator *is* a face portrait). Bottom-right is under the bar now, so the old corner PiP
+  would simply be hidden. `--no-hud` keeps the pre-HUD look, corner PiP included.
+- **`hud_height()` forces an even pixel height**, because libx264 refuses an odd dimension
+  and 720p rounds to 173. Found by rendering an actual 720p clip and reading the ffmpeg
+  error — every string-level test used the 1080p reference height, which is already even.
+  One function rather than the same rounding in `main()` and `render()`, which must agree
+  exactly or the bar gets scaled to a height it wasn't drawn at.
+- **Still to do**: slicing sprites from the artwork once it exists, and retiring the ASS
+  overlay stage (see below).
 
 ## Uploading a rendered video to YouTube
 `contest_video.py` only renders the mp4 + `.chapters.txt` + `.srt` — it does not upload.
