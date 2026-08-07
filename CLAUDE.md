@@ -611,23 +611,26 @@ is wired into any tool yet; recorded so the measurements don't have to be repeat
 - **Vd reads on receive**, which is the case that matters for portable battery ops —
   watching a pack sag across a round beats a momentary key-down dip. Id is PA drain only
   and reads a literal 0 on RX.
-- **Id's scale, measured: a straight line through the origin at 0.0745 A per raw unit**
-  (~18 A full scale, against Icom's 25 A). Taken with a multimeter in series with the
+- **Id's scale, measured: a straight line through the origin at 0.0741 A per raw unit**
+  (~17.9 A full scale, against Icom's 25 A). Taken with a multimeter in series with the
   supply, PA drain = total current less the measured 1.18 A receive baseline. The low
-  cluster (raw 55-64, ~4.3-4.7 A) alone gives 0.0739 and adding a 100%-power anchor at
-  raw 171 gives 0.0745 — two nearly independent estimates a factor of three apart in
-  current, agreeing to 1%, which is what makes "linear through zero" believable rather
-  than merely fitted. Residuals within ±4.7%.
+  cluster (raw 55-64, 3.9-4.7 A) alone gives 0.0726 and adding a 100%-power anchor at
+  raw 171 gives 0.0741 — two nearly independent estimates a factor of three apart in
+  current, agreeing to 2%, which is what makes "linear through zero" believable rather
+  than merely fitted. The low cluster cannot determine a slope alone: it spans nine raw
+  units, so a free (non-origin) fit through it returns a physically absurd −1.5 A
+  intercept purely from the short lever arm. Residuals within ±5.3%, worst at the lowest
+  point.
 - **A cheap multimeter's burden voltage is enough to brown the radio out, and the radio
   itself measures it.** With the meter in series the session's own `vd` readings fell to
   raw 22-41 — 10.2-10.7 V at the radio against 13.7 V at the supply, i.e. ~0.55 Ω of
   shunt plus lead resistance — and at 25% power the radio hit undervoltage and switched
-  off, twice, reproducibly. Two consequences worth remembering. First, the current
-  readings are *still valid* for calibration: Id measures drain current, and a
-  (raw, amps) pair describes one instant regardless of how degraded the supply was at
-  that instant — which is why a run that looked like a failure produced the fit above.
-  Second, the flat 5.45 A at both 10% and 15% is the radio power-limiting in brownout,
-  not a meter error.
+  off, twice, reproducibly. The current readings are *still valid* for calibration
+  regardless: Id measures drain current, and a (raw, amps) pair describes one instant
+  however degraded the supply was at that instant — which is why a run that looked like
+  a failure produced the fit above. What the brownout does cost is the assumption that
+  the receive baseline stays constant while it is being subtracted, which is part of why
+  the lowest reading is the worst-fitting one.
 - **Vd's own curve is confirmed by the same session.** Across 10-100% power the gap
   between supply voltage and converted Vd grows 0.37 → 0.81 V, and that gap is *linear
   in current*: 54 mΩ of series resistance with a 0.10 V intercept. A wrong Vd curve would

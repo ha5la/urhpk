@@ -2529,14 +2529,18 @@ def hud_s_marks(
 # drain. Measured directly against a multimeter in series with the supply, at
 # raw 55/60/61/62/64 plus a 100%-power anchor at raw 171, PA drain (total
 # current less the 1.18 A measured receive baseline) fits a straight line
-# *through the origin* at 0.0745 A per raw unit, i.e. ~18 A full scale rather
-# than Icom's 25 A. The low cluster alone gives 0.0739 and adding the 100%
-# anchor gives 0.0745 -- two nearly independent estimates a factor of three
-# apart in current agreeing to 1%, which is what makes the straight line
-# through zero believable rather than merely fitted. Residuals are within
-# +-4.7%.
+# *through the origin* at 0.0741 A per raw unit, i.e. ~17.9 A full scale
+# rather than Icom's 25 A. The low cluster alone gives 0.0726 and adding the
+# 100% anchor gives 0.0741 -- two nearly independent estimates a factor of
+# three apart in current, agreeing to 2%, which is what makes the line
+# through zero believable rather than merely fitted; the low cluster spans
+# only raw 55-64, far too short a lever arm to determine a slope by itself.
+# Residuals within +-5.3%, worst at the lowest point, where a cheap meter on
+# a 20 A range has its poorest resolution and where the assumption of a
+# constant receive baseline is least safe (the meter's own burden had the
+# radio down at ~10.2-10.7 V during these readings).
 _VD_CURVE = [(0, 0.0), (13, 10.0), (241, 16.0)]
-_ID_CURVE = [(0, 0.0), (241, 17.96)]
+_ID_CURVE = [(0, 0.0), (241, 17.85)]
 _SWR_CURVE = [(0, 1.0), (48, 1.5), (80, 2.0), (120, 3.0)]
 _PO_CURVE = [(0, 0.0), (143, 50.0), (213, 100.0)]
 

@@ -2948,12 +2948,15 @@ class TestMeterCalibration:
     def test_id_uses_the_measured_line_not_icoms_curve(self):
         # Icom's IC-7300 curve gives 17.6 A for raw 171. Measured against a
         # multimeter in series, PA drain fits a line through the origin at
-        # 0.0745 A/raw -- ~12.8 A there, and ~18 A full scale, not 25 A.
+        # 0.0741 A/raw -- ~12.7 A there, and ~17.9 A full scale, not 25 A.
         assert cv.id_amps(0) == 0.0
-        assert abs(cv.id_amps(171) - 12.75) < 0.1
-        # The low-current cluster the line was fitted through, +-5%.
-        for raw, amps in ((55, 4.27), (61, 4.48), (64, 4.71)):
-            assert abs(cv.id_amps(raw) - amps) / amps < 0.05
+        assert abs(cv.id_amps(171) - 12.67) < 0.1
+        # The low-current cluster the line was fitted through. The bound is
+        # 6% because the lowest point sits 5.3% off: a 20 A meter range
+        # resolves ~5 A poorly, and the constant-receive-baseline assumption
+        # is least safe there.
+        for raw, amps in ((55, 3.87), (61, 4.48), (64, 4.71)):
+            assert abs(cv.id_amps(raw) - amps) / amps < 0.06
 
     def test_id_stays_linear_through_zero(self):
         # Two points a factor of three apart in current agreed to 1% on the
@@ -2981,7 +2984,7 @@ class TestMeterCalibration:
         )
         assert tl.at(20.0).vd is None  # before the first reading
         assert abs(tl.at(60.0).vd - 13.78) < 0.15
-        assert abs(tl.at(60.0).id_a - 12.75) < 0.1
+        assert abs(tl.at(60.0).id_a - 12.67) < 0.1
 
     def test_a_radio_disconnect_clears_the_meters_rather_than_holding_them(
         self, tmp_path
