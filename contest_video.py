@@ -2729,6 +2729,18 @@ _HUD_MODES = ("SSB", "CW", "FM")
 # Baked into the artwork; drawn by draw_hud_chrome for the placeholder only.
 _HUD_STAT_CAPTIONS = ("UTC", "RATE /H", "ODX KM")
 HUD_CHIP_DIM = 0.15  # how far an unselected band/mode chip is knocked back
+# Physical cell counts, as a real instrument's display would have. A leading
+# "1" is a half digit: the cell can only ever show a 1, which is what the unlit
+# backdrop then advertises. Sized from real results -- the best single-round
+# score seen in published Puskas logs is 8937, and QSO counts run to a few
+# dozen -- so 4.5 digits of score (19999) and 2.5 of QSOs (199) have room to
+# spare without wasting cells that would shrink every digit.
+HUD_SCORE_FIELD = "18888"
+HUD_QSOS_FIELD = "188"
+# The QRG is fixed-width for a different reason: 23cm is 1296.174, one cell
+# wider than 2m's 144.174, so without a field the digits resize on a band
+# change mid-video.
+HUD_QRG_FIELD = "8888.888"
 
 # Reference-layout slots at HUD_W x HUD_H, left to right in DOOM's own order
 # (ammo | health | face | armor | arms). Replacing the placeholder background
@@ -2842,17 +2854,33 @@ def _all_segments(text: str) -> str:
     return "".join(ch if ch in ".: " else "8" for ch in text)
 
 
-def _seven_seg(draw, text, x, y, max_w, max_h, colour, anchor="mm") -> float:
+def _seven_seg(
+    draw, text, x, y, max_w, max_h, colour, anchor="mm", field=None
+) -> float:
     """Draw `text` as segment digits, scaled down to fit max_w x max_h, and
     return the rendered width.
 
-    The all-lit string is both the unlit backdrop and the positioning
-    reference: a value containing '-' (e.g. the "--.-" placeholder) has a box
-    only as tall as the middle segment, so anchoring on the value's own box
-    would float the dashes well above where the digits they replace sit."""
+    `field` is the display's *physical* set of cells, e.g. "18888" for a
+    four-and-a-half digit readout. Given one, the value is drawn right-aligned
+    within it at a fixed size and position, so a score gaining a digit
+    mid-contest no longer resizes and reflows the whole panel -- which is both
+    what a real instrument does and the only way the unlit backdrop can show
+    the cells that aren't currently in use. A leading '1' is the half digit a
+    real panel gives you for a leading 1 without paying for a full cell.
+
+    Right-alignment is done by measuring the value rather than by padding it:
+    DSEG7's space is only about a quarter of a cell wide, so a space-padded
+    string does not line up with the field's own cells at all.
+
+    Without a field, the all-lit form of the value serves as both backdrop and
+    positioning reference -- a value containing '-' (the "--.-" placeholder)
+    has a box only as tall as the middle segment, so anchoring on the value's
+    own box would float the dashes above where the digits they replace sit."""
     if not text:
         return 0.0
     box = _all_segments(text)
+    if field is not None and len(text) <= len(field):
+        box = field
     size = max(6, round(max_h))
     while True:
         font = _dseg_font(size)
@@ -2866,7 +2894,9 @@ def _seven_seg(draw, text, x, y, max_w, max_h, colour, anchor="mm") -> float:
     draw.text(
         (ax, ay), box, font=font, fill=tuple(round(c * HUD_SEG_DIM) for c in colour)
     )
-    draw.text((ax, ay), text, font=font, fill=colour)
+    draw.text(
+        (ax + w - draw.textlength(text, font=font), ay), text, font=font, fill=colour
+    )
     return w
 
 
@@ -3154,15 +3184,35 @@ def draw_hud_frame(
     colour = tuple(
         round(c + (255 - c) * state.score_flash) for c in HUD_RED
     )  # washes toward white at the moment of a QSO
-    _seven_seg(draw, f"{state.score}", x + w // 2, y + fs(96), iw(w), fs(112), colour)
+    _seven_seg(
+        draw,
+        f"{state.score}",
+        x + w // 2,
+        y + fs(96),
+        iw(w),
+        fs(112),
+        colour,
+        field=HUD_SCORE_FIELD,
+    )
 
     x, y, w, h = slots["qsos"]
-    _seven_seg(draw, f"{state.qsos}", x + w // 2, y + fs(96), iw(w), fs(112), HUD_RED)
+    _seven_seg(
+        draw,
+        f"{state.qsos}",
+        x + w // 2,
+        y + fs(96),
+        iw(w),
+        fs(112),
+        HUD_RED,
+        field=HUD_QSOS_FIELD,
+    )
 
     # --- QRG, then dim whichever band/mode chips are not the current one.
     x, y, w, h = slots["freq"]
     qrg = f"{state.freq_hz / 1e6:.3f}" if state.freq_hz else "---.---"
-    _seven_seg(draw, qrg, x + w // 2, y + fs(42), iw(w), fs(58), HUD_AMBER)
+    _seven_seg(
+        draw, qrg, x + w // 2, y + fs(42), iw(w), fs(58), HUD_AMBER, field=HUD_QRG_FIELD
+    )
     for row, names, active in (
         (112, _HUD_BANDS, state.band),
         (174, _HUD_MODES, state.mode),
