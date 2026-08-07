@@ -51,9 +51,16 @@ edges, light top-left and dark bottom-right. Small labels in pale grey
 uppercase pixel lettering. Flat front-on 2D interface art — no perspective, no
 photography, no 3D rendering, no gradients, no glow, no drop shadows.
 
-TOP REGION — the HUD bar. A very wide letterbox strip, exactly 7.4 times wider
-than it is tall, spanning the full width of the image. It contains these
-panels in one horizontal row, left to right:
+The image has two clearly separate regions: the HUD bar across the top, and
+below it a plain flat asset sheet holding loose UI pieces. They must not blend
+into each other — the asset sheet is a flat background with pieces on it, not
+a continuation of the metal panel.
+
+TOP REGION — the HUD bar. A very wide, very shallow letterbox strip spanning
+the full width of the image: roughly 7.4 times wider than it is tall, for
+example 1920 x 260 pixels. This is much wider and flatter than a typical
+control panel, so if in doubt make the bar thinner rather than taller. It
+contains these panels in one horizontal row, left to right:
 
 1. Wide panel, empty dark recess, small label "SCORE" centred at its bottom.
 2. Narrower panel, empty dark recess, label "QSOS" at its bottom.
@@ -61,8 +68,9 @@ panels in one horizontal row, left to right:
    it; below that, two rows of small rectangular selector chips reading
    [2M][70CM][23CM] and [SSB][CW][FM]. Draw ALL SIX chips brightly lit in
    amber — none dark.
-4. Narrow panel: an empty circular recess in the upper half, and below it an
-   empty horizontal slot for a bar meter, with the small label "S" beneath.
+4. Narrow panel: an empty circular recess in the upper half, and below it a
+   horizontal bar-meter slot showing its individual segment divisions but with
+   every segment dark and unlit, with the small label "S" beneath.
 5. A tall portrait rectangular recess with a heavy bevelled frame, its inside
    flat dark grey and completely empty. This is where a webcam image will go.
 6. Panel with a circular compass rose showing only the letters N, E, S and W
@@ -81,12 +89,19 @@ panels in one horizontal row, left to right:
    drawn by software, so leave its interior completely flat and empty — no dot
    grid, no pixel matrix, no characters, no texture of any kind inside it.
 
-CRITICAL: the HUD bar must contain NO numbers and NO digits anywhere. Every
-value area is an empty dark recess. Only the labels listed above appear.
+CRITICAL: no readout anywhere in the HUD bar may show a value. Every value
+area — score, QSO count, frequency, the two PWR slots, the compass reading,
+the three right-hand rows and the CW slot — is an empty dark recess with
+nothing in it. The only text anywhere in the bar is the fixed labels and
+captions listed above, which do include the digits inside the band chips
+("2M", "70CM", "23CM") and the captions "RATE /H" and "ODX KM". Those are
+permanent labels, not values, and must appear.
 
-BOTTOM REGION — five separate pieces on a flat solid magenta (#FF00FF)
-background, evenly spaced in one row, in exactly this order, each surrounded
-by a generous margin of plain magenta so it can be cut out cleanly:
+BOTTOM REGION — an asset sheet, well separated from the bar above it: five
+loose pieces sitting on a completely flat solid magenta (#FF00FF) background,
+with no panel, frame, texture or shading behind them. Evenly spaced in one
+row, in exactly this order, each surrounded by a generous margin of plain
+magenta so it can be cut out cleanly:
 
 1. A round lamp glowing bright green with the word "RX" in pale grey pixel
    lettering directly above it. This will be pasted into the empty circular
@@ -111,11 +126,32 @@ by a generous margin of plain magenta so it can be cut out cleanly:
 Do NOT draw any coordinate table, measurements, captions, numbering or
 annotation anywhere in the image. The bottom region contains only the five
 pieces on plain magenta.
+
+To summarise what must NOT appear: no numbers in any recess of the HUD bar; no
+needle, pointer or marking inside the compass rose; no lamp inside the
+circular recess; no lit segments in the bar meter; nothing inside the tall
+portrait webcam recess; nothing inside the CW slot; and no dark or unlit band
+or mode chips — all six are lit.
 ```
 
-## Known failure to watch for
+## What matters, and what does not
 
-The first generation came back at 4.4:1 against a requested 8.7:1. The bar's
-aspect ratio is the one thing worth rejecting and re-rolling for: the height
-budget is what forced the whole ticker/PWR/stats restructure, and a bar taller
-than about 260px at 1920 wide collides with the terminal PiP above it.
+Panel proportions do **not** need to be right. `HUD_SLOTS` is measured from
+whatever artwork arrives, so a panel 30px wider than specified costs nothing.
+
+What cannot be recovered afterwards, and is therefore what to check before
+accepting a generation:
+
+- **The bar's aspect ratio.** The first generation came back at 4.4:1 against a
+  requested 8.7:1. Squashing that into 7.4:1 vertically crushes every baked
+  label, and a bar taller than ~260px at 1920 wide collides with the terminal
+  PiP above it. This is the one worth re-rolling for.
+- **Values baked into recesses**, a needle drawn on the compass rose, a lit
+  meter, or anything inside the webcam or CW slots — all permanently in the
+  way of what the software draws there.
+- **Any of the six band/mode chips drawn dark.** They are dimmed at render
+  time, which only works if all six start lit.
+
+The v1 prompt asked for dummy values everywhere and got them rendered cleanly,
+so the generator has no trouble filling recesses — which is exactly why the
+"must not appear" summary is spelled out at the end of the prompt.
