@@ -1338,6 +1338,10 @@ class TelemetrySample:
     id_raw: int | None = None
     swr: int | None = None
     po: int | None = None
+    # As with az_offline: an absent "vd" key and an explicit `"vd": null` both
+    # land as None but mean opposite things -- a line that says nothing about
+    # the meters, versus one reporting that the radio went away.
+    meters_offline: bool = False
     # An absent "az" key and an explicit `"az": null` both land as az=None but
     # mean opposite things -- silence about the rotator (a rig event) versus a
     # report that it went offline. Only the latter ends az's carry-forward.
@@ -1389,6 +1393,7 @@ def load_telemetry(path: str) -> list[TelemetrySample]:
                 rec.get("mode"),
                 rec.get("az"),
                 az_offline="az" in rec and rec["az"] is None,
+                meters_offline="vd" in rec and rec["vd"] is None,
                 vd=rec.get("vd"),
                 id_raw=rec.get("id"),
                 swr=rec.get("swr"),
@@ -2571,11 +2576,17 @@ def hud_meter_marks(
     Meters are change-only in the recording, like everything else in that
     file, so a mark holds until the next one -- there is no staleness horizon
     the way the scope-derived S-meter has, because an unchanging supply
-    voltage is a real reading rather than a gap in the data."""
+    voltage is a real reading rather than a gap in the data.
+
+    That is exactly why a radio disconnect has to be marked explicitly rather
+    than left as silence: "no reason for the voltage to have changed" and "the
+    radio is gone" are indistinguishable from absence alone, and a real
+    session dropped three times in nine minutes would otherwise show the
+    pre-outage voltage throughout each outage."""
     marks = [
         (audio_time_for(t.t + timedelta(hours=offset_h), segs), t)
         for t in telemetry
-        if t.vd is not None or t.id_raw is not None
+        if t.vd is not None or t.id_raw is not None or t.meters_offline
     ]
     marks.sort(key=lambda m: m[0])
     return marks

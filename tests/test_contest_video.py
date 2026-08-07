@@ -2982,3 +2982,27 @@ class TestMeterCalibration:
         assert tl.at(20.0).vd is None  # before the first reading
         assert abs(tl.at(60.0).vd - 13.78) < 0.15
         assert abs(tl.at(60.0).id_a - 12.75) < 0.1
+
+    def test_a_radio_disconnect_clears_the_meters_rather_than_holding_them(
+        self, tmp_path
+    ):
+        # A real session dropped three times in nine minutes. Meters are
+        # change-only and a supply voltage has no reason to change, so without
+        # an explicit null the pre-outage reading would be shown for the whole
+        # outage.
+        f = tmp_path / "t.jsonl"
+        f.write_text(
+            '{"t": "2026-08-03T18:00:30.000000Z", "vd": 152, "id": 171,'
+            ' "swr": 28, "po": 213}\n'
+            '{"t": "2026-08-03T18:01:00.000000Z", "vd": null, "id": null,'
+            ' "swr": null, "po": null}\n'
+        )
+        telemetry = cv.load_telemetry(str(f))
+        assert telemetry[1].meters_offline
+        segs = [_hud_seg()]
+        tl = cv.HudTimeline(
+            segs=segs, offset_h=2, meter_marks=cv.hud_meter_marks(telemetry, segs, 2)
+        )
+        assert tl.at(45.0).vd is not None  # while the radio was there
+        assert tl.at(120.0).vd is None  # and gone once it dropped
+        assert tl.at(120.0).id_a is None

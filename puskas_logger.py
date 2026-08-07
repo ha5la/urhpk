@@ -283,8 +283,20 @@ def _radio_thread():
         # the radio has simply never been reachable, and a null line every
         # RADIO_RECONNECT_S would say nothing new.
         if was_online:
+            now = datetime.now(timezone.utc)
+            _telemetry_write(_telemetry_rig_record(now, None, None))
+            # The meters go with it. Without an explicit null a consumer keeps
+            # carrying the last reading forward -- and since it has no reason
+            # to expect a supply voltage to change, it would show the voltage
+            # from before the outage for the whole outage. Resetting the
+            # change-detector too guarantees the first reading after a
+            # reconnect is written even if it happens to match the last one
+            # before the drop.
+            _telem_meters["last"] = None
             _telemetry_write(
-                _telemetry_rig_record(datetime.now(timezone.utc), None, None)
+                _telemetry_meter_record(
+                    now, dict.fromkeys(icom_net.CIV_METERS.values())
+                )
             )
         if rig is not None:
             try:
