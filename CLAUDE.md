@@ -425,6 +425,24 @@ rig interface — instant, event-driven state, no rigctld involved.
   through, so a failed attempt doesn't linger; and empirically, a real fresh attempt
   needs on the order of tens of seconds of quiet since the last one before the radio's
   own session state reliably resets.
+- **Closing a session takes a real goodbye — the deregister alone is not one.** `close()`
+  used to send the CI-V stream-close plus the token deregister and stop there. Captured
+  from a live wfview shutdown (same `dumpcap` technique as the scope research; wfview was
+  closed via a WM_DELETE_WINDOW so its normal destructors actually ran, unlike a SIGTERM,
+  which skips them), a real client also sends a **disconnect control packet — `type=0x05`,
+  16 bytes, `seq=0` — on every socket it opened**, CI-V first and the control socket after
+  the deregister is acknowledged. Without it the radio keeps the session on its books:
+  measured against the real IC-9700, it went on pinging the dead sockets at ~50
+  packets/s for over a minute while refusing new sessions the whole time (wfview's own log
+  says `Busy: 1`; our client's are-you-there simply goes unanswered). With it, traffic
+  stops within the same second and a fresh `connect()` succeeds at +0.0 s, measured
+  back-to-back. `close()` is idempotent and safe on a half-connected session, so
+  `connect()`'s failure path just calls it rather than a separate partial teardown.
+- **Scope data output is *not* session-scoped, contrary to what this file said**: a fresh
+  session gets `27 00` waveform frames immediately, before it enables anything — the
+  radio remembers `27 11 01` across sessions. Harmless (the logger re-enables anyway), but
+  it means a leftover session's flood is the radio streaming a *real* scope, not an
+  artifact of the abandoned handshake.
 - **Test coverage**: `tests/test_icom_net.py` covers the pure, hardware-independent
   functions (passcode scrambling, BCD codec, CI-V frame parsing) with no mocking needed.
   `tests/test_icom_net_integration.py` runs the full `connect()` handshake against an
@@ -1644,6 +1662,30 @@ These requirements must be preserved across all future changes:
   sessions for a while after an uncleanly-dropped one), so a transient radio/network
   error cannot kill rig state permanently. Liveness comes from `last_rx_age()`
   (no CI-V-socket traffic for `RADIO_STALE_S` = session dead), not from polling.
+- **The radio session is closed on every exit path, signals included**: a contest round
+  ends by killing the tmux session (SIGHUP), which used to skip teardown entirely and
+  leave exactly the abandoned session `icom_net.close`'s notes describe — the radio then
+  streamed to a dead socket and refused the restarted logger for a minute or more, which
+  is the "can't reconnect after exiting the logger" symptom. Three pieces, all needed:
+  `_install_signal_handlers` handles SIGTERM/SIGHUP (teardown, then `os._exit` —
+  EDI/telemetry/input/scope all flush as they are written, so nothing is lost by not
+  unwinding); `main()`'s `finally` covers Ctrl-D, a crash, and the early return from the
+  offline wizard, and is the single owner of teardown (`run()` no longer does its own);
+  and `_shutdown` stops `_radio_thread` from treating the closed session as a drop and
+  opening a fresh one on the way out. `_radio_close_if_connected` also **joins the radio
+  thread**: a session still inside `connect()` is not in `_radio["rig"]` yet, so closing
+  that slot cannot reach it, and only the thread that opened it can close it. Found from
+  a real capture after a kill-and-restart cycle, where every session had said goodbye
+  correctly except one still-connecting one, which the radio then pinged for ~70 s.
+  Verified end-to-end: three back-to-back logger runs, each killed with `tmux
+  kill-session` and restarted one second later, all connected immediately and left zero
+  packets on the wire.
+  The `__main__` block ends in `os._exit(0)` for a related reason found the same way: a
+  vanished terminal can leave prompt_toolkit's input thread blocked, and interpreter
+  shutdown joins it, so the process hangs — deaf to SIGTERM, since a main thread that has
+  already returned no longer runs Python signal handlers — while still holding the rig
+  server port. One such process was found alive and unkillable-by-SIGTERM during this
+  work; `kill -9` was the only way out.
 - **Backspace stops at column 0**: pressing Backspace when the input buffer is empty does
   nothing. Edit mode is entered with the Up arrow key only.
 - **Edit mode via Up/Down**: Up/Down navigate to earlier/later QSOs in edit mode.

@@ -23,6 +23,7 @@ import re
 import signal
 import socket
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -207,7 +208,8 @@ def load_loc_cache() -> dict[str, list[str]]:
 _rig: dict = {"band": "", "mode": "", "qrg": "", "online": False}
 _rig_lock = threading.Lock()
 _rig_manual: dict = {"band": "", "mode": ""}
-_radio: dict = {"rig": None}  # live IcomNetRig session, None while offline
+_radio: dict = {"rig": None, "thread": None}  # live session, None while offline
+_shutdown = threading.Event()  # set once the session is being torn down for good
 
 
 def _mode_str(raw: str) -> str:
@@ -251,23 +253,25 @@ def _radio_thread():
     refuses new sessions for a while after an uncleanly-dropped one, so
     hammering it would only push recovery further away.
     """
-    while True:
+    while not _shutdown.is_set():
         rig = None
         try:
             user, password = icom_net._load_netrc_credentials(RADIO_HOST)
             rig = icom_net.IcomNetRig(RADIO_HOST, user, password)
             rig.on_update(_on_radio_update)
             rig.connect(timeout=RADIO_CONNECT_TIMEOUT_S)
-            # Both re-enabled on every (re)connect: scope data output is
-            # session-scoped on the radio's side, and the meter poller is a
-            # thread belonging to the session it was started on.
+            # Both re-armed on every (re)connect: the meter poller is a thread
+            # belonging to the session it was started on, and re-enabling scope
+            # costs one frame (the radio actually remembers the setting across
+            # sessions -- see icom_net's notes -- but relying on that would make
+            # recording depend on whatever the previous session left behind).
             rig.on_scope(_on_scope)
             rig.enable_scope()
             rig.on_meters(_on_radio_meters)
             rig.enable_meters()
             with _rig_lock:
                 _radio["rig"] = rig
-            while rig.last_rx_age() < RADIO_STALE_S:
+            while rig.last_rx_age() < RADIO_STALE_S and not _shutdown.is_set():
                 time.sleep(1.0)
         except Exception:
             pass
@@ -287,7 +291,7 @@ def _radio_thread():
                 rig.close()
             except Exception:
                 pass
-        time.sleep(RADIO_RECONNECT_S)
+        _shutdown.wait(RADIO_RECONNECT_S)
 
 
 def _radio_rig() -> icom_net.IcomNetRig | None:
@@ -297,10 +301,11 @@ def _radio_rig() -> icom_net.IcomNetRig | None:
 
 
 def _radio_close_if_connected() -> None:
-    """Deregister the radio session on exit (close() sends the token
-    deregister) so a restart never races the radio's abandoned-session
-    cooldown. Called from the same normal-exit and crash paths as
-    _webcam_stop_if_running."""
+    """Say goodbye to the radio on exit, so a restart never races the radio's
+    abandoned-session cooldown (see icom_net.close). Sets _shutdown first:
+    without it _radio_thread would just see the session go stale and open a
+    fresh one on its way out. Called from every exit path, and idempotent."""
+    _shutdown.set()
     with _rig_lock:
         rig, _radio["rig"] = _radio["rig"], None
     if rig is not None:
@@ -308,6 +313,30 @@ def _radio_close_if_connected() -> None:
             rig.close()
         except Exception:
             pass
+    # A session still inside connect() is not in _radio["rig"] yet, so closing
+    # that slot cannot reach it -- but _radio_thread closes whatever it opened
+    # the moment it notices _shutdown, so waiting for the thread is enough.
+    # Only a connect genuinely in flight makes this wait at all.
+    thread = _radio["thread"]
+    if thread is not None:
+        thread.join(timeout=RADIO_CONNECT_TIMEOUT_S + 2.0)
+
+
+def _install_signal_handlers() -> None:
+    """A contest round ends by killing the tmux session that runs the logger
+    (see run-recorded-contest-session.sh), so SIGTERM/SIGHUP is an ordinary
+    exit path here -- and the one that used to leave the radio streaming to a
+    dead socket, refusing new sessions. EDI/telemetry/input logs are all
+    flushed as they are written, so exiting straight from the handler loses
+    nothing."""
+
+    def _terminate(signum, _frame):
+        _webcam_stop_if_running()
+        _radio_close_if_connected()
+        os._exit(128 + signum)
+
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, _terminate)
 
 
 def current_rig() -> tuple[str, str, str, bool]:
@@ -1971,8 +2000,6 @@ def run(lb: LogBook, tname: str):
         _cache_loc(call, loc)
         save_all(lb, tname)
 
-    _webcam_stop_if_running()
-    _radio_close_if_connected()
     print("\nSaving EDI files...")
     paths = save_all(lb, tname)
     if paths:
@@ -2051,7 +2078,9 @@ def main():
     )
     _telemetry_open(_telem_path)
 
+    _install_signal_handlers()
     t = threading.Thread(target=_radio_thread, daemon=True)
+    _radio["thread"] = t
     t.start()
     threading.Thread(target=_rot_thread, daemon=True).start()
     _rig_srv = _rig_server_bind(RIG_SERVER_PORT)
@@ -2084,11 +2113,23 @@ def main():
         run(lb, tname)
     except Exception as e:
         print(f"\n[ERROR] {e}")
-        _webcam_stop_if_running()
-        _radio_close_if_connected()
         save_all(lb, tname)
         raise
+    finally:
+        # One owner for teardown, covering every way run() can end: normal
+        # Ctrl-D exit, an early return from the offline wizard, a crash, or
+        # Ctrl-C. Signals go through _install_signal_handlers instead.
+        _webcam_stop_if_running()
+        _radio_close_if_connected()
 
 
 if __name__ == "__main__":
     main()
+    # Interpreter shutdown joins prompt_toolkit's input thread, which can be
+    # left blocked forever on a terminal that vanished (tmux kill-session).
+    # The resulting process ignores even SIGTERM -- a main thread that has
+    # already returned no longer runs Python signal handlers -- and sits on the
+    # rig server port. Teardown is done and every file flushes as it writes, so
+    # there is nothing left to lose by not unwinding.
+    sys.stdout.flush()
+    os._exit(0)

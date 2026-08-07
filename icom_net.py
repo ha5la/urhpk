@@ -350,6 +350,7 @@ CIV_PORT = 50002
 PT_RETRANSMIT = 0x01
 PT_ARE_YOU_THERE = 0x03
 PT_I_AM_HERE = 0x04
+PT_DISCONNECT = 0x05
 PT_ARE_YOU_READY = 0x06
 PT_PING = 0x07
 
@@ -530,6 +531,7 @@ def ping_reply(seq: int, sentid: bytes, rcvdid: bytes, echo: bytes) -> bytes:
 IDLE_PERIOD_S = 0.1
 TOKEN_RENEWAL_S = 60.0
 CIV_STALE_S = 2.0
+DEREGISTER_ACK_TIMEOUT_S = 0.5  # the radio answers in ~2 ms; this is only a backstop
 CLIENT_NAME = "urhpk"
 
 
@@ -634,6 +636,17 @@ class IcomNetRig:
         self._stop = threading.Event()
         self._ctrl_sock: socket.socket | None = None
         self._civ_sock: socket.socket | None = None
+        # Session identity, filled in by connect(); None until each socket's
+        # rendezvous succeeds, so close() can tell what there is to say goodbye to.
+        self._tok: bytes | None = None
+        self._ctrl_local_id: bytes | None = None
+        self._ctrl_remote_id: bytes | None = None
+        self._ctrl_addr: tuple[str, int] | None = None
+        self._civ_local_id: bytes | None = None
+        self._civ_remote_id: bytes | None = None
+        self._civ_addr_net: tuple[str, int] | None = None
+        self._civ_seq = 1
+        self._civ_inner = 0
         self._threads: list[threading.Thread] = []
         self._send_lock = threading.Lock()
         self._last_civ_rx = 0.0
@@ -792,7 +805,7 @@ class IcomNetRig:
         try:
             self._connect_impl(timeout)
         except BaseException:
-            self._best_effort_logout()
+            self.close()
             raise
 
     def _send_token_deregister(self) -> None:
@@ -809,20 +822,22 @@ class IcomNetRig:
                     self._tok,
                 )
                 self._ctrl_sock.sendto(pkt, self._ctrl_addr)
-            except OSError:
+                self._recv_len(self._ctrl_sock, 0x40, DEREGISTER_ACK_TIMEOUT_S)
+            except (OSError, IcomNetError):
                 pass
 
-    def _best_effort_logout(self) -> None:
-        self._stop.set()
-        for t in self._threads:
-            t.join(timeout=1.0)
-        self._send_token_deregister()
-        if self._civ_sock is not None:
-            self._civ_sock.close()
-            self._civ_sock = None
-        if self._ctrl_sock is not None:
-            self._ctrl_sock.close()
-            self._ctrl_sock = None
+    def _send_disconnect(self, sock, addr, local_id, remote_id) -> None:
+        """The goodbye a real client sends on every socket it opened, captured
+        from wfview's own shutdown. Without it the radio keeps the session on
+        its books: it goes on pinging the dead socket at ~50 packets/s (and
+        refuses a fresh session in the meantime) until its own timeout expires,
+        which is the whole reason restarting the logger used to be painful."""
+        if sock is None or local_id is None:
+            return
+        try:
+            sock.sendto(control_packet(PT_DISCONNECT, 0, local_id, remote_id), addr)
+        except OSError:
+            pass
 
     def _connect_impl(self, timeout: float = 5.0) -> None:
         self._ctrl_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1122,25 +1137,45 @@ class IcomNetRig:
                     last_reopen = now
 
     def close(self) -> None:
+        """Full teardown in the order wfview's own shutdown uses (captured from
+        a live session): close the CI-V stream, say goodbye on the CI-V socket,
+        deregister the token, say goodbye on the control socket. Idempotent, and
+        safe on a session that never finished connecting."""
         self._stop.set()
         for t in self._threads:
             t.join(timeout=1.0)
+        self._threads = []
         if self._civ_sock is not None:
-            try:
-                pkt = openclose_packet(
-                    self._civ_seq,
+            if self._civ_local_id is not None:
+                try:
+                    pkt = openclose_packet(
+                        self._civ_seq,
+                        self._civ_local_id,
+                        self._civ_remote_id,
+                        self._civ_inner,
+                        0x00,
+                    )
+                    self._civ_seq += 1
+                    self._civ_inner += 1
+                    self._civ_sock.sendto(pkt, self._civ_addr_net)
+                except OSError:
+                    pass
+                self._send_disconnect(
+                    self._civ_sock,
+                    self._civ_addr_net,
                     self._civ_local_id,
                     self._civ_remote_id,
-                    self._civ_inner,
-                    0x00,
                 )
-                self._civ_sock.sendto(pkt, self._civ_addr_net)
-            except OSError:
-                pass
             self._civ_sock.close()
+            self._civ_sock = None
         self._send_token_deregister()
+        self._send_disconnect(
+            self._ctrl_sock, self._ctrl_addr, self._ctrl_local_id, self._ctrl_remote_id
+        )
         if self._ctrl_sock is not None:
             self._ctrl_sock.close()
+            self._ctrl_sock = None
+        self._tok = None
 
 
 def _load_netrc_credentials(host: str) -> tuple[str, str]:

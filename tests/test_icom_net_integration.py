@@ -103,8 +103,11 @@ class FakeIcomRadio:
         self._tok = os.urandom(6)
         self._civ_inner_seq = 0
         self.civ_opened = threading.Event()
+        self.civ_closed = threading.Event()
         self.received_civ: list[bytes] = []
         self.token_deregistered = threading.Event()
+        self.ctrl_disconnected = threading.Event()
+        self.civ_disconnected = threading.Event()
         self._cur_freq = 144_174_000
         self._cur_mode = 0x01  # USB
 
@@ -147,6 +150,8 @@ class FakeIcomRadio:
             )
         elif length == 0x10 and ptype == 6:  # are-you-ready
             self.ctrl_sock.sendto(data, addr)
+        elif length == 0x10 and ptype == 5:  # disconnect
+            self.ctrl_disconnected.set()
         elif length == 0x10:
             pass  # idle
         elif length == 0x80:  # login_packet
@@ -201,8 +206,12 @@ class FakeIcomRadio:
             )
         elif length == 0x10 and ptype == 6:  # are-you-ready
             self.civ_sock.sendto(data, addr)
+        elif length == 0x10 and ptype == 5:  # disconnect
+            self.civ_disconnected.set()
         elif length == 0x16:  # openclose_packet
             magic = data[0x15]
+            if magic == 0x00:
+                self.civ_closed.set()
             if magic in (0x04, 0x05) and not self.civ_opened.is_set():
                 self.civ_opened.set()
                 # Just needs to prove data is flowing -- connect()'s own open-wait
@@ -359,6 +368,27 @@ def test_on_civ_frame_sees_raw_inbound_frames(fake_radio):
         )
     finally:
         rig.close()
+
+
+def test_close_says_goodbye_on_both_sockets(fake_radio):
+    # Deregistering the token alone is not the whole goodbye: without a
+    # disconnect (0x05) on each socket the radio keeps the session on its
+    # books and goes on streaming to the dead sockets -- measured at ~50
+    # packets/s against the real IC-9700, for minutes, while refusing new
+    # sessions. wfview sends stream-close, then disconnect, on every socket
+    # it opened.
+    rig = IcomNetRig(
+        "127.0.0.1",
+        "testuser",
+        "testpass",
+        control_port=fake_radio.control_port,
+        civ_port=fake_radio.civ_port,
+    )
+    rig.connect(timeout=5.0)
+    rig.close()
+    assert fake_radio.civ_closed.wait(timeout=2.0)
+    assert fake_radio.civ_disconnected.wait(timeout=2.0)
+    assert fake_radio.ctrl_disconnected.wait(timeout=2.0)
 
 
 def test_close_deregisters_the_session_token(fake_radio):
