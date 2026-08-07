@@ -2617,6 +2617,9 @@ HUD_LABEL = (156, 148, 132)
 
 _HUD_BANDS = ("2M", "70CM", "23CM")
 _HUD_MODES = ("SSB", "CW", "FM")
+# Baked into the artwork; drawn by draw_hud_chrome for the placeholder only.
+_HUD_STAT_CAPTIONS = ("UTC", "RATE /H", "ODX KM")
+HUD_CHIP_DIM = 0.15  # how far an unselected band/mode chip is knocked back
 
 # Reference-layout slots at HUD_W x HUD_H, left to right in DOOM's own order
 # (ammo | health | face | armor | arms). Replacing the placeholder background
@@ -2778,20 +2781,25 @@ def _big(draw, cx: int, y: int, text: str, size: int, fill, max_w: int) -> None:
     draw.text((cx, y), text, font=_fit_font(text, max_w, size), fill=fill, anchor="ma")
 
 
-def _chips(draw, rect, names, active, size: int) -> None:
-    """One row of DOOM weapon-slot style selector chips, the active one lit."""
+def _chip_rects(rect, names) -> list[tuple[tuple[int, int, int, int], str]]:
+    """Where each selector chip sits. Shared by the drawing pass and the
+    dimming pass so the two can never disagree about a chip's box."""
     x, y, w, h = rect
     gap = max(2, round(w * 0.02))
     cw = (w - gap * (len(names) - 1)) // len(names)
-    for i, name in enumerate(names):
-        cx = x + i * (cw + gap)
-        on = name == active
-        _bevel(draw, (cx, y, cw, h), HUD_PANEL, depth=1)
+    return [((x + i * (cw + gap), y, cw, h), n) for i, n in enumerate(names)]
+
+
+def _chips(draw, rect, names, size: int) -> None:
+    """One row of DOOM weapon-slot style selector chips, all drawn lit --
+    the inactive ones are dimmed afterwards (see _dim_region)."""
+    for (cx, cy, cw, ch), name in _chip_rects(rect, names):
+        _bevel(draw, (cx, cy, cw, ch), HUD_PANEL, depth=1)
         draw.text(
-            (cx + cw // 2, y + h // 2),
+            (cx + cw // 2, cy + ch // 2),
             name,
-            font=_hud_font(size, bold=on),
-            fill=HUD_AMBER if on else HUD_RED_OFF,
+            font=_hud_font(size),
+            fill=HUD_AMBER,
             anchor="mm",
         )
 
@@ -2918,96 +2926,52 @@ def _draw_matrix_text(draw, text: str, rect, colour) -> None:
                 )
 
 
-def draw_hud_frame(
-    state: HudState,
-    W: int = HUD_W,
-    H: int = HUD_H,
-    background: Image.Image | None = None,
-) -> Image.Image:
-    """Render one HUD bar. `background` is the finished artwork (chrome only,
-    no values); without one a plain procedural placeholder is drawn so the
-    layout can be developed before the art exists."""
-    slots = hud_layout(W, H)
-    sx = W / HUD_W
-    if background is not None:
-        img = background.convert("RGB").resize((W, H))
-        draw = ImageDraw.Draw(img)
-    else:
-        img = Image.new("RGB", (W, H), HUD_BG)
-        draw = ImageDraw.Draw(img)
-        for name, rect in slots.items():
-            if name != "face":
-                _panel(draw, rect)
+def _dim_region(img: Image.Image, rect, factor: float) -> None:
+    """Darken one rectangle in place -- how an inactive band/mode chip is
+    made. The chips are drawn (and, in the artwork, baked) *lit*, and the
+    inactive ones are dimmed rather than being a separate lit/unlit pair of
+    assets, so nothing has to stay stylistically in sync."""
+    x, y, w, h = rect
+    box = (x, y, x + w, y + h)
+    img.paste(img.crop(box).point(lambda v: round(v * factor)), box)
 
-    def fs(px: float) -> int:
-        return max(6, round(px * sx))
 
-    # Numeric readouts are seven-segment (see _seven_seg); text labels and
-    # the mixed-content ticker use the mono font, fitted to their own panel
-    # width (see _fit_font) since nothing here has a fixed width -- the score
-    # gains a digit partway through a contest.
-    def iw(w: int) -> int:
-        return w - fs(24)
+def draw_hud_chrome(draw: ImageDraw.ImageDraw, slots: dict, fs, iw) -> None:
+    """Everything the finished artwork provides: panel frames, empty recesses,
+    the compass rose and every static label.
 
-    # --- SCORE (DOOM's health): the biggest number on the bar, flashing as
-    # it counts up after each QSO.
+    Drawn only when no --hud-background is supplied, which is what keeps the
+    procedural placeholder an honest stand-in: with artwork, none of this runs
+    and nothing gets drawn twice. Anything whose text changes at render time
+    lives in draw_hud_frame instead, because the artwork bakes its labels and
+    cannot change them -- which is also why the meter's caption is a fixed "S"
+    rather than switching to "PO" on transmit. The RX/TX lamp beside it
+    already says which is being shown."""
+    for name, rect in slots.items():
+        if name != "face":
+            _panel(draw, rect)
+
     x, y, w, h = slots["score"]
-    colour = tuple(
-        round(c + (255 - c) * state.score_flash) for c in HUD_RED
-    )  # washes toward white at the moment of a QSO
-    _seven_seg(draw, f"{state.score}", x + w // 2, y + fs(96), iw(w), fs(112), colour)
     _label(draw, x + w // 2, y + h - fs(48), "SCORE", fs(30), iw(w))
 
     x, y, w, h = slots["qsos"]
-    _seven_seg(draw, f"{state.qsos}", x + w // 2, y + fs(96), iw(w), fs(112), HUD_RED)
     _label(draw, x + w // 2, y + h - fs(48), "QSOS", fs(30), iw(w))
 
-    # --- QRG + band/mode chips
     x, y, w, h = slots["freq"]
-    qrg = f"{state.freq_hz / 1e6:.3f}" if state.freq_hz else "---.---"
-    _seven_seg(draw, qrg, x + w // 2, y + fs(42), iw(w), fs(58), HUD_AMBER)
     _label(draw, x + w // 2, y + fs(78), "MHz", fs(24), iw(w))
-    _chips(
-        draw,
-        (x + fs(12), y + fs(112), w - fs(24), fs(52)),
-        _HUD_BANDS,
-        state.band,
-        fs(26),
-    )
-    _chips(
-        draw,
-        (x + fs(12), y + fs(174), w - fs(24), fs(52)),
-        _HUD_MODES,
-        state.mode,
-        fs(26),
-    )
+    # Every chip lit; draw_hud_frame dims the inactive ones.
+    for row, names in ((112, _HUD_BANDS), (174, _HUD_MODES)):
+        _chips(draw, (x + fs(12), y + fs(row), w - fs(24), fs(52)), names, fs(26))
 
-    # --- RX/TX lamp + signal meter
     x, y, w, h = slots["meter"]
-    label = "TX" if state.ptt else "RX" if state.ptt is not None else "--"
-    lamp = (
-        HUD_RED if state.ptt else HUD_GREEN if state.ptt is not None else HUD_GREEN_OFF
-    )
-    _label(draw, x + w // 2, y + fs(12), label, fs(34), iw(w))
-    r = fs(30)
-    cx, cy = x + w // 2, y + fs(96)
-    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=lamp, outline=HUD_BEVEL_HI)
-    _draw_meter(draw, (x + fs(12), y + h - fs(84), w - fs(24), fs(26)), state.s_level)
-    # On TX the radio stops reporting a receive level and reports power out
-    # instead -- confirmed on the wire, the S-meter query is simply not sent.
-    _label(draw, x + w // 2, y + h - fs(50), "PO" if state.ptt else "S", fs(24), iw(w))
+    _label(draw, x + w // 2, y + h - fs(50), "S", fs(24), iw(w))
 
-    # --- face: left empty. The webcam is composited into this recess by
-    # ffmpeg, exactly where DOOM's face portrait sits.
     x, y, w, h = slots["face"]
     _bevel(draw, (x, y, w, h), HUD_FRAME, depth=3)
     _bevel(draw, (x + 8, y + 8, w - 16, h - 16), (34, 32, 28), depth=2)
 
-    # --- compass: solid needle = where the rotator points, hollow needle =
-    # bearing to the station being worked, so the swing onto target is visible.
     x, y, w, h = slots["compass"]
-    r = min(w, h) // 2 - fs(22)
-    cx, cy = x + w // 2, y + h // 2 - fs(18)
+    r, cx, cy = _compass_geometry(slots, fs)
     draw.ellipse(
         [cx - r, cy - r, cx + r, cy + r], fill=(12, 11, 10), outline=HUD_BEVEL_HI
     )
@@ -3020,6 +2984,106 @@ def draw_hud_frame(
             fill=HUD_LABEL,
             anchor="mm",
         )
+    _label(draw, cx, y + h - fs(26), "ROT", fs(22), iw(w))
+
+    x, y, w, h = slots["pwr"]
+    for i, unit in enumerate("VA"):
+        draw.text(
+            (x + w - fs(14), y + fs(40) + i * fs(50)),
+            unit,
+            font=_hud_font(fs(24), bold=False),
+            fill=HUD_LABEL,
+            anchor="rm",
+        )
+    _label(draw, x + w // 2, y + h - fs(26), "PWR", fs(22), iw(w))
+
+    x, y, w, h = slots["stats"]
+    for i, caption in enumerate(_HUD_STAT_CAPTIONS):
+        draw.text(
+            (x + fs(14), y + fs(30) + i * fs(46)),
+            caption,
+            font=_hud_font(fs(22), bold=False),
+            fill=HUD_LABEL,
+            anchor="lm",
+        )
+
+    x, y, w, h = slots["ticker"]
+    _label(draw, x + w // 2, y + h - fs(28), "CW", fs(22), iw(w))
+
+
+def _compass_geometry(slots: dict, fs) -> tuple[int, int, int]:
+    x, y, w, h = slots["compass"]
+    return min(w, h) // 2 - fs(22), x + w // 2, y + h // 2 - fs(14)
+
+
+def draw_hud_frame(
+    state: HudState,
+    W: int = HUD_W,
+    H: int = HUD_H,
+    background: Image.Image | None = None,
+) -> Image.Image:
+    """Render one HUD bar. `background` is the finished artwork -- chrome and
+    static labels only, with every value area left as an empty recess (see
+    hud-artwork-prompt.md). Without one, draw_hud_chrome paints a procedural
+    placeholder so the layout can be developed before the art exists."""
+    slots = hud_layout(W, H)
+    sx = W / HUD_W
+
+    def fs(px: float) -> int:
+        return max(6, round(px * sx))
+
+    def iw(w: int) -> int:
+        return w - fs(24)
+
+    if background is not None:
+        img = background.convert("RGB").resize((W, H))
+        draw = ImageDraw.Draw(img)
+    else:
+        img = Image.new("RGB", (W, H), HUD_BG)
+        draw = ImageDraw.Draw(img)
+        draw_hud_chrome(draw, slots, fs, iw)
+
+    # --- SCORE (DOOM's health): the biggest number on the bar, flashing as
+    # it counts up after each QSO.
+    x, y, w, h = slots["score"]
+    colour = tuple(
+        round(c + (255 - c) * state.score_flash) for c in HUD_RED
+    )  # washes toward white at the moment of a QSO
+    _seven_seg(draw, f"{state.score}", x + w // 2, y + fs(96), iw(w), fs(112), colour)
+
+    x, y, w, h = slots["qsos"]
+    _seven_seg(draw, f"{state.qsos}", x + w // 2, y + fs(96), iw(w), fs(112), HUD_RED)
+
+    # --- QRG, then dim whichever band/mode chips are not the current one.
+    x, y, w, h = slots["freq"]
+    qrg = f"{state.freq_hz / 1e6:.3f}" if state.freq_hz else "---.---"
+    _seven_seg(draw, qrg, x + w // 2, y + fs(42), iw(w), fs(58), HUD_AMBER)
+    for row, names, active in (
+        (112, _HUD_BANDS, state.band),
+        (174, _HUD_MODES, state.mode),
+    ):
+        for rect, name in _chip_rects(
+            (x + fs(12), y + fs(row), w - fs(24), fs(52)), names
+        ):
+            if name != active:
+                _dim_region(img, rect, HUD_CHIP_DIM)
+
+    # --- RX/TX lamp + signal meter
+    x, y, w, h = slots["meter"]
+    label = "TX" if state.ptt else "RX" if state.ptt is not None else "--"
+    lamp = (
+        HUD_RED if state.ptt else HUD_GREEN if state.ptt is not None else HUD_GREEN_OFF
+    )
+    _label(draw, x + w // 2, y + fs(12), label, fs(34), iw(w))
+    r = fs(30)
+    cx, cy = x + w // 2, y + fs(96)
+    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=lamp, outline=HUD_BEVEL_HI)
+    _draw_meter(draw, (x + fs(12), y + h - fs(84), w - fs(24), fs(26)), state.s_level)
+
+    # --- compass: solid needle = where the rotator points, hollow needle =
+    # bearing to the station being worked, so the swing onto target is visible.
+    x, y, w, h = slots["compass"]
+    r, cx, cy = _compass_geometry(slots, fs)
     if state.target_az is not None:
         _needle(
             draw,
@@ -3048,54 +3112,47 @@ def draw_hud_frame(
             fill=HUD_RED,
             anchor="lm",
         )
-    _label(draw, cx, y + h - fs(26), "ROT", fs(22), iw(w))
 
-    # --- PWR: supply volts + PA current, units on the same line as the value
-    # to keep the panel short enough for the ticker to fit underneath. No
-    # recording carries these yet -- the radio only reports them when polled,
-    # which the logger doesn't do -- so this renders placeholders rather than
-    # hiding, which would shift the layout between old and new recordings.
+    # --- PWR: supply volts + PA current. No recording carries these yet --
+    # the radio only reports them when polled, which the logger doesn't do --
+    # so this renders placeholders rather than hiding, which would shift the
+    # layout between old and new recordings.
     x, y, w, h = slots["pwr"]
-    for i, (value, unit) in enumerate(
+    for i, value in enumerate(
         [
-            (f"{state.vd:.1f}" if state.vd is not None else "--.-", "V"),
-            (f"{state.id_a:.1f}" if state.id_a is not None else "--.-", "A"),
+            f"{state.vd:.1f}" if state.vd is not None else "--.-",
+            f"{state.id_a:.1f}" if state.id_a is not None else "--.-",
         ]
     ):
-        row_cy = y + fs(40) + i * fs(50)
-        _seven_seg(
-            draw, value, x + w // 2 - fs(14), row_cy, iw(w) - fs(28), fs(40), HUD_RED
-        )
-        draw.text(
-            (x + w - fs(14), row_cy),
-            unit,
-            font=_hud_font(fs(24), bold=False),
-            fill=HUD_LABEL,
-            anchor="rm",
-        )
-    _label(draw, x + w // 2, y + h - fs(26), "PWR", fs(22), iw(w))
-
-    # --- stats: a small mono caption on the left, the value in segments on
-    # the right, so the units live in the caption and the numbers stay big.
-    x, y, w, h = slots["stats"]
-    utc = state.utc.strftime("%H:%M:%S") if state.utc else "--:--:--"
-    rows = [
-        # Double spaces: DSEG14's space is only ~a quarter of a cell wide, so
-        # a single one leaves the caption jammed against the value.
-        f"{utc}  UTC",
-        f"RATE  {state.rate_per_h:.0f}  H",
-        f"ODX  {state.best_km}  KM",
-    ]
-    for i, row in enumerate(rows):
         _seven_seg(
             draw,
-            row,
-            x + w // 2,
+            value,
+            x + w // 2 - fs(14),
+            y + fs(40) + i * fs(50),
+            iw(w) - fs(28),
+            fs(40),
+            HUD_RED,
+        )
+
+    # --- stats: values only, right-aligned. Their captions are chrome (see
+    # draw_hud_chrome) and in a finished render come from the artwork, so
+    # drawing them here too would print each one twice.
+    x, y, w, h = slots["stats"]
+    values = [
+        state.utc.strftime("%H:%M:%S") if state.utc else "--:--:--",
+        f"{state.rate_per_h:.0f}",
+        f"{state.best_km}",
+    ]
+    for i, value in enumerate(values):
+        _seven_seg(
+            draw,
+            value,
+            x + w - fs(16),
             y + fs(30) + i * fs(46),
-            iw(w),
+            w - fs(150),
             fs(34),
             HUD_RED,
-            path=DSEG14_FONT_PATH,
+            anchor="rm",
         )
 
     # --- CW ticker: a fixed HUD_TICKER_CHARS-wide dot-matrix display,
@@ -3108,7 +3165,6 @@ def draw_hud_frame(
         (x + fs(14), y + fs(8), w - fs(28), h - fs(44)),
         HUD_GREEN,
     )
-    _label(draw, x + w // 2, y + h - fs(28), "CW", fs(22), iw(w))
     return img
 
 

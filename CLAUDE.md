@@ -1383,6 +1383,19 @@ is that the more important a value, the bigger it is drawn.
   portrait sits), Vd/Id take armor, and band/mode chips take the weapon-slot strip.
   Everything else — QRG, RX/TX lamp, S-meter bar, compass, UTC/rate/best-DX, CW ticker —
   fills the remaining panels.
+- **The drawing layer is itself split into chrome and values.** `draw_hud_chrome` paints
+  panel frames, recesses, the compass rose and *every* static label, and runs **only when
+  no `--hud-background` is given** — with artwork none of it runs, because the artwork
+  already carries all of it. Anything whose text changes at render time stays in
+  `draw_hud_frame`. Getting this wrong is not cosmetic: before the split, the stats
+  captions were drawn in the value path, so with real artwork every one of them would have
+  been printed twice, slightly offset. A consequence worth knowing: a baked label can't
+  change, which is why the meter's caption is a fixed "S" and no longer switches to "PO"
+  on transmit — the RX/TX lamp beside it already says which is being shown.
+- **Band/mode chips are drawn (and baked) lit, and the inactive ones dimmed**
+  (`_dim_region`, `HUD_CHIP_DIM`) rather than existing as a lit/unlit pair of assets that
+  would have to be kept stylistically in sync. `_chip_rects` is shared by the drawing and
+  dimming passes so the two can never disagree about where a chip is.
 - **Split into a data layer and a drawing layer, deliberately.** Everything up to
   `draw_hud_frame` is pure functions over the recording's own sources, so it needs no
   art, no fonts and no ffmpeg and is fully unit-tested; `HudTimeline.at(t)` returns a

@@ -2904,3 +2904,29 @@ class TestHudMatrixFont:
 
     def test_an_unknown_character_falls_back_to_a_question_mark(self):
         assert cv._matrix_rows("\u00e9") == cv._matrix_rows("?")
+
+
+class TestHudChromeSplit:
+    def test_static_labels_are_not_drawn_over_supplied_artwork(self):
+        # The artwork bakes every static label, so drawing them again would
+        # print each one twice. Regression: the stats captions (UTC / RATE /H
+        # / ODX KM) used to be drawn in the value path and would have doubled.
+        art = Image.new("RGB", (cv.HUD_W, cv.HUD_H), (0, 0, 0))
+        img = cv.draw_hud_frame(cv.hud_demo_state(), background=art)
+        x, y, w, h = cv.HUD_SLOTS["score"]
+        label_strip = img.crop((x, y + h - 60, x + w, y + h))
+        assert np.asarray(label_strip).max() < 40
+
+    def test_the_placeholder_does_draw_them(self):
+        # ... and without artwork the placeholder has to stand in for it,
+        # otherwise the preview would show unlabelled numbers.
+        img = cv.draw_hud_frame(cv.hud_demo_state())
+        x, y, w, h = cv.HUD_SLOTS["score"]
+        label_strip = img.crop((x, y + h - 60, x + w, y + h))
+        assert np.asarray(label_strip).max() > 100
+
+    def test_values_are_drawn_either_way(self):
+        art = Image.new("RGB", (cv.HUD_W, cv.HUD_H), (0, 0, 0))
+        img = cv.draw_hud_frame(cv.hud_demo_state(), background=art)
+        x, y, w, h = cv.HUD_SLOTS["score"]
+        assert np.asarray(img.crop((x, y, x + w, y + h - 60)))[:, :, 0].max() > 100
