@@ -549,6 +549,63 @@ operator was watching, including signals never within earshot.
   full contest_video.py render). Both read the format via `icom_net.read_scope_records`,
   the format's single owner — `contest_video.py` doesn't reimplement the parser.
 
+### Meters and the rest of the CI-V surface (measured, not yet implemented)
+
+Findings from three `dumpcap` captures of a live **wfview** session against this radio
+(same technique as the scope research above — wfview is a known-good client, so capturing
+it answers "how does a working implementation do this" without needing our own session,
+and crucially without taking the radio's single session slot away from it). Nothing here
+is wired into any tool yet; recorded so the measurements don't have to be repeated.
+
+- **Only two things are ever pushed unsolicited: freq/mode Transceive frames and scope
+  sweeps (`27 00`, ~29/s). Everything else is polled** — wfview queries the S-meter
+  (`15 02`) at **~19 Hz**, plus PTT (`1c 00`), OVF (`15 07`), VFO frequency/mode
+  (`25`/`26`) and assorted settings at 1–3 Hz. So a live S-meter needs a poller; there is
+  no push option to find. Affordability is settled by the same capture: the radio sustains
+  ~30 queries/s alongside 29 scope sweeps/s and an audio stream without trouble.
+- **Every outbound frame appears twice in a capture** — the radio echoes the client's own
+  frames back on the CI-V stream (see the raw-frame note above), so a naive frame counter
+  reads exactly 2x. Every query/reply pair in these captures came out at precisely 2:1,
+  which is what confirmed the echo rather than some retransmit behaviour.
+- **Meter calibration, measured against real instruments** (raw values are 0–255, sent as
+  4-digit BCD across two bytes):
+  | Meter | RX | TX | Verdict |
+  |---|---|---|---|
+  | `15 02` S | 0–6 quiet, 150 on a strong signal | not polled | S9 = raw 120 |
+  | `15 11` Po | not polled | 213–214 | 100% — matches the 0/143/213 curve |
+  | `15 12` SWR | 0 | 27–29 | ≈1.3 via 0/48/80/120 → 1.0/1.5/2.0/3.0 |
+  | `15 15` Vd | **152** | — | **13.66 V** vs 13.78 V on a multimeter (0.9% — curve transfers) |
+  | `15 16` Id | 0 | 169–172 | **the 7300 curve does not transfer** (see below) |
+- **Vd reads on receive**, which is the case that matters for portable battery ops —
+  watching a pack sag across a round beats a momentary key-down dip. Id is PA drain only
+  and reads a literal 0 on RX.
+- **Id's scale is unresolved and must not be assumed.** The IC-7300 curve (0/97/146/241 →
+  0/10/15/25 A) gives 17.6 A for raw 171, but the PSU's own current meter read 14 A total
+  during that same transmission, of which ~2 A is the radio's RX baseline — so PA drain
+  was ~12 A. One TX point can anchor a linear scale near the operating point but can't
+  resolve the curve's shape. **Consequence for the recorder: store raw meter values and
+  convert at render time**, so a better calibration is a one-line change rather than a
+  ruined recording.
+- **The S-meter slot switches to Po on transmit, in the protocol and not just the
+  display**: `15 02` stops being queried entirely during TX and `15 11` starts. A consumer
+  therefore needs PTT to label the reading — which `contest_video.py` already has losslessly
+  from the WAV metadata.
+- **`25 00`/`25 01` is VFO A/B of the selected receiver, not main/sub.** A capture showed
+  144.800 FM and 144.1735 USB simultaneously, which looks like dual receive but isn't —
+  confirmed from the radio itself, where A and B move together when the band changes.
+  Reading the *other band's* receiver (the IC-9700's real dual-watch, e.g. monitoring 70cm
+  while working 2m) needs a command we haven't identified; `07 D0`/`07 D1` switches the
+  selection, but that is intrusive for a passive monitor. wfview has a sub-band display
+  (`SubPlotCeiling`/`SubWFLength` in its config), so one capture with dual watch actually
+  enabled would reveal it.
+- **Scope commands carry a main/sub selector, and `parse_scope_frame` would drop the sub
+  band's sweeps.** wfview sends every scope *settings* command twice, once ending `00` and
+  once `01` (`27 14 00`/`27 14 01`, and likewise `27 15`, `27 19`, `27 1a`). By the same
+  pattern `frame[4]` of a `27 00` waveform frame is that selector — but `parse_scope_frame`
+  asserts it is `0x00`, so sub-band sweeps would be silently discarded. Not a live problem
+  (all 439 waveform frames captured were main, and the sub scope's data output was never
+  enabled), just a limit to know about before anyone tries.
+
 ## contest_video.py – Annotated CW contest video
 
 Turns a CW contest recording plus its EDI log into a YouTube-ready MP4 with a
@@ -1312,6 +1369,71 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
     actually combine visually) — not (yet) a permanent addition to `tests/`, since it
     shells out to real ffmpeg and takes real wall-clock time, unlike the rest of the
     suite.
+
+### HUD (DOOM-style status bar) — data layer + preview
+
+A full-width opaque status bar modelled on DOOM's, replacing readouts that are
+technically visible in the terminal PiP but too small to read: the logger's own screen
+renders at ~13px in the cast, so *importance* has no visual weight there. The HUD's rule
+is that the more important a value, the bigger it is drawn.
+
+- **The DOOM mapping is the design**, not decoration: SCORE takes the health slot (the
+  biggest number, flashing and counting up as it lands), QSOS takes ammo, the **webcam
+  takes the face slot** (a square centre-crop of the operator, exactly where DOOMguy's
+  portrait sits), Vd/Id take armor, and band/mode chips take the weapon-slot strip.
+  Everything else — QRG, RX/TX lamp, S-meter bar, compass, UTC/rate/best-DX, CW ticker —
+  fills the remaining panels.
+- **Split into a data layer and a drawing layer, deliberately.** Everything up to
+  `draw_hud_frame` is pure functions over the recording's own sources, so it needs no
+  art, no fonts and no ffmpeg and is fully unit-tested; `HudTimeline.at(t)` returns a
+  `HudState` for any video time. Geometry lives in one table (`HUD_SLOTS`, scaled by
+  `hud_layout`), so replacing the placeholder background with finished artwork is an edit
+  to coordinates, not to drawing code.
+- **`HudTimeline` looks everything up by bisect, never by scanning.** A two-hour render
+  queries it ~216,000 times; a linear scan per frame over hundreds of segments or
+  thousands of decoded characters would dominate the entire pass.
+- **The compass carries two needles**: solid = where the rotator actually points
+  (telemetry `az`), hollow = bearing to the station being worked (computed from their
+  EDI locator). The swing of one onto the other is a QSO's whole story in one glyph.
+  Validated on the real August round — at a sampled instant the rotator read 310.0° and
+  the target bearing computed to 310.38°, i.e. two independent sources agreeing.
+- **The S-meter comes from the `.scope` recording's own centre bins**, not from CI-V's
+  `15 02` (which is polled-only — see icom_net's meter notes). The IC-9700's scope runs in
+  Centre mode and 475 bins across a 1 MHz span makes one bin ~2.1 kHz, close enough to an
+  SSB passband that this is a real reading rather than a proxy; `hud_s_marks` takes a
+  *max* over the centre bins, not a mean, so a signal in one bin isn't diluted by the
+  quiet ones beside it. **This is not retroactive in practice**: no contest round recorded
+  so far has a `.scope` file at all (the only one in the tree is a 65 s bench capture from
+  a different day), so the meter reads empty until the next round.
+- **The PWR panel renders placeholders rather than hiding itself** when Vd/Id are absent,
+  which is every recording to date — a panel that appears and disappears between
+  recordings would shift the whole layout.
+- **Every readout is fitted to its own panel width (`_fit_font`)**, because nothing on
+  this bar has a fixed width: the score gains a digit partway through a contest and a
+  callsign-shaped ticker line is wider than a report. Found by rendering the demo frame
+  and looking at it — a fixed point size spilled five-digit scores clean across the gutter
+  into the QSOS panel. The regression test asserts no lit pixels in that gutter, and was
+  confirmed red by monkeypatching `_fit_font` back to a plain fixed-size lookup.
+- **The CW ticker shrinks to `HUD_TICKER_CHARS` (16)** in a fixed right-aligned slot, down
+  from the full-width 84-character overlay — the value of a ticker is "something is
+  arriving right now", not a readable backlog. `build_ass` and the HUD now share one
+  source for it (`ticker_chunks` / `ticker_stream` / `ticker_texts`, extracted from
+  `build_ass`) rather than each deriving the transcript independently.
+- **Two preview modes, both single-frame PNG**, because iterating layout against a full
+  render is absurd: `--hud-demo OUT.png` needs no recording at all and draws the mockup's
+  dummy values (this is what to check artwork against); `--hud-preview OUT.png
+  --hud-preview-t SECONDS` builds real state from an actual recording. `recdir`/`edi` are
+  `nargs="?"`/`nargs="*"` purely so `--hud-demo` can run standalone; every other mode
+  still errors without them.
+- **Vertical budget is the real constraint, and the first artwork missed it.** The
+  ChatGPT mockup came out at 4.4:1, i.e. 435px at 1920 wide — 40% of a 1080p frame, which
+  collides with the cast PiP (73% width x 1.69 aspect = 830px tall). The workable budget
+  is ~260px (24%, 7.4:1), at which the cast PiP only has to shrink from 0.73 to ~0.70
+  width. `HUD_W`/`HUD_H` are 1920x260 for that reason.
+- **Not yet done**: `render_hud_video` (the per-frame pass, to follow `render_cast_video`'s
+  PIL-to-ffmpeg-pipe pattern), compositing into `render()`'s filter graph, moving the
+  webcam into the face slot, and the logger-side meter recorder that would fill the PWR
+  panel.
 
 ## Uploading a rendered video to YouTube
 `contest_video.py` only renders the mp4 + `.chapters.txt` + `.srt` — it does not upload.

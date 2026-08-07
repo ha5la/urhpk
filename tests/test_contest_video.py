@@ -2652,3 +2652,218 @@ class TestStreamPrecedesAudio:
         assert cmd[i + 1] == "19.000"
         assert cmd[i + 2] == "-i"
         assert "-19.000" not in cmd
+
+
+# ---------------------------------------------------------------------------
+# HUD
+# ---------------------------------------------------------------------------
+
+
+def _hud_seg(dur=600.0, audio_t=0.0, wall=None):
+    return Segment("a", wall or datetime(2026, 8, 3, 20, 0, 0), dur, audio_t)
+
+
+def _hud_qso(call, pts, loc="JN97TF", dup=False):
+    return Qso(
+        datetime(2026, 8, 3, 18, 0), call, "599", "001", "599", "001", loc, pts, dup
+    )
+
+
+class TestHudGeo:
+    def test_rejects_anything_that_is_not_a_locator(self):
+        assert cv.maidenhead_to_latlon("") is None
+        assert cv.maidenhead_to_latlon("ZZ99") is None  # field letters stop at R
+        assert cv.maidenhead_to_latlon("JN9") is None
+        assert cv.maidenhead_to_latlon("JN97TF") is not None
+
+    def test_six_character_locator_sits_inside_its_own_four_character_square(self):
+        lat4, lon4 = cv.maidenhead_to_latlon("JN97")
+        lat6, lon6 = cv.maidenhead_to_latlon("JN97TF")
+        assert abs(lat6 - lat4) < 0.5
+        assert abs(lon6 - lon4) < 1.0
+
+    def test_initial_bearing_matches_the_cardinal_directions(self):
+        assert abs(cv.initial_bearing(0, 0, 10, 0) - 0) < 0.1  # due north
+        assert abs(cv.initial_bearing(0, 0, 0, 10) - 90) < 0.1  # due east
+        assert abs(cv.initial_bearing(0, 0, -10, 0) - 180) < 0.1  # due south
+
+
+class TestHudQsoMarks:
+    def test_accumulates_score_count_and_best_dx_at_each_qso_end(self):
+        qsos = [
+            _hud_qso("HA1A", 100),
+            _hud_qso("HA2B", 300),
+            _hud_qso("HA3C", 0, dup=True),
+        ]
+        windows = [(0.0, 10.0), (20.0, 30.0), (40.0, 50.0)]
+        assert cv.hud_qso_marks(qsos, windows) == [
+            (10.0, 100, 1, 100),
+            (30.0, 400, 2, 300),
+            (50.0, 400, 3, 300),  # a dup adds a QSO but no score and no best DX
+        ]
+
+    def test_marks_are_ordered_by_window_end_not_by_edi_order(self):
+        # qso_windows can hand back a QSO whose exact submit time reorders it
+        # relative to the EDI's minute-precision sort.
+        qsos = [_hud_qso("HA1A", 100), _hud_qso("HA2B", 300)]
+        windows = [(30.0, 40.0), (0.0, 10.0)]
+        assert [m[0] for m in cv.hud_qso_marks(qsos, windows)] == [10.0, 40.0]
+
+
+class TestHudTimeline:
+    def test_score_counts_up_over_the_animation_window_then_holds(self):
+        tl = cv.HudTimeline(
+            segs=[_hud_seg()], qso_marks=[(10.0, 100, 1, 100), (20.0, 400, 2, 300)]
+        )
+        assert tl.at(9.9).score == 0
+        assert tl.at(10.0).score == 0  # the count-up starts from the old total
+        midway = tl.at(10.0 + cv.HUD_SCORE_ANIM_S / 2).score
+        assert 0 < midway < 100
+        assert tl.at(10.0 + cv.HUD_SCORE_ANIM_S).score == 100
+        assert tl.at(19.0).score == 100  # holds until the next QSO
+        assert tl.at(20.0 + cv.HUD_SCORE_ANIM_S).score == 400
+
+    def test_score_flash_decays_to_zero_over_the_same_window(self):
+        tl = cv.HudTimeline(segs=[_hud_seg()], qso_marks=[(10.0, 100, 1, 100)])
+        assert tl.at(10.0).score_flash == 1.0
+        assert tl.at(10.0 + cv.HUD_SCORE_ANIM_S).score_flash < 1e-6
+        assert tl.at(30.0).score_flash == 0.0
+
+    def test_rate_counts_only_qsos_inside_the_trailing_window(self):
+        window = cv.HUD_RATE_WINDOW_S
+        tl = cv.HudTimeline(
+            segs=[_hud_seg(dur=window * 2)],
+            qso_marks=[(0.0, 1, 1, 1), (100.0, 2, 2, 1), (window + 50.0, 3, 3, 1)],
+        )
+        # At window+60 the first QSO has aged out; two remain inside.
+        assert tl.at(window + 60.0).rate_per_h == 2 * 3600.0 / window
+
+    def test_target_bearing_only_shows_inside_its_own_qso_window(self):
+        tl = cv.HudTimeline(segs=[_hud_seg()], target_spans=[(10.0, 20.0, 271.0)])
+        assert tl.at(9.0).target_az is None
+        assert tl.at(15.0).target_az == 271.0
+        assert tl.at(20.0).target_az is None
+
+    def test_rig_state_supplies_band_from_the_frequency(self):
+        events = [(0.0, 10.0, SegState(ptt=True, freq_hz=432_200_000, mode="CW"))]
+        tl = cv.HudTimeline(segs=[_hud_seg()], state_events=events)
+        state = tl.at(5.0)
+        assert (state.ptt, state.mode, state.band) == (True, "CW", "70CM")
+        assert tl.at(15.0).band is None  # past the run, nothing carries over
+
+    def test_signal_level_clears_when_the_scope_recording_stops(self):
+        tl = cv.HudTimeline(segs=[_hud_seg()], s_marks=[(5.0, 0.5)])
+        assert tl.at(5.0).s_level == 0.5
+        assert tl.at(5.0 + cv.HUD_S_HOLD_S).s_level == 0.5
+        assert tl.at(5.0 + cv.HUD_S_HOLD_S + 0.1).s_level is None
+
+    def test_ticker_keeps_the_last_characters_and_clears_after_the_hold(self):
+        seg = _hud_seg(dur=10.0)
+        seg.events = [
+            CharEvent(i * 0.1, ch) for i, ch in enumerate("ABCDEFGHIJKLMNOPQRST")
+        ]
+        tl = cv.HudTimeline(
+            segs=[seg], stream=cv.ticker_stream(cv.ticker_chunks([seg], None, None))
+        )
+        last_t = seg.events[-1].t
+        assert tl.at(last_t).ticker == "EFGHIJKLMNOPQRST"
+        assert len(tl.at(last_t).ticker) == cv.HUD_TICKER_CHARS
+        assert tl.at(last_t + cv.TICKER_HOLD_S + 0.1).ticker == ""
+
+    def test_utc_is_the_local_wall_clock_less_the_derived_offset(self):
+        tl = cv.HudTimeline(segs=[_hud_seg()], offset_h=2)
+        assert tl.at(30.0).utc == datetime(2026, 8, 3, 18, 0, 30)
+
+
+class TestHudSources:
+    def test_s_marks_read_the_scope_sweeps_own_centre_bins(self):
+        segs = [_hud_seg()]  # 20:00 local == 18:00 UTC at offset 2
+        ts = datetime(2026, 8, 3, 18, 0, 30, tzinfo=timezone.utc).timestamp()
+        quiet = bytes([10] * 475)
+        loud = bytearray([10] * 475)
+        loud[475 // 2] = SCOPE_AMP_MAX
+        marks = cv.hud_s_marks(
+            [(ts, 0, 0, quiet), (ts + 1, 0, 0, bytes(loud))], segs, offset_h=2
+        )
+        assert marks[0] == (30.0, 10 / SCOPE_AMP_MAX)
+        assert marks[1] == (31.0, 1.0)
+
+    def test_s_marks_take_the_loudest_centre_bin_not_the_average(self):
+        # A signal sitting in one bin must not be diluted by the quiet bins
+        # either side of it.
+        segs = [_hud_seg()]
+        ts = datetime(2026, 8, 3, 18, 0, 0, tzinfo=timezone.utc).timestamp()
+        pixels = bytearray([0] * 475)
+        pixels[475 // 2] = 80
+        marks = cv.hud_s_marks([(ts, 0, 0, bytes(pixels))], segs, offset_h=2)
+        assert marks[0][1] == 80 / SCOPE_AMP_MAX
+
+    def test_target_spans_give_the_bearing_to_each_worked_station(self):
+        # JN87 sits west-north-west of JN97TF (2.6 degrees of longitude
+        # west, a quarter degree north), i.e. a bearing just short of 280.
+        spans = cv.hud_target_spans(
+            [_hud_qso("HA1A", 100, loc="JN87")], [(0.0, 10.0)], "JN97TF"
+        )
+        assert len(spans) == 1
+        start, end, az = spans[0]
+        assert (start, end) == (0.0, 10.0)
+        assert 275 < az < 285
+
+    def test_target_spans_skip_a_qso_whose_locator_will_not_parse(self):
+        spans = cv.hud_target_spans(
+            [_hud_qso("HA1A", 100, loc="?????")], [(0.0, 10.0)], "JN97TF"
+        )
+        assert spans == []
+
+    def test_wall_time_at_inverts_audio_time_for(self):
+        segs = [
+            Segment("a", datetime(2026, 8, 3, 20, 0, 0), 60.0, 0.0),
+            Segment("b", datetime(2026, 8, 3, 20, 1, 0), 60.0, 60.0),
+        ]
+        for t in (0.0, 30.0, 59.0, 60.0, 90.0):
+            assert cv.audio_time_for(cv.wall_time_at(t, segs), segs) == t
+
+
+class TestHudLayout:
+    def test_slots_stay_inside_the_bar_and_never_overlap(self):
+        rects = sorted(cv.HUD_SLOTS.values())
+        for x, y, w, h in rects:
+            assert x >= 0 and y >= 0
+            assert x + w <= cv.HUD_W
+            assert y + h <= cv.HUD_H
+        for (x0, _, w0, _), (x1, _, _, _) in zip(rects, rects[1:]):
+            assert x0 + w0 <= x1
+
+    def test_layout_scales_to_another_bar_size(self):
+        scaled = cv.hud_layout(cv.HUD_W // 2, cv.HUD_H // 2)
+        x, y, w, h = scaled["score"]
+        assert (x, y, w, h) == tuple(v // 2 for v in cv.HUD_SLOTS["score"])
+
+
+class TestHudDrawing:
+    def test_frame_has_the_requested_size(self):
+        assert cv.draw_hud_frame(cv.hud_demo_state(), 1280, 174).size == (1280, 174)
+
+    def test_an_empty_state_renders_placeholders_rather_than_crashing(self):
+        # Every recording made before the meter recorder existed looks like
+        # this for the PWR panel, and a --duration cut before the first QSO
+        # looks like it for the rest.
+        assert cv.draw_hud_frame(cv.HudState()).size == (cv.HUD_W, cv.HUD_H)
+
+    def test_face_slot_is_left_empty_for_the_webcam_composite(self):
+        img = cv.draw_hud_frame(cv.hud_demo_state())
+        x, y, w, h = cv.HUD_SLOTS["face"]
+        inner = img.crop((x + 16, y + 16, x + w - 16, y + h - 16))
+        assert len(inner.getcolors(maxcolors=4)) == 1  # one flat colour, nothing drawn
+
+    def test_score_is_fitted_to_its_panel_instead_of_overflowing(self):
+        # Regression: a fixed point size overflowed the SCORE panel the moment
+        # the score reached five digits, spilling red digits across the gutter
+        # into the QSOS panel. Confirmed red by monkeypatching _fit_font back
+        # to a plain fixed-size lookup, which fails this assertion.
+        state = cv.hud_demo_state()
+        state.score = 123456
+        img = cv.draw_hud_frame(state)
+        sx, _, sw, _ = cv.HUD_SLOTS["score"]
+        gutter = img.crop((sx + sw, 0, cv.HUD_SLOTS["qsos"][0], cv.HUD_H))
+        assert np.asarray(gutter)[:, :, 0].max() < 60  # no lit digits here

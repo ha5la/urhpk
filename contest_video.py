@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import bisect
 import json
+import math
 import os
 import re
 import statistics
@@ -50,7 +51,7 @@ import numpy as np
 import pyte
 from PIL import Image, ImageDraw, ImageFont
 
-from icom_net import read_scope_records
+from icom_net import band_from_hz, read_scope_records
 
 # ---------------------------------------------------------------------------
 # CW decoding
@@ -1871,6 +1872,68 @@ def _mode_at(t: float, state_events: list[tuple[float, float, SegState]]) -> str
     return None
 
 
+def ticker_chunks(
+    segs: list[Segment],
+    state_events: list[tuple[float, float, SegState]] | None,
+    long_cw_spans: list[tuple[float, float, list[CharEvent]]] | None,
+) -> list[tuple[float, float, list[CharEvent]]]:
+    """Trusted CW content as one chronological list of (start, end, events).
+
+    Two sources merge here: segments decoded whole (dur <= MAX_OVER_S, one
+    chunk each), and telemetry-confirmed CW sub-ranges recovered from an
+    otherwise-too-long segment we only listened to (see decode_long_segment)
+    -- possibly several per segment, since we may have followed more than one
+    on-air exchange without ever transmitting ourselves. Segments telemetry
+    confirms were *not* CW are skipped outright: the decoder runs blind on
+    every segment (there's no way to know the mode in advance) and gate_events
+    rejects most non-CW noise, but a strong tone in voice audio can
+    occasionally still slip through trusted -- telemetry's own mode is ground
+    truth where we have it."""
+    chunks: list[tuple[float, float, list[CharEvent]]] = []
+    for s in segs:
+        mode = _mode_at(s.audio_t, state_events) if state_events is not None else None
+        if s.events and (mode is None or mode == "CW"):
+            chunks.append((s.audio_t, s.audio_t + _eff(s), s.events))
+    chunks.extend(long_cw_spans or [])
+    chunks.sort(key=lambda c: c[0])
+    return chunks
+
+
+def ticker_stream(
+    chunks: list[tuple[float, float, list[CharEvent]]],
+) -> list[tuple[float, str, bool]]:
+    """(absolute video time, character, flush-before) for every decoded
+    character. Flushing is decided uniformly by the real time gap since the
+    previous chunk (> MAX_OVER_S -- the same threshold used everywhere else to
+    tell a genuine over from a genuine gap), rather than per-segment
+    bookkeeping: two CW sub-ranges recovered from the *same* long segment
+    (e.g. two separate exchanges we listened in on) are otherwise
+    indistinguishable from one continuous burst."""
+    stream: list[tuple[float, str, bool]] = []
+    prev_end: float | None = None
+    for start, end, events in chunks:
+        is_burst_start = prev_end is None or start - prev_end > MAX_OVER_S
+        if not is_burst_start and stream:
+            stream.append((start, " ", False))  # gap between overs, same burst
+        for j, e in enumerate(events):
+            stream.append((start + e.t, e.ch, is_burst_start and j == 0))
+        prev_end = end
+    return stream
+
+
+def ticker_texts(stream: list[tuple[float, str, bool]], keep: int) -> list[str]:
+    """The visible transcript after each stream event -- the last `keep`
+    characters of the running transcript, which a flush resets to empty."""
+    out: list[str] = []
+    transcript = ""
+    for _, ch, flush in stream:
+        if flush:
+            transcript = ""
+        transcript += ch
+        out.append(transcript[-keep:])
+    return out
+
+
 def build_ass(
     segs: list[Segment],
     W: int,
@@ -1944,52 +2007,17 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     # --- decode ticker: rolling window, flushed at the start of every fresh
     # burst of on-air activity -- not at a QSO's EDI timestamp, which is
-    # only minute-precision and would flush mid-over. Trusted CW content
-    # comes from two sources, merged into one chronological list of
-    # (start, end, events) chunks: segments decoded whole (dur <= MAX_OVER_S,
-    # each producing one chunk), and telemetry-confirmed CW sub-ranges
-    # recovered from an otherwise-too-long segment we only listened to (see
-    # decode_long_segment) -- possibly several per segment, since we may
-    # have followed more than one on-air exchange without ever transmitting
-    # ourselves. Segments telemetry confirms were *not* CW are skipped
-    # outright: the decoder runs blind on every segment (there's no way to
-    # know the mode in advance) and gate_events rejects most non-CW noise,
-    # but a strong tone in voice audio can occasionally still slip through
-    # trusted -- telemetry's own mode is ground truth where we have it.
-    # Flushing is decided uniformly across all chunks by the real time gap
-    # since the previous one (> MAX_OVER_S -- the same threshold used
-    # everywhere else to tell a genuine over from a genuine gap), rather
-    # than per-segment bookkeeping: two CW sub-ranges recovered from the
-    # *same* long segment (e.g. two separate exchanges we listened in on)
-    # are otherwise indistinguishable from one continuous burst.
-    chunks: list[tuple[float, float, list[CharEvent]]] = []
-    for s in segs:
-        mode = _mode_at(s.audio_t, state_events) if state_events is not None else None
-        if s.events and (mode is None or mode == "CW"):
-            chunks.append((s.audio_t, s.audio_t + _eff(s), s.events))
-    chunks.extend(long_cw_spans or [])
-    chunks.sort(key=lambda c: c[0])
-
-    stream: list[tuple[float, str, bool]] = []  # (t, ch, flush_before)
-    prev_end: float | None = None
-    for start, end, events in chunks:
-        is_burst_start = prev_end is None or start - prev_end > MAX_OVER_S
-        if not is_burst_start and stream:
-            stream.append((start, " ", False))  # gap between overs, same burst
-        for j, e in enumerate(events):
-            stream.append((start + e.t, e.ch, is_burst_start and j == 0))
-        prev_end = end
-    transcript = ""
-    for i, (t, ch, flush) in enumerate(stream):
-        if flush:
-            transcript = ""
-        transcript += ch
-        vis = transcript[-VIS_CHARS:]
+    # only minute-precision and would flush mid-over. See ticker_chunks /
+    # ticker_stream for how the content and the flush points are found; the
+    # HUD's own 16-character ticker reads the same stream.
+    stream = ticker_stream(ticker_chunks(segs, state_events, long_cw_spans))
+    texts = ticker_texts(stream, VIS_CHARS)
+    for i, (t, _, _) in enumerate(stream):
         end = stream[i + 1][0] if i + 1 < len(stream) else total
         end = min(end, t + TICKER_HOLD_S)  # clear rather than show stale text in gaps
         if end <= t:
             continue
-        ev(t, end, "Ticker", _wrap(vis, CPL, 2))
+        ev(t, end, "Ticker", _wrap(texts[i], CPL, 2))
 
     return "".join(x if x.endswith("\n") else x + "\n" for x in lines)
 
@@ -2319,6 +2347,603 @@ def scope_freq_periods(
     return [tuple(p) for p in periods]
 
 
+# ---------------------------------------------------------------------------
+# HUD (DOOM-style status bar)
+#
+# Split in two on purpose: everything above draw_hud_frame is the *data*
+# layer -- pure functions turning the recording's own sources into a
+# HudState at any video time -- and everything below is drawing. The data
+# layer needs no art, no fonts and no ffmpeg, so it is fully unit-testable;
+# the drawing layer's geometry lives in one table (hud_layout) so replacing
+# the placeholder background with real artwork means editing coordinates,
+# not drawing code.
+# ---------------------------------------------------------------------------
+
+HUD_TICKER_CHARS = 16  # fixed-width ticker slot; ~5s of CW at contest speeds
+HUD_RATE_WINDOW_S = 600.0  # trailing window behind the QSOs/hour readout
+HUD_SCORE_ANIM_S = 0.6  # score count-up + panel flash after each QSO
+HUD_S_CENTRE_BINS = 3  # scope bins taken as "the tuned frequency"
+HUD_S_HOLD_S = 1.0  # no sweep for this long = no signal reading at all
+
+
+def maidenhead_to_latlon(loc: str) -> tuple[float, float] | None:
+    """Centre of a 4- or 6-character Maidenhead locator, or None if it isn't
+    one. Same formula as puskas_logger/puskas_visualizer (which each carry
+    their own copy of these two tiny helpers already); None rather than an
+    exception because EDI fields come from an external file."""
+    loc = (loc or "").strip().upper()
+    if not re.fullmatch(r"[A-R]{2}[0-9]{2}([A-X]{2})?", loc):
+        return None
+    lon = (ord(loc[0]) - 65) * 20 - 180 + int(loc[2]) * 2
+    lat = (ord(loc[1]) - 65) * 10 - 90 + int(loc[3])
+    if len(loc) >= 6:
+        lon += (ord(loc[4]) - 65) * (5 / 60) + 2.5 / 60
+        lat += (ord(loc[5]) - 65) * (2.5 / 60) + 1.25 / 60
+    else:
+        lon += 1.0
+        lat += 0.5
+    return lat, lon
+
+
+def initial_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    f1, l1, f2, l2 = map(math.radians, (lat1, lon1, lat2, lon2))
+    x = math.sin(l2 - l1) * math.cos(f2)
+    y = math.cos(f1) * math.sin(f2) - math.sin(f1) * math.cos(f2) * math.cos(l2 - l1)
+    return math.degrees(math.atan2(x, y)) % 360
+
+
+@dataclass
+class HudState:
+    """Everything the HUD draws, at one instant of video time."""
+
+    t: float = 0.0
+    utc: datetime | None = None
+    score: int = 0  # animated: counts up over HUD_SCORE_ANIM_S after a QSO
+    score_flash: float = 0.0  # 1.0 right after a QSO, decaying to 0.0
+    qsos: int = 0
+    rate_per_h: float = 0.0
+    best_km: int = 0
+    freq_hz: int | None = None
+    mode: str | None = None
+    band: str | None = None
+    ptt: bool | None = None
+    rot_az: float | None = None  # where the rotator actually points
+    target_az: float | None = None  # bearing to the station being worked
+    s_level: float | None = None  # 0..1, from the scope's own centre bins
+    ticker: str = ""
+    vd: float | None = None  # volts -- no recording carries these yet; the
+    id_a: float | None = None  # panel renders "---" until the logger records them
+
+
+def hud_qso_marks(
+    qsos: list[Qso], windows: list[tuple[float, float]]
+) -> list[tuple[float, int, int, int]]:
+    """(video_t, cumulative score, cumulative QSO count, best DX km) at the
+    moment each QSO completes.
+
+    The mark lands on `windows[i][1]` -- the QSO's *end*, which wherever the
+    input log gave an exact submit time is the real instant the operator hit
+    Enter (see qso_windows). That is when a score genuinely changes, so it's
+    also when the HUD's counter should tick over.
+
+    Best DX comes from q.pts rather than a recomputed distance because that's
+    the EDI's own scoring field, which is exactly what the SCORE panel sums.
+    A dup scores 0 there, so a dup of a far station never becomes best DX --
+    correct for a scoreboard, if not for bragging rights."""
+    order = sorted(range(len(qsos)), key=lambda i: windows[i][1])
+    marks: list[tuple[float, int, int, int]] = []
+    score = best = 0
+    for n, i in enumerate(order, start=1):
+        score += qsos[i].pts
+        best = max(best, qsos[i].pts)
+        marks.append((windows[i][1], score, n, best))
+    return marks
+
+
+def hud_target_spans(
+    qsos: list[Qso], windows: list[tuple[float, float]], my_loc: str
+) -> list[tuple[float, float, float]]:
+    """(start, end, bearing) of the station being worked, for the HUD
+    compass's second (ghost) needle -- so the rotator needle can be seen
+    swinging onto the target. Silently skips a QSO whose locator or our own
+    won't parse; there is simply no bearing to show then."""
+    me = maidenhead_to_latlon(my_loc)
+    if me is None:
+        return []
+    spans: list[tuple[float, float, float]] = []
+    for q, (start, end) in zip(qsos, windows):
+        them = maidenhead_to_latlon(q.loc)
+        if them is not None:
+            spans.append((start, end, initial_bearing(*me, *them)))
+    spans.sort(key=lambda s: s[0])
+    return spans
+
+
+def hud_s_marks(
+    records: list[tuple[float, int, int, bytes]],
+    segs: list[Segment],
+    offset_h: int,
+    bins: int = HUD_S_CENTRE_BINS,
+) -> list[tuple[float, float]]:
+    """(video_t, 0..1 signal level) from the scope recording's own centre
+    bins -- a genuine S-meter for the HUD that costs no new recording and
+    works retroactively on every session captured since the logger's scope
+    recorder went in.
+
+    The centre bin really is the tuned frequency: the IC-9700's scope runs in
+    Centre mode (see icom_net.parse_scope_frame), and at 475 bins across a
+    1 MHz span one bin is ~2.1 kHz -- close enough to an SSB passband that
+    this is a real reading rather than a rough proxy. `bins` are taken as a
+    max, not a mean, so a signal sitting in one bin isn't diluted by the
+    quiet ones either side of it.
+
+    Not the same quantity as CI-V's own S-meter (`15 02`), which is
+    post-filter and post-AGC; a live capture confirmed the radio only ever
+    reports that when polled, so no existing recording has it."""
+    marks: list[tuple[float, float]] = []
+    half = max(0, bins // 2)
+    for ts, _, _, pixels in records:
+        if not pixels:
+            continue
+        centre = len(pixels) // 2
+        window = pixels[max(0, centre - half) : centre + half + 1]
+        wall = datetime.fromtimestamp(ts, tz=timezone.utc).replace(
+            tzinfo=None
+        ) + timedelta(hours=offset_h)
+        marks.append(
+            (audio_time_for(wall, segs), min(1.0, max(window) / SCOPE_AMP_MAX))
+        )
+    marks.sort(key=lambda m: m[0])
+    return marks
+
+
+def wall_time_at(
+    t: float, segs: list[Segment], starts: list[float] | None = None
+) -> datetime | None:
+    """Local wall-clock time at video position t -- the inverse of
+    audio_time_for. `starts` is an optional precomputed [s.audio_t ...] so a
+    caller reading this once per rendered frame doesn't rebuild it every
+    time."""
+    if not segs:
+        return None
+    starts = starts if starts is not None else [s.audio_t for s in segs]
+    s = segs[max(0, bisect.bisect_right(starts, t) - 1)]
+    return s.wall + timedelta(seconds=max(0.0, min(t - s.audio_t, _eff(s))))
+
+
+@dataclass
+class HudTimeline:
+    """Precomputed HUD sources, queried per rendered frame by `at()`.
+
+    Every source is stored as a time-sorted list and looked up by bisect
+    rather than scanned: a two-hour render asks this ~216,000 times, so a
+    linear scan per frame over hundreds of segments or thousands of decoded
+    characters would dominate the whole pass."""
+
+    segs: list[Segment]
+    offset_h: int = 0
+    qso_marks: list[tuple[float, int, int, int]] = field(default_factory=list)
+    target_spans: list[tuple[float, float, float]] = field(default_factory=list)
+    state_events: list[tuple[float, float, SegState]] = field(default_factory=list)
+    s_marks: list[tuple[float, float]] = field(default_factory=list)
+    stream: list[tuple[float, str, bool]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self._seg_starts = [s.audio_t for s in self.segs]
+        self._qso_t = [m[0] for m in self.qso_marks]
+        self._target_t = [s[0] for s in self.target_spans]
+        self._state_t = [e[0] for e in self.state_events]
+        self._s_t = [m[0] for m in self.s_marks]
+        self._ticker_t = [e[0] for e in self.stream]
+        self._ticker_texts = ticker_texts(self.stream, HUD_TICKER_CHARS)
+
+    def at(self, t: float) -> HudState:
+        st = HudState(t=t, utc=None)
+        wall = wall_time_at(t, self.segs, self._seg_starts)
+        if wall is not None:
+            st.utc = wall - timedelta(hours=self.offset_h)
+
+        i = bisect.bisect_right(self._qso_t, t)
+        if i:
+            mark_t, score, n, best = self.qso_marks[i - 1]
+            prev = self.qso_marks[i - 2][1] if i >= 2 else 0
+            # Count up to the new total rather than snapping to it, and flash
+            # the panel over the same window -- DOOM's health readout is the
+            # thing the eye goes to, so a QSO landing should be visible.
+            phase = min(1.0, (t - mark_t) / HUD_SCORE_ANIM_S) if HUD_SCORE_ANIM_S else 1
+            st.score = round(prev + (score - prev) * phase)
+            st.score_flash = max(0.0, 1.0 - phase)
+            st.qsos, st.best_km = n, best
+        lo = bisect.bisect_right(self._qso_t, t - HUD_RATE_WINDOW_S)
+        st.rate_per_h = (i - lo) * 3600.0 / HUD_RATE_WINDOW_S
+
+        j = bisect.bisect_right(self._target_t, t)
+        if j and t < self.target_spans[j - 1][1]:
+            st.target_az = self.target_spans[j - 1][2]
+
+        k = bisect.bisect_right(self._state_t, t)
+        if k and t < self.state_events[k - 1][1]:
+            seg_state = self.state_events[k - 1][2]
+            st.ptt, st.mode, st.rot_az = seg_state.ptt, seg_state.mode, seg_state.az
+            st.freq_hz = seg_state.freq_hz
+            if st.freq_hz:
+                st.band = band_from_hz(st.freq_hz)
+
+        m = bisect.bisect_right(self._s_t, t)
+        if m and t - self.s_marks[m - 1][0] <= HUD_S_HOLD_S:
+            st.s_level = self.s_marks[m - 1][1]
+
+        p = bisect.bisect_right(self._ticker_t, t)
+        if p and t - self._ticker_t[p - 1] <= TICKER_HOLD_S:
+            st.ticker = self._ticker_texts[p - 1]
+        return st
+
+
+def build_hud_timeline(
+    segs: list[Segment],
+    qsos: list[Qso],
+    windows: list[tuple[float, float]],
+    my_loc: str,
+    offset_h: int,
+    state_events: list[tuple[float, float, SegState]] | None = None,
+    scope_records: list[tuple[float, int, int, bytes]] | None = None,
+    long_cw_spans: list[tuple[float, float, list[CharEvent]]] | None = None,
+) -> HudTimeline:
+    return HudTimeline(
+        segs=segs,
+        offset_h=offset_h,
+        qso_marks=hud_qso_marks(qsos, windows),
+        target_spans=hud_target_spans(qsos, windows, my_loc),
+        state_events=state_events or [],
+        s_marks=hud_s_marks(scope_records or [], segs, offset_h),
+        stream=ticker_stream(ticker_chunks(segs, state_events, long_cw_spans)),
+    )
+
+
+# --- drawing -----------------------------------------------------------------
+
+HUD_W, HUD_H = 1920, 260  # reference layout; scaled by hud_layout for other sizes
+HUD_BG = (26, 24, 20)
+HUD_PANEL = (16, 15, 13)
+HUD_FRAME = (58, 53, 44)
+HUD_BEVEL_HI = (104, 96, 82)
+HUD_BEVEL_LO = (10, 9, 8)
+HUD_RED = (255, 48, 32)
+HUD_RED_OFF = (74, 18, 12)
+HUD_AMBER = (255, 176, 32)
+HUD_GREEN = (72, 255, 96)
+HUD_GREEN_OFF = (24, 70, 30)
+HUD_LABEL = (156, 148, 132)
+
+_HUD_BANDS = ("2M", "70CM", "23CM")
+_HUD_MODES = ("SSB", "CW", "FM")
+
+# Reference-layout slots at HUD_W x HUD_H, left to right in DOOM's own order
+# (ammo | health | face | armor | arms). Replacing the placeholder background
+# with real artwork is an edit to this table alone.
+HUD_SLOTS: dict[str, tuple[int, int, int, int]] = {
+    "score": (10, 10, 270, 240),
+    "qsos": (288, 10, 140, 240),
+    "freq": (436, 10, 300, 240),
+    "meter": (744, 10, 140, 240),
+    "face": (892, 30, 200, 200),
+    "compass": (1100, 10, 200, 240),
+    "pwr": (1308, 10, 140, 240),
+    "stats": (1456, 10, 220, 240),
+    "ticker": (1684, 10, 226, 240),
+}
+
+_HUD_FONTS: dict[tuple[int, bool], ImageFont.FreeTypeFont] = {}
+
+
+def _hud_font(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
+    key = (size, bold)
+    if key not in _HUD_FONTS:
+        path = CAST_FONT_BOLD if bold else CAST_FONT_PATH
+        _HUD_FONTS[key] = ImageFont.truetype(path, size)
+    return _HUD_FONTS[key]
+
+
+def hud_layout(W: int = HUD_W, H: int = HUD_H) -> dict[str, tuple[int, int, int, int]]:
+    """HUD_SLOTS scaled to an arbitrary bar size."""
+    sx, sy = W / HUD_W, H / HUD_H
+    return {
+        name: (round(x * sx), round(y * sy), round(w * sx), round(h * sy))
+        for name, (x, y, w, h) in HUD_SLOTS.items()
+    }
+
+
+def _bevel(draw: ImageDraw.ImageDraw, rect, fill, depth: int = 3) -> None:
+    """A recessed panel: light along the bottom/right, dark along the
+    top/left, which is what reads as "sunk into the metal"."""
+    x, y, w, h = rect
+    draw.rectangle([x, y, x + w - 1, y + h - 1], fill=fill)
+    for i in range(depth):
+        draw.line([x + i, y + i, x + w - 1 - i, y + i], fill=HUD_BEVEL_LO)
+        draw.line([x + i, y + i, x + i, y + h - 1 - i], fill=HUD_BEVEL_LO)
+        draw.line(
+            [x + w - 1 - i, y + i, x + w - 1 - i, y + h - 1 - i], fill=HUD_BEVEL_HI
+        )
+        draw.line(
+            [x + i, y + h - 1 - i, x + w - 1 - i, y + h - 1 - i], fill=HUD_BEVEL_HI
+        )
+
+
+def _panel(draw: ImageDraw.ImageDraw, rect) -> tuple[int, int, int, int]:
+    """Draw a slot's frame + recess; return the usable interior rect."""
+    x, y, w, h = rect
+    _bevel(draw, rect, HUD_FRAME, depth=2)
+    inner = (x + 6, y + 6, w - 12, h - 12)
+    _bevel(draw, inner, HUD_PANEL, depth=2)
+    return inner
+
+
+def _fit_font(text: str, max_w: int, size: int, bold: bool = True):
+    """Largest font at or below `size` whose rendering of `text` fits
+    `max_w`. Nothing on this bar has a fixed width -- the score grows a digit
+    partway through a contest, a callsign-shaped ticker line is wider than a
+    report -- so a fixed size either overflows its panel or is drawn far
+    smaller than it could be."""
+    font = _hud_font(size, bold)
+    while size > 6 and font.getlength(text) > max_w:
+        size = max(6, int(size * 0.92))
+        font = _hud_font(size, bold)
+    return font
+
+
+def _label(
+    draw: ImageDraw.ImageDraw, cx: int, y: int, text: str, size: int, max_w: int
+) -> None:
+    draw.text(
+        (cx, y),
+        text,
+        font=_fit_font(text, max_w, size, bold=False),
+        fill=HUD_LABEL,
+        anchor="ma",
+    )
+
+
+def _big(draw, cx: int, y: int, text: str, size: int, fill, max_w: int) -> None:
+    draw.text((cx, y), text, font=_fit_font(text, max_w, size), fill=fill, anchor="ma")
+
+
+def _chips(draw, rect, names, active, size: int) -> None:
+    """One row of DOOM weapon-slot style selector chips, the active one lit."""
+    x, y, w, h = rect
+    gap = max(2, round(w * 0.02))
+    cw = (w - gap * (len(names) - 1)) // len(names)
+    for i, name in enumerate(names):
+        cx = x + i * (cw + gap)
+        on = name == active
+        _bevel(draw, (cx, y, cw, h), HUD_PANEL, depth=1)
+        draw.text(
+            (cx + cw // 2, y + h // 2),
+            name,
+            font=_hud_font(size, bold=on),
+            fill=HUD_AMBER if on else HUD_RED_OFF,
+            anchor="mm",
+        )
+
+
+def _needle(draw, cx, cy, r, az, fill, outline_only=False, width=1) -> None:
+    """A compass needle pointing at bearing `az` (0 = north, clockwise).
+
+    outline_only draws the "ghost" needle -- the bearing to the station being
+    worked -- which has to stay readable while the solid rotator needle sits
+    almost on top of it, since the two coinciding is the normal case."""
+
+    def pt(angle_deg: float, radius: float) -> tuple[float, float]:
+        a = math.radians(angle_deg)
+        return (cx + radius * math.sin(a), cy - radius * math.cos(a))
+
+    poly = [pt(az, r), pt(az + 148, r * 0.34), pt(az - 148, r * 0.34)]
+    if outline_only:
+        draw.line(poly + [poly[0]], fill=fill, width=width, joint="curve")
+    else:
+        draw.polygon(poly, fill=fill)
+
+
+def _draw_meter(draw, rect, level: float | None, segments: int = 18) -> None:
+    """Segmented LED bar: green, then yellow, then red past S9."""
+    x, y, w, h = rect
+    gap = 2
+    sw = (w - gap * (segments - 1)) / segments
+    lit = 0 if level is None else round(level * segments)
+    for i in range(segments):
+        frac = (i + 1) / segments
+        colour = HUD_GREEN if frac <= 0.55 else HUD_AMBER if frac <= 0.75 else HUD_RED
+        if i >= lit:
+            colour = tuple(c // 5 for c in colour)
+        sx = round(x + i * (sw + gap))
+        draw.rectangle([sx, y, sx + round(sw) - 1, y + h - 1], fill=colour)
+
+
+def draw_hud_frame(
+    state: HudState,
+    W: int = HUD_W,
+    H: int = HUD_H,
+    background: Image.Image | None = None,
+) -> Image.Image:
+    """Render one HUD bar. `background` is the finished artwork (chrome only,
+    no values); without one a plain procedural placeholder is drawn so the
+    layout can be developed before the art exists."""
+    slots = hud_layout(W, H)
+    sx = W / HUD_W
+    if background is not None:
+        img = background.convert("RGB").resize((W, H))
+        draw = ImageDraw.Draw(img)
+    else:
+        img = Image.new("RGB", (W, H), HUD_BG)
+        draw = ImageDraw.Draw(img)
+        for name, rect in slots.items():
+            if name != "face":
+                _panel(draw, rect)
+
+    def fs(px: float) -> int:
+        return max(6, round(px * sx))
+
+    # Every readout is fitted to its own panel width (see _fit_font): the
+    # score gains a digit partway through a contest and the ticker's content
+    # is never a fixed width, so a fixed point size would overflow.
+    def iw(w: int) -> int:
+        return w - fs(24)
+
+    # --- SCORE (DOOM's health): the biggest number on the bar, flashing as
+    # it counts up after each QSO.
+    x, y, w, h = slots["score"]
+    colour = tuple(
+        round(c + (255 - c) * state.score_flash) for c in HUD_RED
+    )  # washes toward white at the moment of a QSO
+    _big(draw, x + w // 2, y + fs(46), f"{state.score}", fs(120), colour, iw(w))
+    _label(draw, x + w // 2, y + h - fs(48), "SCORE", fs(30), iw(w))
+
+    x, y, w, h = slots["qsos"]
+    _big(draw, x + w // 2, y + fs(46), f"{state.qsos}", fs(120), HUD_RED, iw(w))
+    _label(draw, x + w // 2, y + h - fs(48), "QSOS", fs(30), iw(w))
+
+    # --- QRG + band/mode chips
+    x, y, w, h = slots["freq"]
+    qrg = f"{state.freq_hz / 1e6:.3f}" if state.freq_hz else "---.---"
+    _big(draw, x + w // 2, y + fs(14), qrg, fs(58), HUD_AMBER, iw(w))
+    _label(draw, x + w // 2, y + fs(78), "MHz", fs(24), iw(w))
+    _chips(
+        draw,
+        (x + fs(12), y + fs(112), w - fs(24), fs(52)),
+        _HUD_BANDS,
+        state.band,
+        fs(26),
+    )
+    _chips(
+        draw,
+        (x + fs(12), y + fs(174), w - fs(24), fs(52)),
+        _HUD_MODES,
+        state.mode,
+        fs(26),
+    )
+
+    # --- RX/TX lamp + signal meter
+    x, y, w, h = slots["meter"]
+    label = "TX" if state.ptt else "RX" if state.ptt is not None else "--"
+    lamp = (
+        HUD_RED if state.ptt else HUD_GREEN if state.ptt is not None else HUD_GREEN_OFF
+    )
+    _label(draw, x + w // 2, y + fs(12), label, fs(34), iw(w))
+    r = fs(30)
+    cx, cy = x + w // 2, y + fs(96)
+    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=lamp, outline=HUD_BEVEL_HI)
+    _draw_meter(draw, (x + fs(12), y + h - fs(84), w - fs(24), fs(26)), state.s_level)
+    # On TX the radio stops reporting a receive level and reports power out
+    # instead -- confirmed on the wire, the S-meter query is simply not sent.
+    _label(draw, x + w // 2, y + h - fs(50), "PO" if state.ptt else "S", fs(24), iw(w))
+
+    # --- face: left empty. The webcam is composited into this recess by
+    # ffmpeg, exactly where DOOM's face portrait sits.
+    x, y, w, h = slots["face"]
+    _bevel(draw, (x, y, w, h), HUD_FRAME, depth=3)
+    _bevel(draw, (x + 8, y + 8, w - 16, h - 16), (34, 32, 28), depth=2)
+
+    # --- compass: solid needle = where the rotator points, hollow needle =
+    # bearing to the station being worked, so the swing onto target is visible.
+    x, y, w, h = slots["compass"]
+    r = min(w, h) // 2 - fs(22)
+    cx, cy = x + w // 2, y + h // 2 - fs(14)
+    draw.ellipse(
+        [cx - r, cy - r, cx + r, cy + r], fill=(12, 11, 10), outline=HUD_BEVEL_HI
+    )
+    for i, point in enumerate("NESW"):
+        a = math.radians(i * 90)
+        draw.text(
+            (cx + (r - fs(13)) * math.sin(a), cy - (r - fs(13)) * math.cos(a)),
+            point,
+            font=_hud_font(fs(20), bold=False),
+            fill=HUD_LABEL,
+            anchor="mm",
+        )
+    if state.target_az is not None:
+        _needle(
+            draw,
+            cx,
+            cy,
+            r - fs(18),
+            state.target_az,
+            HUD_AMBER,
+            outline_only=True,
+            width=max(2, fs(4)),
+        )
+    if state.rot_az is not None:
+        _needle(draw, cx, cy, r - fs(26), state.rot_az, HUD_RED)
+    rot = f"{round(state.rot_az):03d}\u00b0" if state.rot_az is not None else "---"
+    _big(draw, cx, y + h - fs(52), rot, fs(32), HUD_RED, iw(w))
+
+    # --- PWR: supply volts + PA current. No recording carries these yet --
+    # the radio only reports them when polled, which the logger doesn't do
+    # yet -- so this renders placeholders rather than being hidden, keeping
+    # the layout stable between old and new recordings.
+    x, y, w, h = slots["pwr"]
+    vd = f"{state.vd:.1f}" if state.vd is not None else "--.-"
+    id_a = f"{state.id_a:.1f}" if state.id_a is not None else "--.-"
+    _big(draw, x + w // 2, y + fs(16), vd, fs(50), HUD_RED, iw(w))
+    _label(draw, x + w // 2, y + fs(70), "V", fs(24), iw(w))
+    _big(draw, x + w // 2, y + fs(106), id_a, fs(50), HUD_RED, iw(w))
+    _label(draw, x + w // 2, y + fs(160), "A", fs(24), iw(w))
+    _label(draw, x + w // 2, y + h - fs(48), "PWR", fs(28), iw(w))
+
+    # --- stats stack
+    x, y, w, h = slots["stats"]
+    utc = state.utc.strftime("%H:%M:%S") if state.utc else "--:--:--"
+    for i, text in enumerate(
+        [
+            f"{utc} UTC",
+            f"RATE {state.rate_per_h:.0f}/h",
+            f"BEST {state.best_km} KM",
+        ]
+    ):
+        draw.text(
+            (x + w // 2, y + fs(44) + i * fs(76)),
+            text,
+            font=_fit_font(text, iw(w), fs(30)),
+            fill=HUD_RED,
+            anchor="mm",
+        )
+
+    # --- CW ticker: fixed HUD_TICKER_CHARS-wide slot, right-aligned so new
+    # characters always arrive at the same place rather than the text
+    # re-centring on every keyed letter.
+    x, y, w, h = slots["ticker"]
+    draw.text(
+        (x + w // 2, y + h // 2 - fs(16)),
+        state.ticker.rjust(HUD_TICKER_CHARS),
+        font=_fit_font("W" * HUD_TICKER_CHARS, iw(w), fs(30)),
+        fill=HUD_GREEN,
+        anchor="mm",
+    )
+    _label(draw, x + w // 2, y + h - fs(48), "CW", fs(28), iw(w))
+    return img
+
+
+def hud_demo_state() -> HudState:
+    """The mockup's own dummy values -- for --hud-demo, so the layout can be
+    checked against the artwork with no recording at hand."""
+    return HudState(
+        t=0.0,
+        utc=datetime(2026, 8, 3, 18, 42, 7),
+        score=12847,
+        qsos=63,
+        rate_per_h=47,
+        best_km=782,
+        freq_hz=144_174_000,
+        mode="CW",
+        band="2M",
+        ptt=False,
+        rot_az=135,
+        target_az=118,
+        s_level=0.62,
+        ticker="TU 5NN JN86SR",
+        vd=13.8,
+        id_a=12.4,
+    )
+
+
 def _stream_input_args(start: float, path: str) -> list[str]:
     """ffmpeg input args placing a side stream's frame 0 at `start`.
 
@@ -2514,10 +3139,12 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("recdir", help="directory of timestamped WAV segments")
+    # recdir/edi are optional only so --hud-demo can run with no recording at
+    # hand; every other mode still requires both (checked right after parsing).
+    ap.add_argument("recdir", nargs="?", help="directory of timestamped WAV segments")
     ap.add_argument(
         "edi",
-        nargs="+",
+        nargs="*",
         help="EDI log(s) for the same session -- pass more than one "
         "to merge multiple bands worked in one recording",
     )
@@ -2594,7 +3221,42 @@ def main() -> None:
         "back in as --input-log for exact chapter/caption timing with no "
         "cluster-snapping heuristics involved",
     )
+    ap.add_argument(
+        "--hud-demo",
+        metavar="OUT.png",
+        help="write a single HUD bar filled with dummy values and exit -- no "
+        "recording needed, for checking the layout against the artwork",
+    )
+    ap.add_argument(
+        "--hud-preview",
+        metavar="OUT.png",
+        help="write a single HUD bar built from this recording's real data at "
+        "--hud-preview-t and exit without rendering video (pair with "
+        "--duration to keep the CW decode short)",
+    )
+    ap.add_argument(
+        "--hud-preview-t",
+        type=float,
+        default=0.0,
+        help="video-time position (seconds) sampled by --hud-preview",
+    )
+    ap.add_argument(
+        "--hud-background",
+        metavar="ART.png",
+        help="finished HUD artwork (chrome only, no values) drawn under the "
+        "live readouts; without one a procedural placeholder is used",
+    )
     args = ap.parse_args()
+
+    hud_bg = Image.open(args.hud_background) if args.hud_background else None
+
+    if args.hud_demo:
+        draw_hud_frame(hud_demo_state(), background=hud_bg).save(args.hud_demo)
+        print(f"wrote {args.hud_demo} (dummy values)")
+        return
+
+    if not args.recdir or not args.edi:
+        ap.error("recdir and at least one EDI file are required")
 
     if args.seed_input_log:
         _, _, qsos_all = merge_edi(args.edi)
@@ -2887,6 +3549,23 @@ def main() -> None:
 
     stem = os.path.splitext(args.out)[0]
     windows = qso_windows(qsos, segs, offset_h, total, qso_times)
+
+    if args.hud_preview:
+        timeline = build_hud_timeline(
+            segs,
+            qsos,
+            windows,
+            mywwl,
+            offset_h,
+            state_events=state_events,
+            scope_records=scope_records,
+            long_cw_spans=long_cw_spans,
+        )
+        state = timeline.at(args.hud_preview_t)
+        draw_hud_frame(state, background=hud_bg).save(args.hud_preview)
+        print(f"wrote {args.hud_preview} at t={args.hud_preview_t:.1f}s: {state}")
+        return
+
     with open(stem + ".chapters.txt", "w") as fh:
         fh.write(build_chapters(qsos, windows))
     with open(stem + ".srt", "w") as fh:
