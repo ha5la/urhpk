@@ -668,9 +668,9 @@ No API calls during contest.
 **Crash recovery**: at startup, scans `*.edi` / `*.EDI` (case-insensitive) in the current
 directory. If found, shows a summary and offers to resume — all QSOs, serials, and dup state
 are rebuilt from the EDI records. EDI files are the sole persistence format (no session file).
-Files are saved as lowercase `YYMMDD-CALL-BAND.edi`; `write_edi` automatically removes any
-stale uppercase `.EDI` sibling of the same name (migration from pre-v1.6 saves).
-`load_from_edi` deduplicates by stem (case-insensitive) as a safety backstop.
+Files are saved as lowercase `YYMMDD-CALL-BAND.edi`, and `load_from_edi` matches
+case-insensitively and deduplicates by stem — a directory holding both spellings of one
+log must never load it twice.
 
 **Input format**: `CALL RST NR LOC` (locator is mandatory)
 ```
@@ -852,14 +852,14 @@ below — Alt+V to start/stop, off by default):
 
 **Contest rules**:
 - Reads band/QRG/mode from the radio via `icom_net` (push updates, no polling); falls
-  back to Alt+B/Alt+M (or `!band`/`!mode`) if the radio is offline
+  back to Alt+B/Alt+M if the radio is offline
 - RST defaults: `59` for SSB/FM, `599` for CW
 - Serial auto-increments per band; all QSOs (including dups) get a serial
 - Dup check key: `(callsign, band, mode)` — 9 valid combos per station (3 bands × 3 modes)
 - Dup QSOs shown in red and EDI-flagged `D`
 - Auto-saves EDI after every QSO; files named `YYMMDD-CALL-BAND.EDI` in current directory
 
-**Commands**: `!undo`, `!help` (`!band`/`!mode` still accepted but Alt+B/Alt+M preferred)  
+**Commands**: `!undo`, `!help`  
 Ctrl-D → final save and exit
 
 EDI export: one file per band, `[REG1TEST;1]` format compatible with bb.mrasz.hu submission.

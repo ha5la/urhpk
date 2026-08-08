@@ -531,24 +531,19 @@ class TestLoadFromEdi:
         assert lb2.qsos[0].call == "HA7NS"
 
     def test_uppercase_and_lowercase_edi_not_doubled(self, tmp_path):
-        """Coexisting foo.EDI and foo.edi (case-change migration) must not double QSOs."""
+        """Coexisting foo.EDI and foo.edi must not double the QSOs on recovery.
+
+        The scan is case-insensitive because the format's own convention is
+        uppercase, so both spellings genuinely turn up in contest directories.
+        """
         lb = self._make_logbook()
         p = write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path)
-        # Simulate a stale uppercase sibling from a pre-lowercase-change save
         stale = p.with_suffix(".EDI")
         stale.write_text(p.read_text())
         paths = sorted(tmp_path.glob("*.[Ee][Dd][Ii]"))
         assert len(paths) == 2  # both files visible on Linux
         lb2, _ = load_from_edi(paths, {})
         assert len(lb2.qsos) == len(lb.qsos)  # no doubling
-
-    def test_write_edi_removes_uppercase_sibling(self, tmp_path):
-        lb = self._make_logbook()
-        # Create a stale uppercase file first
-        stale = tmp_path / "260504-HA5LA-2M.EDI"
-        stale.write_text("stale")
-        write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path)
-        assert not stale.exists()
 
     def test_loc_cache_passed_through(self, tmp_path):
         lb = self._make_logbook()

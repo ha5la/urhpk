@@ -1056,9 +1056,6 @@ def write_edi(lb: LogBook, band: str, tname: str, out_dir: Path) -> Path | None:
         )
 
     path = out_dir / f"{date_6}-{lb.my_call}-{band}.edi"
-    stale = path.with_suffix(".EDI")  # remove uppercase sibling from pre-1.6 saves
-    if stale.exists():
-        stale.unlink()
     path.write_text("\n".join(hdr + records) + "\n", encoding="utf-8")
     return path
 
@@ -1370,20 +1367,6 @@ def _handle_command(line: str, lb: LogBook, tname: str):
             save_all(lb, tname)
         else:
             print("  Nothing to undo.")
-
-    elif cmd == "!band":
-        if len(parts) < 2 or parts[1].upper() not in ("2M", "70CM", "23CM"):
-            print("  Usage: !band 2M | 70CM | 23CM")
-        else:
-            _rig_manual["band"] = parts[1].upper()
-            print(f"  Band override: {_rig_manual['band']}")
-
-    elif cmd == "!mode":
-        if len(parts) < 2 or parts[1].upper() not in ("SSB", "CW", "FM"):
-            print("  Usage: !mode SSB | CW | FM")
-        else:
-            _rig_manual["mode"] = parts[1].upper()
-            print(f"  Mode override: {_rig_manual['mode']}")
 
     elif cmd == "!help":
         print("  CALL RST NR LOC          — log a QSO (locator required)")
@@ -1963,7 +1946,7 @@ def run(lb: LogBook, tname: str):
         band, mode, qrg, online = current_rig()
 
         if not band:
-            print("\033[31m  Cannot log: band unknown. Set with !band 2M\033[0m")
+            print("\033[31m  Cannot log: band unknown. Set it with Alt+B\033[0m")
             input("  [Enter to continue]")
             continue
 
