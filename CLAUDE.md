@@ -1242,39 +1242,35 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
     which do.
   - A segment with no WAV metadata at all (freq_hz/mode/ptt all `None` --
     not an IC-9700 recording, or a parse failure) is skipped rather than
-    guessed at from telemetry alone. `az` has no equivalent in the WAV
-    metadata at all and is purely telemetry's own — the median of whichever
-    samples fall in a run, **falling back to the last azimuth seen before
-    that run began** when the run holds none of its own; only a run with no
-    az anywhere before it falls back to `ROT ---`, matching the logger's own
-    toolbar. The carry-forward is what makes change-only telemetry work: the
-    rotator poller writes a line only when the azimuth actually moves, so a
-    rotator parked on one bearing for a whole QSO leaves no sample inside
-    that run at all, and a median of nothing would render `ROT ---` despite
-    the rotator being online and pointing somewhere known. az is a step
-    function — it holds until the next event, with no staleness *time*
-    horizon (deliberately: a horizon would be a tunable constant with no data
-    behind it, and freq/mode already carry forward unboundedly from their WAV
-    seed the same way). What ends it instead is an explicit event: **the
-    rotator going offline writes one `{"az": null}` line, and that null is a
-    real mark carrying `None`, not a record to skip.** `TelemetrySample`
-    therefore carries `az_offline` alongside `az`, since an *absent* `az` key
-    (a rig event — silence about the rotator) and an explicit `"az": null`
-    (the rotator died) both load as `az=None` while meaning opposite things:
-    silence must not end the carry-forward, a null must. Filtering `az_marks`
-    on `az is not None` alone was a real bug caught in review — it discarded
-    the offline marker and showed the last known bearing for the rest of the
-    video (regression test:
-    `test_explicit_az_null_ends_the_carry_forward`, with
-    `test_a_rig_event_does_not_count_as_an_az_reading` guarding the mirror
+    guessed at from telemetry alone.
+  - **Azimuth is deliberately not a `SegState` field**, though it used to be
+    (as the median of whichever samples fell in a run, carried forward from
+    before the run when it held none of its own). A run is however long
+    freq/mode hold for, which is often minutes, so one number for all of it
+    meant the compass needle stood still through a real slew and jumped at the
+    run boundary — reported from the real August round, where the operator
+    turned 250° → 31° over 27 s and saw a single jump. It is its own time
+    series now (`hud_az_marks`, read straight from telemetry and interpolated
+    — see the HUD section), and the median, the per-run carry-forward and
+    `_median` went with it.
+    What survived the move is the *event* semantics, because they are
+    properties of the recording, not of the old consumer: az is a step
+    function that holds until the next event, with no staleness *time* horizon
+    (deliberately: a horizon would be a tunable constant with no data behind
+    it). What ends it is an explicit event — **the rotator going offline
+    writes one `{"az": null}` line, and that null is a real mark carrying
+    `None`, not a record to skip.** `TelemetrySample` therefore carries
+    `az_offline` alongside `az`, since an *absent* `az` key (a rig event —
+    silence about the rotator) and an explicit `"az": null` (the rotator died)
+    both load as `az=None` while meaning opposite things. Filtering on
+    `az is not None` alone was a real bug caught in review — it discarded the
+    offline marker and showed the last known bearing for the rest of the video
+    (regression tests: `test_an_explicit_offline_mark_ends_the_needle` and
+    `test_az_marks_read_every_rotator_event_and_nothing_else` for the mirror
     case). This also matters for the *old* dense recordings, which wrote
     `"az": null` on every line while rotctld was offline — the whole July
     round is 9313 such lines, so treating them as marks is what keeps it
-    correctly showing `ROT ---` throughout. It also fixed a pre-existing bug on the *dense* old
-    recordings, where a run shorter than the 1 Hz sample spacing could
-    contain no sample by luck: replaying the real August round found 184
-    such runs that used to show `ROT ---`, with run boundaries and freq/mode
-    byte-identical before and after.
+    correctly showing no bearing throughout.
   - **`load_telemetry` accepts both stamp precisions** — whole seconds (the
     original 1 Hz sampler) and microseconds (the current change-driven
     writer). Note the failure mode if it didn't: `load_telemetry` swallows a
@@ -1506,6 +1502,16 @@ is that the more important a value, the bigger it is drawn.
   The **hollow needle is drawn on top of the solid one**: the two coinciding is the normal
   case, and underneath, its outline is simply invisible, so "on target" would look
   identical to "no target known".
+- **The needle sweeps between samples rather than stepping to them** (`hud_az_marks`,
+  `HudTimeline._az_at`, `_az_between`). The rotator poller reports whole degrees about
+  once a second, so a real slew arrives as a run of closely-spaced samples that
+  interpolate into one continuous turn; a gap longer than `HUD_AZ_INTERP_S` is not slow
+  movement but a stationary rotator (change-only telemetry writes nothing then), so the
+  bearing holds there instead. Interpolation takes the short way round the circle —
+  250° → 31° is 141° clockwise through north, not 219° the other way. This replaced
+  reading `SegState.az` (see the rig/rotator overlay notes above for why that was wrong)
+  and was checked against the round it was reported from: 250, 266, 292, 315, 340, 358,
+  10, 21, 31 across the 27 s the operator was actually turning.
 - **The S-meter comes from the `.scope` recording's own centre bins**, not from CI-V's
   `15 02` (which is polled-only — see icom_net's meter notes). The IC-9700's scope runs in
   Centre mode and 475 bins across a 1 MHz span makes one bin ~2.1 kHz, close enough to an
@@ -1569,12 +1575,21 @@ is that the more important a value, the bigger it is drawn.
   gap and across many short non-CW segments went with them: those bugs cannot recur, and
   one test asserting a later burst never shares the display with an earlier one covers
   the property that remains.
-  Two details that matter. It scrolls a whole **dot column** at a time, not a fraction of
-  one — a physical matrix panel has no sub-dot positions — so `HudTimeline.at` returns
-  (column offset, character) pairs rather than a string. And a character's position is
-  `max(keying time, previous + one cell)`, so an operator keying faster than the display
-  drains queues characters one cell apart instead of piling them on top of each other,
-  exactly as a physical ticker does.
+  It scrolls a whole **dot column** at a time, not a fraction of one — a physical matrix
+  panel has no sub-dot positions — so `HudTimeline.at` returns (column offset, character)
+  pairs rather than a string.
+- **Spacing is the display's, timing is the scroll's.** Characters sit exactly one cell
+  apart within an over; what varies with the keying is how fast the strip moves
+  (`HudTimeline._ticker_scroll`): each character is a pin that was at the right-hand cell
+  when it was keyed, and between two pins the strip covers exactly one cell in whatever
+  real time separates them. Placing characters *at* their keying time (the first design)
+  spaced them raggedly by fractions of a cell — reported from a real video — because
+  Morse characters differ wildly in air time: a `T` is one dit and a `0` is nineteen.
+  Word gaps need no room of their own here, since the decoder emits them as real `' '`
+  characters. Past `HUD_TICKER_BURST_S` (3 s — longer than any single character, so it
+  means the operator stopped rather than paused) real elapsed time takes over again,
+  which is what still drains the display between overs and keeps staleness structurally
+  impossible.
 - **The CW ticker is a 5x7 dot-matrix display** (`_FONT_5X7`, `_draw_matrix_text`), every
   dot drawn with the same lit/`HUD_SEG_DIM` treatment as the segment panels, so an idle
   ticker still reads as a display. The glyph table is written out in the source rather than
@@ -1585,10 +1600,11 @@ is that the more important a value, the bigger it is drawn.
   at, so 36 glyphs would be 36 chances to be wrong with no way to fix one without
   regenerating everything. Glyphs were verified by rendering the whole set as a sheet and
   reading it, since a mistyped row is a plausible-looking letter rather than an error.
-- **The ticker is `HUD_TICKER_CHARS` (13) cells wide**, settled by the artwork's own CW
-  slot — 13 is what leaves a legible dot pitch in a width-limited panel, and the display
-  scrolls, so a shorter window loses nothing: the value of a ticker is "something is
-  arriving right now", not a readable backlog. It is also the one readout drawn to its
+- **The ticker is `HUD_TICKER_CHARS` (15) cells wide**, measured off the artwork's own CW
+  slot rather than eyeballed: at 1080p the slot is 446x35, so seven dot rows cap the pitch
+  at 5px and 15 cells (89 columns) fill 445 of those 446 pixels; 16 would need 95 columns
+  and drop the pitch to 4. The display scrolls, so a short window loses nothing: the value
+  of a ticker is "something is arriving right now", not a readable backlog. It is also the one readout drawn to its
   slot's full extent rather than inset, because the slot is only seven dots tall to begin
   with and a margin there costs a whole dot of pitch (4px instead of 5 at 1080p).
   `ticker_chunks` / `ticker_stream` / `ticker_texts` are the single source of the
@@ -1645,7 +1661,7 @@ is that the more important a value, the bigger it is drawn.
   string-matching Dialogue lines were rewritten against those functions rather than
   deleted — they cover real bugs (a ticker leaking across a genuine gap, and across many
   short non-CW segments) that no longer have anything to do with subtitles. They keep 999
-  characters of transcript rather than the HUD's 13, deliberately: with a 13-cell window
+  characters of transcript rather than the HUD's 15, deliberately: with a 15-cell window
   stale characters would scroll off by themselves and the assertions would pass for the
   wrong reason.
 

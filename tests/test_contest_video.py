@@ -2938,21 +2938,48 @@ class TestTickerScrolling:
         shown = _ticker_at(484.5, segs)
         assert "X" in shown and "A" not in shown and "B" not in shown
 
-    def test_fast_keying_queues_instead_of_overlapping(self):
-        # Fed faster than it scrolls, a physical ticker queues characters one
-        # cell apart rather than piling them on top of each other.
+    def _tl(self, keyed, dur=30.0):
         seg = Segment(
-            "a", datetime(2026, 7, 4, 13, 0, 0), 5.0, 0.0,
-            events=[CharEvent(i * 0.01, c) for i, c in enumerate("ABCDE")],
+            "a", datetime(2026, 7, 4, 13, 0, 0), dur, 0.0,
+            events=[CharEvent(t, c) for t, c in keyed],
         )  # fmt: skip
-        tl = cv.HudTimeline(
+        return cv.HudTimeline(
             segs=[seg], stream=cv.ticker_stream(cv.ticker_chunks([seg], None, None))
         )
-        offsets = [o for o, _ in tl.at(0.2).ticker]
-        assert len(set(offsets)) == len(offsets)
-        assert all(
-            b - a >= cv.HUD_TICKER_CELL_COLS for a, b in zip(offsets, offsets[1:])
-        )
+
+    def _spacing(self, tl, t):
+        offsets = [o for o, _ in tl.at(t).ticker]
+        return [b - a for a, b in zip(offsets, offsets[1:])]
+
+    def test_characters_sit_one_cell_apart_however_irregularly_keyed(self):
+        # Morse characters take wildly different air time -- a T is one dit, a
+        # 0 is nineteen -- so placing them by keying time spaced them raggedly,
+        # by fractions of a cell, for no reason a viewer could see. The
+        # spacing is the display's own; the timing drives the scroll instead.
+        tl = self._tl([(0.1, "T"), (0.35, "0"), (2.0, "A")])
+        assert self._spacing(tl, 2.5) == [cv.HUD_TICKER_CELL_COLS] * 2
+
+    def test_a_character_reaches_the_right_hand_cell_as_it_is_keyed(self):
+        # Which is what makes the scroll rate follow the keying: each
+        # character is a pin at the right edge, and the strip covers exactly
+        # one cell between consecutive pins however long that takes.
+        tl = self._tl([(0.1, "T"), (0.35, "0"), (2.0, "A")])
+        width = cv.HUD_TICKER_CHARS * cv.HUD_TICKER_CELL_COLS
+        for t, ch in ((0.1, "T"), (0.35, "0"), (2.0, "A")):
+            newest = tl.at(t).ticker[-1]
+            assert newest == (width - cv.HUD_TICKER_CELL_COLS, ch)
+
+    def test_a_real_pause_still_takes_its_real_width(self):
+        # Constant spacing only holds within an over. Past
+        # HUD_TICKER_BURST_S the operator has stopped sending, and that gap
+        # keeps its real duration -- which is what drains the display between
+        # overs and makes staleness structurally impossible.
+        tl = self._tl([(0.1, "A"), (0.1 + cv.HUD_TICKER_BURST_S + 1.0, "B")])
+        assert self._spacing(tl, 4.2)[0] > cv.HUD_TICKER_CELL_COLS
+
+    def test_fast_keying_never_overlaps(self):
+        tl = self._tl([(i * 0.01, c) for i, c in enumerate("ABCDE")])
+        assert self._spacing(tl, 0.2) == [cv.HUD_TICKER_CELL_COLS] * 4
 
 
 class TestTickerModeGating:

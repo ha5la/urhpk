@@ -2190,6 +2190,9 @@ HUD_TICKER_CHARS = 15  # cells in the ticker display, set by the artwork's own
 # 16 would drop the pitch to 4. The display scrolls, so a short window loses
 # nothing -- its value is "something is arriving right now", not a backlog.
 HUD_TICKER_SPAN_S = 8.0  # seconds for a character to cross it
+HUD_TICKER_BURST_S = 3.0  # gap beyond which the operator has stopped sending,
+# not merely paused between characters: the longest single character is ~2 s at
+# the slowest speed worked here, and word gaps arrive as their own ' '.
 HUD_RATE_WINDOW_S = 600.0  # trailing window behind the QSOs/hour readout
 HUD_SCORE_ANIM_S = 0.6  # score count-up + panel flash after each QSO
 HUD_S_CENTRE_BINS = 3  # scope bins taken as "the tuned frequency"
@@ -2490,15 +2493,31 @@ class HudTimeline:
         self._s_t = [m[0] for m in self.s_marks]
         self._meter_t = [m[0] for m in self.meter_marks]
         self._ticker_t = [e[0] for e in self.stream]
-        # Where each character sits on the strip, in dot columns. Its keying
-        # time places it; the max() keeps a fast operator's characters from
-        # overlapping by queueing them one cell apart instead, which is what a
-        # physical ticker does when fed faster than it scrolls.
+        # Where each character sits on the strip, in dot columns. Within an
+        # over that is exactly one cell after the one before it, whatever the
+        # gap in real time: a T is one dit of air time and a 0 nineteen, so
+        # placing characters by keying time (which is what this used to do)
+        # spaced them raggedly, by fractions of a cell, for no reason a viewer
+        # could see. The keying time drives the *scroll* instead -- see
+        # _ticker_scroll -- which is where that timing genuinely belongs.
+        #
+        # Real elapsed time takes over once the gap exceeds HUD_TICKER_BURST_S,
+        # by which point the operator has stopped sending rather than paused
+        # between characters (word gaps are their own decoded ' ' characters,
+        # so they need no room of their own here). That is what still drains
+        # the display between overs, and it is why staleness stays
+        # structurally impossible.
         self._ticker_cols: list[float] = []
-        prev = -1e9
+        prev_col, prev_t = 0.0, None
         for t, _ in self.stream:
-            prev = max(t * HUD_TICKER_COLS_PER_S, prev + HUD_TICKER_CELL_COLS)
-            self._ticker_cols.append(prev)
+            if prev_t is None:
+                prev_col = t * HUD_TICKER_COLS_PER_S
+            elif t - prev_t <= HUD_TICKER_BURST_S:
+                prev_col += HUD_TICKER_CELL_COLS
+            else:
+                prev_col += (t - prev_t) * HUD_TICKER_COLS_PER_S
+            prev_t = t
+            self._ticker_cols.append(prev_col)
 
     def _az_at(self, t: float) -> float | None:
         """The rotator's bearing at t, swept between samples rather than
@@ -2521,6 +2540,32 @@ class HudTimeline:
         if nxt_az is None or span > HUD_AZ_INTERP_S or span <= 0:
             return az
         return _az_between(az, nxt_az, (t - self._az_t[i - 1]) / span)
+
+    def _ticker_scroll(self, t: float) -> float:
+        """How far the ticker's strip has scrolled, in dot columns.
+
+        Each character is pinned: when it was keyed, it had just arrived at the
+        right-hand edge. Between two pins the strip moves at whatever rate
+        carries it exactly one cell in the real time between them, so the
+        display hurries along under fast keying and idles under slow -- which
+        is how a fixed inter-character spacing can still show real timing.
+        Outside the pins (before the first character, after the last, and
+        across the real-time gaps between overs) it runs at the base rate, so
+        the display always drains within HUD_TICKER_SPAN_S of the last
+        character."""
+        i = bisect.bisect_right(self._ticker_t, t)
+        if not self._ticker_t:
+            return t * HUD_TICKER_COLS_PER_S
+        if i == 0 or i == len(self._ticker_t):
+            j = max(0, i - 1)
+            edge = self._ticker_cols[j] + HUD_TICKER_CELL_COLS
+            return edge + (t - self._ticker_t[j]) * HUD_TICKER_COLS_PER_S
+        span = self._ticker_t[i] - self._ticker_t[i - 1]
+        if span <= 0:
+            return self._ticker_cols[i] + HUD_TICKER_CELL_COLS
+        frac = (t - self._ticker_t[i - 1]) / span
+        moved = self._ticker_cols[i] - self._ticker_cols[i - 1]
+        return self._ticker_cols[i - 1] + HUD_TICKER_CELL_COLS + frac * moved
 
     def at(self, t: float) -> HudState:
         st = HudState(t=t, utc=None)
@@ -2571,7 +2616,7 @@ class HudTimeline:
         # HUD_TICKER_SPAN_S later, with no clearing rule needed -- staleness
         # is structurally impossible rather than guarded against.
         width = HUD_TICKER_CHARS * HUD_TICKER_CELL_COLS
-        scroll = t * HUD_TICKER_COLS_PER_S
+        scroll = self._ticker_scroll(t)
         p = bisect.bisect_right(self._ticker_t, t)
         for i in range(p - 1, -1, -1):
             offset = round(self._ticker_cols[i] - scroll) + width
