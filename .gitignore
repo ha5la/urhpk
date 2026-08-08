@@ -21,3 +21,6 @@ __pycache__/
 coverage.xml
 htmlcov/
 .coverage
+
+# HUD theme is a committed asset, not scratch output
+!hud-theme/theme.json
