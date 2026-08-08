@@ -2412,6 +2412,20 @@ class TestHudCompass:
         assert tl.at(10.4).rot_az == 0.0  # 358 + 2 == 360 == due north
         assert tl.at(10.6).rot_az == 1.0
 
+    def test_crossing_north_stays_smooth_frame_to_frame(self):
+        # The wrap is where a bearing interpolation goes wrong if it goes
+        # wrong at all -- 359 -> 0 is the one step where the numbers fall
+        # rather than rise, and a naive lerp sweeps 355 degrees backwards
+        # across the whole card in a single frame. Sampled at the real frame
+        # rate over a slew that crosses north, every step must be small and
+        # forward. Checked against the August round's own 352 -> 12 slew,
+        # where the drawn needle (measured back off its pixels) tracks the
+        # interpolated bearing to within a few tenths of a degree.
+        tl = self._tl([(10.0, 352.0), (11.0, 358.0), (12.0, 4.0)])
+        angles = [tl.at(10.0 + i / cv.RENDER_FPS).rot_az for i in range(61)]
+        steps = [(b - a + 180) % 360 - 180 for a, b in zip(angles, angles[1:])]
+        assert all(0 <= s <= 1 for s in steps), max(steps)
+
     def test_a_stationary_rotator_holds_rather_than_drifting(self):
         # Change-only telemetry writes nothing while the rotator sits still,
         # so a long gap between samples is not a slow movement -- interpolating
