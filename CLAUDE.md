@@ -127,3 +127,20 @@ scoping it to one file has already missed a CI failure.
 ## Repository
 
 `.gitignore` excludes scratch files (`*.json`, `*.url`, `*.txt`).
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as markdown files under `.scratch/<feature-slug>/` in this repo. See
+`docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical roles, unrenamed: `needs-triage`, `needs-info`,
+`ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context — `CONTEXT.md` and `docs/adr/` at the repo root, created lazily.
+See `docs/agents/domain.md`.
