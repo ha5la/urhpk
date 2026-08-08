@@ -2846,7 +2846,10 @@ class TestMeterCalibration:
 
 
 def _render_cmd(**kw):
-    """render()'s ffmpeg command, without running it."""
+    """render()'s ffmpeg command, without running it. Every render has a HUD,
+    so the bar and its face recess are defaulted rather than repeated."""
+    kw.setdefault("hud", "h.mp4")
+    kw.setdefault("hud_face", (940, 20, 240, 130))
     captured = {}
 
     def fake_run(cmd, **_):
@@ -2895,19 +2898,14 @@ class TestHudRender:
         graph = cmd[cmd.index("-filter_complex") + 1]
         assert "[hudbar]overlay=x=0:y=main_h-h" in graph
 
-    def test_the_webcam_moves_into_the_face_recess_when_a_hud_is_present(self):
-        # Bottom-right is under the bar now, so the corner PiP would be hidden.
+    def test_the_webcam_goes_into_the_artworks_face_recess(self):
+        # Its own crop and position come from the theme, so this pins that the
+        # rect render() is handed is the rect it actually uses.
         face = cv.hud_art(cv.load_hud_theme(), 1920, cv.hud_height(1080)).slots["face"]
         cmd = _render_cmd(hud="h.mp4", webcam="w.mp4", hud_face=face)
         graph = cmd[cmd.index("-filter_complex") + 1]
         assert f"scale={face[2]}:{face[3]}" in graph
         assert f"overlay=x={face[0]}:" in graph
-
-    def test_without_a_hud_the_webcam_keeps_its_corner(self):
-        graph = _render_cmd(webcam="w.mp4")[
-            _render_cmd(webcam="w.mp4").index("-filter_complex") + 1
-        ]
-        assert "overlay=x=main_w-w-" in graph
 
 
 def _cw_segs():
@@ -3164,10 +3162,6 @@ class TestHudLayering:
         H = 1080
         expect = H - cv.hud_height(H) - 2 * round(H * cv.CAST_PIP_MARGIN_FRAC)
         assert f"scale=-2:{expect}" in self._graph(cast="c.mp4", hud="h.mp4")
-
-    def test_without_a_hud_the_cast_keeps_its_width_based_size(self):
-        graph = self._graph(cast="c.mp4")
-        assert f"scale={round(1920 * cv.CAST_PIP_WIDTH_FRAC)}:-2" in graph
 
 
 class TestHudTheme:

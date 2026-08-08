@@ -1992,23 +1992,10 @@ def _ffprobe_duration(path: str) -> float:
     return float(out.strip())
 
 
-PIP_WIDTH_FRAC = 0.20  # webcam PiP width as a fraction of the frame width
-PIP_MARGIN_FRAC = 0.02  # gap from the frame edge, same fraction basis
-CAST_PIP_WIDTH_FRAC = 0.73  # terminal-session PiP is the dominant visual
-# element, not a small inset -- the logger UI
-# itself is most of what there is to watch.
-# Sized against render_cast_video's *real*
-# output aspect ratio (~1.69 for a 191x52
-# DejaVu Sans Mono 13pt terminal, i.e. taller
-# than the first mockup assumed -- that mockup
-# was rendered before the descender-clipping
-# line-height fix, at the shorter pre-fix
-# aspect of ~1.91) so the box leaves genuine
-# room below for the CW ticker rather than
-# visually covering it.
-CAST_PIP_X_FRAC = 0.0104
-CAST_PIP_Y_FRAC = 0.11  # clears the RX/TX badge above it (no-HUD layout only)
-CAST_PIP_MARGIN_FRAC = 0.015  # top/bottom gap around the cast when a HUD is present
+CAST_PIP_X_FRAC = 0.0104  # the terminal PiP is the dominant visual element, not
+CAST_PIP_MARGIN_FRAC = 0.015  # a small inset -- the logger UI is most of what
+# there is to watch. Its size is height-constrained (see render): with the HUD
+# along the bottom, the room above it is the limit.
 CAST_PIP_ALPHA = 0.85  # slightly transparent so the waterfall shows
 # faintly through the terminal PiP; 1.0 = opaque
 STREAM_TRIM_MARGIN_S = 5.0  # slack when trimming a side stream to the cut,
@@ -3316,8 +3303,8 @@ def render(
     scope: str | None = None,
     scope_start: float = 0.0,
     scope_end: float = 0.0,
-    hud: str | None = None,
-    hud_face: tuple[int, int, int, int] | None = None,
+    hud: str = "",
+    hud_face: tuple[int, int, int, int] = (0, 0, 0, 0),
 ) -> None:
     cmd = ["ffmpeg", "-y", "-hide_banner", "-stats", "-loglevel", "warning", "-i", wav]
 
@@ -3388,18 +3375,13 @@ def render(
         # cast_start in the output timeline. tpad clones its last frame so a
         # cast shorter than the session can't truncate the shared filtergraph,
         # same reasoning as the webcam branch below.
+        # Height-constrained, not width-constrained: with a bar along the bottom
+        # the terminal's limit is the room above it, and a width fraction
+        # picked before the HUD existed simply overran it -- the logger's own
+        # toolbar was drawn across the SCORE and QSOS panels.
         cast_x = round(W * CAST_PIP_X_FRAC)
-        if hud:
-            # Height-constrained, not width-constrained: with a bar along the
-            # bottom the terminal's limit is the room above it, and a width
-            # fraction chosen before the HUD existed simply overran it -- the
-            # logger's own toolbar was drawn across the SCORE and QSOS panels.
-            cast_y = round(H * CAST_PIP_MARGIN_FRAC)
-            cast_h = H - hud_h - 2 * cast_y
-            cast_scale = f"-2:{cast_h}"
-        else:
-            cast_y = round(H * CAST_PIP_Y_FRAC)
-            cast_scale = f"{round(W * CAST_PIP_WIDTH_FRAC)}:-2"
+        cast_y = round(H * CAST_PIP_MARGIN_FRAC)
+        cast_scale = f"-2:{H - hud_h - 2 * cast_y}"
         cast_idx = add_input(_stream_input_args(cast_start, cast))
         # format=yuva420p + colorchannelmixer=aa lowers the PiP's alpha so the
         # overlay blends it over the waterfall (a little transparency, not a
@@ -3471,21 +3453,13 @@ def render(
         # webcam_rate defaults to 0.0 (identity scaling) when no rate was
         # determined (e.g. --webcam-offset was used instead, or
         # cross-correlation found no confident match).
-        # With a HUD the webcam belongs in the artwork's own face recess,
-        # exactly where DOOM's portrait sits -- not in the bottom-right corner,
-        # which the bar now covers. Cropped to the recess's own aspect (a
-        # centre crop of a webcam pointed at the operator *is* a face
-        # portrait) rather than letterboxed, which would leave bars inside the
-        # frame.
-        if hud_face:
-            fx, fy, fw, fh = hud_face
-            pip_x, pip_y = fx, H - hud_h + fy
-            fit = f"crop=min(iw\\,ih*{fw}/{fh}):min(ih\\,iw*{fh}/{fw}),scale={fw}:{fh}"
-        else:
-            pip_w = round(W * PIP_WIDTH_FRAC)
-            margin = round(W * PIP_MARGIN_FRAC)
-            pip_x, pip_y = f"main_w-w-{margin}", f"main_h-h-{margin}"
-            fit = f"scale={pip_w}:-2"
+        # The webcam belongs in the artwork's own face recess, exactly where
+        # DOOM's portrait sits. Cropped to the recess's aspect (a centre crop
+        # of a webcam pointed at the operator *is* a face portrait) rather
+        # than letterboxed, which would leave bars inside the frame.
+        fx, fy, fw, fh = hud_face
+        pip_x, pip_y = fx, H - hud_h + fy
+        fit = f"crop=min(iw\\,ih*{fw}/{fh}):min(ih\\,iw*{fh}/{fw}),scale={fw}:{fh}"
         webcam_idx = add_input(["-itsoffset", f"{webcam_start:.3f}", "-i", webcam])
         fchain += (
             f";[{webcam_idx}:v]setpts=PTS/{1 - webcam_rate:.8f},fps={RENDER_FPS},"
@@ -3616,11 +3590,6 @@ def main() -> None:
         type=float,
         default=0.0,
         help="video-time position (seconds) sampled by --hud-preview",
-    )
-    ap.add_argument(
-        "--no-hud",
-        action="store_true",
-        help="skip the HUD bar entirely (the pre-HUD look: overlays only)",
     )
     ap.add_argument(
         "--hud-theme",
@@ -3954,13 +3923,11 @@ def main() -> None:
         print("rendering terminal-session PiP ...")
         render_cast_video(args.cast, cast_video, max_duration=cast_span)
 
-    hud_video = None
-    hud_art_ = None
-    if not args.no_hud:
-        hud_video = stem + ".hud.mp4"
-        hud_art_ = hud_art(load_hud_theme(args.hud_theme), W, hud_height(H))
-        print("rendering HUD ...")
-        timeline = build_hud_timeline(
+    hud_video = stem + ".hud.mp4"
+    hud_art_ = hud_art(load_hud_theme(args.hud_theme), W, hud_height(H))
+    print("rendering HUD ...")
+    drawn = render_hud_video(
+        build_hud_timeline(
             segs,
             qsos,
             windows,
@@ -3970,12 +3937,13 @@ def main() -> None:
             scope_records=scope_records,
             long_cw_spans=long_cw_spans,
             telemetry=telemetry,
-        )
-        drawn = render_hud_video(timeline, hud_video, hud_art_, total)
-        frames = max(1, int(total * RENDER_FPS))
-        print(
-            f"  {drawn} frames drawn for {frames} ({frames / max(1, drawn):.0f}x reuse)"
-        )
+        ),
+        hud_video,
+        hud_art_,
+        total,
+    )
+    frames = max(1, int(total * RENDER_FPS))
+    print(f"  {drawn} frames drawn for {frames} ({frames / max(1, drawn):.0f}x reuse)")
 
     scope_video = None
     if scope_records and scope_start is not None:
@@ -4007,7 +3975,7 @@ def main() -> None:
         scope_start=scope_start or 0.0,
         scope_end=scope_end or 0.0,
         hud=hud_video,
-        hud_face=hud_art_.slots["face"] if hud_art_ else None,
+        hud_face=hud_art_.slots["face"],
     )
 
     if not args.keep_intermediates:
@@ -4016,8 +3984,7 @@ def main() -> None:
             os.remove(cast_video)
         if scope_video:
             os.remove(scope_video)
-        if hud_video:
-            os.remove(hud_video)
+        os.remove(hud_video)
     print(f"wrote {args.out}")
 
 

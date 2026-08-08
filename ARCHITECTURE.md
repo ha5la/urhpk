@@ -476,8 +476,7 @@ The HUD's rule is that the more important a value, the bigger it is drawn.
   is absurd: `--hud-demo OUT.png` needs no recording at all (this is what to check
   artwork against), `--hud-preview OUT.png --hud-preview-t SECONDS` builds real
   state from a real recording. `recdir`/`edi` are optional in argparse purely so
-  `--hud-demo` can run standalone. `--no-hud` keeps the pre-HUD look, corner webcam
-  PiP included.
+  `--hud-demo` can run standalone.
 - **The artwork's generation prompt is `hud-artwork-prompt.md`** — what the software
   draws (and therefore what the artwork must leave empty), why the sprite sheet sits
   on flat magenta, and why a coordinate table baked into the image was rejected (an
