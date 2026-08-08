@@ -1365,7 +1365,6 @@ class SegState:
     ptt: bool | None = None
     freq_hz: int | None = None
     mode: str | None = None
-    az: float | None = None
 
 
 def _parse_telemetry_time(s: str) -> datetime:
@@ -1535,21 +1534,13 @@ def webcam_start_from_log(log_path: str) -> datetime | None:
     return datetime.fromtimestamp(epoch, tz=timezone.utc).replace(tzinfo=None)
 
 
-def _median(values: list[float]) -> float | None:
-    if not values:
-        return None
-    s = sorted(values)
-    mid = len(s) // 2
-    return s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) / 2
-
-
 FREQ_MATCH_TOLERANCE_HZ = 500  # see build_state_events' docstring
 
 
 def build_state_events(
     segs: list[Segment], telemetry: list[TelemetrySample], offset_h: int
 ) -> list[tuple[float, float, SegState]]:
-    """RX/TX + QRG/mode/bearing badge events.
+    """RX/TX + QRG/mode events, one per stretch those stay constant.
 
     ptt/freq_hz/mode at a segment's own start come straight from
     `Segment.ptt`/`.freq_hz`/`.mode` (read_wav_metadata) -- the WAV file's
@@ -1575,17 +1566,11 @@ def build_state_events(
     starting value, not from telemetry, so a segment with no telemetry
     change at all just keeps the WAV-sourced value for its whole span.
 
-    az has no equivalent in the WAV metadata at all and is purely
-    telemetry's own -- the median of whichever samples make up each
-    freq/mode run, falling back to the last azimuth seen before that run
-    began when the run holds no az sample of its own. That fallback is what
-    makes change-only telemetry work: the rotator poller writes a line only
-    when the azimuth actually moves, so a rotator parked on one bearing for
-    a whole QSO leaves no sample inside that run at all, and a median of
-    nothing would render as "ROT ---" despite the rotator being online and
-    pointing somewhere known. az is a step function -- it holds until the
-    next event. On an older, densely-sampled recording every run has samples
-    of its own, so the fallback never fires and the median stands.
+    Azimuth is deliberately *not* here, though it used to be: a run is
+    whatever stretch freq/mode hold for, which can be minutes, and one
+    number for all of it (the median of its samples) left the compass
+    needle standing still through a real slew and then jumping at the run
+    boundary. It is its own time series now -- see hud_az_marks.
 
     Comparing the two frequency sources exactly (Hz for Hz) is unsound:
     the WAV metadata and rigctld-via-telemetry don't agree to the exact
@@ -1599,19 +1584,6 @@ def build_state_events(
     FREQ_MATCH_TOLERANCE_HZ=500 safely separates "same frequency, two
     slightly disagreeing sources" from "the operator actually retuned"."""
     events: list[tuple[float, float, SegState]] = []
-    # Every event that *reports* on the rotator, offline ones included -- an
-    # explicit null is a real mark carrying None, so the carry-forward stops
-    # there instead of showing the last bearing for the rest of the video.
-    az_marks = sorted(
-        ((t.t, t.az) for t in telemetry if t.az is not None or t.az_offline),
-        key=lambda p: p[0],
-    )
-    az_times = [t for t, _ in az_marks]
-
-    def az_before(t: datetime) -> float | None:
-        i = bisect.bisect_right(az_times, t)
-        return az_marks[i - 1][1] if i else None
-
     for s in segs:
         if s.ptt is None and s.freq_hz is None and s.mode is None:
             continue
@@ -1646,7 +1618,6 @@ def build_state_events(
 
         seg_end = s.audio_t + _eff(s)
         for i, (key, samples) in enumerate(runs):
-            run_utc_start = utc_start if i == 0 else samples[0].t
             start = (
                 s.audio_t
                 if i == 0
@@ -1660,12 +1631,7 @@ def build_state_events(
             if end <= start:
                 continue
             freq_hz, mode = key
-            az = _median([t.az for t in samples if t.az is not None])
-            if az is None:
-                az = az_before(run_utc_start)
-            events.append(
-                (start, end, SegState(ptt=s.ptt, freq_hz=freq_hz, mode=mode, az=az))
-            )
+            events.append((start, end, SegState(ptt=s.ptt, freq_hz=freq_hz, mode=mode)))
     return events
 
 
@@ -2448,6 +2414,40 @@ def hud_meter_marks(
     return marks
 
 
+HUD_AZ_INTERP_S = 2.0  # rotator samples closer than this are one movement
+
+
+def hud_az_marks(
+    telemetry: list[TelemetrySample], segs: list[Segment], offset_h: int
+) -> list[tuple[float, float | None]]:
+    """(video_t, azimuth) for every telemetry line that reports on the rotator,
+    offline ones included -- an explicit `"az": null` is a real mark carrying
+    None, so the needle stops there instead of pointing at the last known
+    bearing for the rest of the video. A line that only reports the rig says
+    nothing about the rotator and is not a mark at all, even though both load
+    as `az=None`.
+
+    The compass reads this directly rather than taking `SegState.az` (a median
+    over a freq/mode run) the way the old text badge did: a run can be minutes
+    long, so a rotator swung from 250 to 31 degrees over half a minute inside
+    one of them collapsed to a single median and the needle stood still, then
+    jumped at the run boundary -- seen in the real August round."""
+    marks = [
+        (audio_time_for(t.t + timedelta(hours=offset_h), segs), t.az)
+        for t in telemetry
+        if t.az is not None or t.az_offline
+    ]
+    marks.sort(key=lambda m: m[0])
+    return marks
+
+
+def _az_between(a: float, b: float, frac: float) -> float:
+    """Bearing `frac` of the way from a to b, the short way round -- 250 to 31
+    degrees is a 141 degree swing clockwise through north, not 219 the other
+    way."""
+    return (a + ((b - a + 180) % 360 - 180) * frac) % 360
+
+
 def wall_time_at(
     t: float, segs: list[Segment], starts: list[float] | None = None
 ) -> datetime | None:
@@ -2476,6 +2476,7 @@ class HudTimeline:
     qso_marks: list[tuple[float, int, int, int]] = field(default_factory=list)
     target_spans: list[tuple[float, float, float]] = field(default_factory=list)
     state_events: list[tuple[float, float, SegState]] = field(default_factory=list)
+    az_marks: list[tuple[float, float | None]] = field(default_factory=list)
     s_marks: list[tuple[float, float]] = field(default_factory=list)
     meter_marks: list[tuple[float, TelemetrySample]] = field(default_factory=list)
     stream: list[tuple[float, str, bool]] = field(default_factory=list)
@@ -2485,6 +2486,7 @@ class HudTimeline:
         self._qso_t = [m[0] for m in self.qso_marks]
         self._target_t = [s[0] for s in self.target_spans]
         self._state_t = [e[0] for e in self.state_events]
+        self._az_t = [m[0] for m in self.az_marks]
         self._s_t = [m[0] for m in self.s_marks]
         self._meter_t = [m[0] for m in self.meter_marks]
         self._ticker_t = [e[0] for e in self.stream]
@@ -2497,6 +2499,28 @@ class HudTimeline:
         for t, _ in self.stream:
             prev = max(t * HUD_TICKER_COLS_PER_S, prev + HUD_TICKER_CELL_COLS)
             self._ticker_cols.append(prev)
+
+    def _az_at(self, t: float) -> float | None:
+        """The rotator's bearing at t, swept between samples rather than
+        stepped to them.
+
+        The poller reports whole degrees about once a second, so a real slew
+        arrives as a run of closely-spaced samples: interpolating across gaps
+        no longer than HUD_AZ_INTERP_S turns those steps into one continuous
+        turn, while a longer gap is not a slow movement at all -- it is the
+        rotator sitting still (change-only telemetry writes nothing then), so
+        the bearing holds and the next sample is where it moved to."""
+        i = bisect.bisect_right(self._az_t, t)
+        if not i:
+            return None
+        az = self.az_marks[i - 1][1]
+        if az is None or i >= len(self.az_marks):
+            return az
+        nxt_t, nxt_az = self.az_marks[i]
+        span = nxt_t - self._az_t[i - 1]
+        if nxt_az is None or span > HUD_AZ_INTERP_S or span <= 0:
+            return az
+        return _az_between(az, nxt_az, (t - self._az_t[i - 1]) / span)
 
     def at(self, t: float) -> HudState:
         st = HudState(t=t, utc=None)
@@ -2525,10 +2549,12 @@ class HudTimeline:
         k = bisect.bisect_right(self._state_t, t)
         if k and t < self.state_events[k - 1][1]:
             seg_state = self.state_events[k - 1][2]
-            st.ptt, st.mode, st.rot_az = seg_state.ptt, seg_state.mode, seg_state.az
+            st.ptt, st.mode = seg_state.ptt, seg_state.mode
             st.freq_hz = seg_state.freq_hz
             if st.freq_hz:
                 st.band = band_from_hz(st.freq_hz)
+
+        st.rot_az = self._az_at(t)
 
         m = bisect.bisect_right(self._s_t, t)
         if m and t - self.s_marks[m - 1][0] <= HUD_S_HOLD_S:
@@ -2574,6 +2600,7 @@ def build_hud_timeline(
         qso_marks=hud_qso_marks(qsos, windows),
         target_spans=hud_target_spans(qsos, windows, my_loc),
         state_events=state_events or [],
+        az_marks=hud_az_marks(telemetry or [], segs, offset_h),
         s_marks=hud_s_marks(scope_records or [], segs, offset_h),
         meter_marks=hud_meter_marks(telemetry or [], segs, offset_h),
         stream=ticker_stream(ticker_chunks(segs, state_events, long_cw_spans)),

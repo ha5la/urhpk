@@ -1625,86 +1625,6 @@ class TestTelemetryAlignment:
         assert (start, end) == (0.0, 10.0)
         assert st.freq_hz == 144174000
         assert st.mode == "CW"
-        assert st.az == 136.0  # median of 135/136/137
-
-    def test_az_carries_forward_into_a_run_with_no_az_sample(self):
-        # Telemetry is change-only now: the rotator poller writes a line
-        # when the azimuth actually moves, not once a second regardless.
-        # A rotator parked on one bearing for a whole QSO therefore leaves
-        # zero az samples inside that segment's span -- taking the median
-        # of nothing yields None, which renders as "ROT ---" even though
-        # the rotator was online and pointing somewhere known the whole
-        # time. az is a step function: it holds until the next event.
-        segs = [
-            self._wav_seg(
-                datetime(2026, 7, 4, 13, 0, 0), 10.0, 0.0, 144174000, "CW", True
-            )
-        ]
-        telemetry = [
-            TelemetrySample(datetime(2026, 7, 4, 10, 55, 0), None, None, 135.0),
-            TelemetrySample(datetime(2026, 7, 4, 11, 0, 0), 144174000, "CW", None),
-        ]
-        [(_, _, st)] = build_state_events(segs, telemetry, offset_h=2)
-        assert st.az == 135.0
-
-    def test_az_carried_forward_per_run_not_just_per_segment(self):
-        # The carry-forward is evaluated at each run's own start, against
-        # every az event so far -- not once per segment. A QSY mid-segment
-        # splits it into two runs; the second run inherits the azimuth set
-        # during the *first* run, not the one from before the segment began.
-        segs = [
-            self._wav_seg(
-                datetime(2026, 7, 4, 13, 0, 0), 10.0, 0.0, 144300000, "SSB", False
-            )
-        ]
-        telemetry = [
-            TelemetrySample(datetime(2026, 7, 4, 10, 59, 0), None, None, 90.0),
-            TelemetrySample(datetime(2026, 7, 4, 11, 0, 2), None, None, 200.0),
-            TelemetrySample(datetime(2026, 7, 4, 11, 0, 6), 432200000, "CW", None),
-        ]
-        events = build_state_events(segs, telemetry, offset_h=2)
-        assert [e[2].az for e in events] == [200.0, 200.0]
-
-    def test_explicit_az_null_ends_the_carry_forward(self):
-        # The rotator going offline is itself an event: the logger writes one
-        # explicit {"az": null} line at the transition and then stays quiet.
-        # That null has to *terminate* the carry-forward -- treating it as
-        # "this record just doesn't mention az" would sail straight past the
-        # rotator dying and keep showing its last bearing for the rest of the
-        # video, which is exactly the stale reading the badge must not show.
-        # ROT --- is the honest answer, matching the logger's own toolbar.
-        segs = [
-            self._wav_seg(
-                datetime(2026, 7, 4, 13, 0, 0), 10.0, 0.0, 144300000, "SSB", False
-            )
-        ]
-        telemetry = [
-            TelemetrySample(datetime(2026, 7, 4, 10, 59, 0), None, None, 135.0),
-            TelemetrySample(
-                datetime(2026, 7, 4, 10, 59, 30), None, None, None, az_offline=True
-            ),
-            TelemetrySample(datetime(2026, 7, 4, 11, 0, 5), 432200000, "CW", None),
-        ]
-        assert [e[2].az for e in build_state_events(segs, telemetry, offset_h=2)] == [
-            None,
-            None,
-        ]
-
-    def test_a_rig_event_does_not_count_as_an_az_reading(self):
-        # The mirror image: a rig event carries no "az" key at all, which is
-        # silence about the rotator, not a report that it went offline. It
-        # must not terminate the carry-forward the way an explicit null does.
-        segs = [
-            self._wav_seg(
-                datetime(2026, 7, 4, 13, 0, 0), 10.0, 0.0, 144300000, "SSB", False
-            )
-        ]
-        telemetry = [
-            TelemetrySample(datetime(2026, 7, 4, 10, 59, 0), None, None, 135.0),
-            TelemetrySample(datetime(2026, 7, 4, 10, 59, 30), 144300000, "SSB", None),
-        ]
-        [(_, _, st)] = build_state_events(segs, telemetry, offset_h=2)
-        assert st.az == 135.0
 
     def test_load_telemetry_distinguishes_absent_az_from_null_az(self, tmp_path):
         # Both land as az=None, but they mean opposite things: an absent key
@@ -2472,7 +2392,70 @@ class TestHudTimeline:
         assert tl.at(30.0).utc == datetime(2026, 8, 3, 18, 0, 30)
 
 
+class TestHudCompass:
+    def _tl(self, marks):
+        return cv.HudTimeline(segs=[_hud_seg()], az_marks=marks)
+
+    def test_the_needle_sweeps_between_samples_instead_of_stepping(self):
+        # The real bug, from the August round: the operator turned 250 -> 31
+        # degrees over half a minute and the needle stood still, then jumped
+        # at the end, because the bearing came from a per-run median and the
+        # whole slew sat inside one run.
+        tl = self._tl([(10.0, 250.0), (11.0, 256.0)])
+        assert tl.at(10.0).rot_az == 250.0
+        assert tl.at(10.5).rot_az == 253.0
+        assert tl.at(11.0).rot_az == 256.0
+
+    def test_the_sweep_takes_the_short_way_round_north(self):
+        # 358 -> 3 is five degrees clockwise, not 355 the other way.
+        tl = self._tl([(10.0, 358.0), (11.0, 3.0)])
+        assert tl.at(10.4).rot_az == 0.0  # 358 + 2 == 360 == due north
+        assert tl.at(10.6).rot_az == 1.0
+
+    def test_a_stationary_rotator_holds_rather_than_drifting(self):
+        # Change-only telemetry writes nothing while the rotator sits still,
+        # so a long gap between samples is not a slow movement -- interpolating
+        # across it would creep the needle for minutes through a period when
+        # the rotator did not move at all, then it would move instantly.
+        tl = self._tl([(10.0, 90.0), (10.0 + cv.HUD_AZ_INTERP_S + 1, 270.0)])
+        assert tl.at(10.5).rot_az == 90.0
+        assert tl.at(11.9).rot_az == 90.0
+
+    def test_the_last_bearing_holds_to_the_end_of_the_video(self):
+        tl = self._tl([(10.0, 90.0)])
+        assert tl.at(9.9).rot_az is None  # nothing known yet
+        assert tl.at(500.0).rot_az == 90.0
+
+    def test_an_explicit_offline_mark_ends_the_needle(self):
+        # The rotator going offline is itself an event: the logger writes one
+        # {"az": null} line at the transition and then stays quiet. Treating
+        # that as "this record just doesn't mention az" would sail past the
+        # rotator dying and point the needle at its last bearing for the rest
+        # of the video.
+        tl = self._tl([(10.0, 90.0), (20.0, None)])
+        assert tl.at(15.0).rot_az == 90.0
+        assert tl.at(25.0).rot_az is None
+
+
 class TestHudSources:
+    def test_az_marks_read_every_rotator_event_and_nothing_else(self):
+        # The mirror image of the offline mark above: a rig event carries no
+        # "az" key at all, which also loads as az=None but means only that the
+        # line is silent about the rotator. Filtering on `az is not None`
+        # alone would confuse the two in one direction or the other.
+        segs = [_hud_seg()]  # 20:00 local == 18:00 UTC at offset 2
+        telemetry = [
+            TelemetrySample(datetime(2026, 8, 3, 18, 0, 5), None, None, 135.0),
+            TelemetrySample(datetime(2026, 8, 3, 18, 0, 7), 144174000, "CW", None),
+            TelemetrySample(
+                datetime(2026, 8, 3, 18, 0, 9), None, None, None, az_offline=True
+            ),
+        ]
+        assert cv.hud_az_marks(telemetry, segs, offset_h=2) == [
+            (5.0, 135.0),
+            (9.0, None),
+        ]
+
     def test_s_marks_read_the_scope_sweeps_own_centre_bins(self):
         segs = [_hud_seg()]  # 20:00 local == 18:00 UTC at offset 2
         ts = datetime(2026, 8, 3, 18, 0, 30, tzinfo=timezone.utc).timestamp()
@@ -2980,11 +2963,11 @@ class TestTickerModeGating:
         # The decoder runs blind on every segment and a strong tone in voice
         # audio can occasionally slip past gate_events; telemetry's own mode
         # is ground truth where we have it.
-        state = [(0.0, 5.0, SegState(False, 144300000, "SSB", None))]
+        state = [(0.0, 5.0, SegState(False, 144300000, "SSB"))]
         assert _ticker_at(1.0, self._segs(), state) == ""
 
     def test_shown_when_telemetry_says_cw(self):
-        state = [(0.0, 5.0, SegState(False, 144174000, "CW", None))]
+        state = [(0.0, 5.0, SegState(False, 144174000, "CW"))]
         assert _ticker_at(1.5, self._segs(), state) == "HI"
 
     def test_shown_when_mode_is_unknown(self):
