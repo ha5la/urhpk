@@ -63,17 +63,22 @@ example 1920 x 260 pixels. This is much wider and flatter than a typical
 control panel, so if in doubt make the bar thinner rather than taller. It
 contains these panels in one horizontal row, left to right:
 
+SIZING THE EMPTY RECESSES: each value recess below is given the widest reading
+it will ever have to display, written out. Size the recess so that reading
+would fit comfortably, then LEAVE IT EMPTY — those sample numbers are size
+references, not content, and must not appear anywhere in the image. A leading
+"1" means a half-width digit position: that cell can only ever show a 1, so it
+takes about half the width of a full digit.
+
 1. Wide panel, empty dark recess, small label "SCORE" centred at its bottom.
-   The recess must be wide enough to hold four and a half seven-segment digits
-   (a half digit, then four full ones), and these are the largest numerals on
-   the whole bar.
-2. Narrower panel, empty dark recess, label "QSOS" at its bottom. Its recess
-   holds two and a half digits, at the same size as the SCORE digits, so it is
-   a little over half as wide as panel 1's.
-3. Panel whose empty dark recess holds seven and a half digits plus a decimal
-   point, in numerals somewhat smaller than SCORE's, with the small label
-   "MHz" under it; below that, two rows of small rectangular selector chips
-   reading
+   Size the recess for "18888". These are the largest numerals on the whole
+   bar.
+2. Narrower panel, empty dark recess, label "QSOS" at its bottom. Size it for
+   "188" at the same digit size as SCORE, making it a little over half as
+   wide as panel 1.
+3. Panel whose empty dark recess is sized for "1888.888", in digits somewhat
+   smaller than SCORE's, with the small label "MHz" under it; below that, two
+   rows of small rectangular selector chips reading
    [2M][70CM][23CM] and [SSB][CW][FM]. Draw ALL SIX chips brightly lit in
    amber — none dark.
 4. Narrow panel: an empty circular recess in the upper half, and below it a
@@ -84,18 +89,22 @@ contains these panels in one horizontal row, left to right:
 6. Panel with a circular compass rose showing only the letters N, E, S and W
    around its edge and NO needle or pointer of any kind. Below the circle,
    empty space, then the small label "ROT".
-7. Narrow panel with two empty value slots stacked vertically, each holding
-   three digits and a decimal point, each with a small label to its right —
-   "V" for the upper, "A" for the lower — and the label "PWR" at the bottom.
+7. Narrow panel with two empty value slots stacked vertically, each sized for
+   "88.8", each with a small label to its right — "V" for the upper, "A" for
+   the lower — and the label "PWR" at the bottom.
 8. Panel, only about half the height of the bar, sitting in the upper half,
-   containing three rows. Each row has a small grey caption on the left and
-   empty dark space on the right, wide enough for eight digits. The captions
+   containing three rows. Each row has a small grey caption on the left and an
+   empty dark value area on the right; size those for "88:88:88". The captions
    are "UTC", "RATE /H" and "ODX KM".
 9. Directly below panel 8, filling the bar's lower half and the same combined
    width as panels 7 and 8: a wide empty dark letterbox slot with the small
    label "CW" beneath it. This slot is a dot-matrix display whose dots are
    drawn by software, so leave its interior completely flat and empty — no dot
    grid, no pixel matrix, no characters, no texture of any kind inside it.
+   Its interior must be wide enough for 20 characters side by side and, more
+   importantly, TALL enough for a 7-dot-high character to read clearly — the
+   height is what limits legibility here, and a shallow slot makes the text
+   unreadable no matter how wide it is.
 
 CRITICAL: no readout anywhere in the HUD bar may show a value. Every value
 area — score, QSO count, frequency, the two PWR slots, the compass reading,
@@ -159,11 +168,16 @@ accepting a generation:
   way of what the software draws there.
 - **Any of the six band/mode chips drawn dark.** They are dimmed at render
   time, which only works if all six start lit.
-- **A recess too narrow for its digit count.** The readouts are fixed-width
-  (a score gaining a digit must not resize the panel), so a recess sized for
-  three digits forces every digit smaller for the whole video. The half digit
-  is real: its cell can only ever show a 1, and is drawn half a cell narrower
-  than the others.
+- **A recess too small for its widest reading.** The readouts are fixed-width
+  (a score gaining a digit must not resize the panel), so a recess sized by eye
+  for three digits forces every digit smaller for the whole video. The prompt
+  gives each one its widest value verbatim — `18888`, `188`, `1888.888`,
+  `88.8`, `88:88:88` — which come from `HUD_SCORE_FIELD` and friends; keep the
+  two in step if those ever change. The half digit is real: a leading `1` cell
+  can only show a 1 and is drawn half a cell narrower than the others.
+- **A CW slot too shallow.** Its height, not its width, is what sets the dot
+  pitch and therefore legibility — confirmed by rendering at 720p, where the
+  matrix came out at a 3-pixel pitch because the slot is short.
 
 The v1 prompt asked for dummy values everywhere and got them rendered cleanly,
 so the generator has no trouble filling recesses — which is exactly why the
