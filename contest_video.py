@@ -1643,18 +1643,15 @@ def match_qso_times(
     available, None otherwise (older recordings, or a --duration cut that
     excludes the matching event).
 
-    Matched by call, in chronological order *within that call* -- not by
-    exact time. Time-based matching was tried first (q.dt is exactly the
-    minute-truncation of the same real moment an automatically-generated
-    'qso' event's microsecond timestamp records, since puskas_logger derives
-    both from one captured `now`) but rejected: it silently breaks for a
-    hand-crafted log seeded from the EDI and then hand-tuned against the
-    audio (see --seed-input-log) the moment an edited timestamp crosses a
-    minute boundary from what the EDI happened to record -- exactly the kind
-    of edit this feature exists to make possible. Call+order has no such
-    trap: a --duration cut only ever removes a *suffix* in time, so the
-    surviving occurrences of any call are still a prefix of the full
-    sequence, and "next unused" stays correct."""
+    Matched by call, in chronological order *within that call* -- deliberately
+    not by time, even though the two normally agree exactly (puskas_logger
+    derives `q.dt` and the event's own microsecond stamp from one captured
+    `now`, so the former is the latter's minute-truncation). Time matching
+    breaks the moment they don't: a hand-written or edited log whose timestamp
+    crosses a minute boundary silently matches nothing. Call+order has no such
+    trap -- a --duration cut only ever removes a *suffix* in time, so the
+    surviving occurrences of any call are still a prefix of the full sequence,
+    and "next unused" stays correct."""
     by_call: dict[str, list[datetime]] = {}
     for e in input_log:
         if e.kind == "qso":
@@ -3541,7 +3538,6 @@ def main() -> None:
     ap.add_argument("-o", "--out", default="contest_video.mp4")
     ap.add_argument("--pitch", type=float, default=600.0, help="CW tone Hz")
     ap.add_argument("--res", choices=RESOLUTIONS, default="1080p")
-    ap.add_argument("--contest", default="URH OB 2026 - CW")
     ap.add_argument(
         "--skip-gaps",
         action="store_true",
@@ -3601,15 +3597,6 @@ def main() -> None:
         help="puskas_logger *-input.jsonl for exact QSO-panel/chapter/caption "
         "timing (its 'qso' events) instead of the EDI's minute-precision "
         "clock -- optional, older recordings won't have one",
-    )
-    ap.add_argument(
-        "--seed-input-log",
-        help="write a hand-editable 'qso' event skeleton to this path, one line "
-        "per QSO in the EDI(s) with a placeholder timestamp, then exit "
-        "without rendering -- for a recording made before --input-log "
-        "existed: edit each 't' against the audio, then pass the result "
-        "back in as --input-log for exact chapter/caption timing with no "
-        "cluster-snapping heuristics involved",
     )
     ap.add_argument(
         "--hud-demo",
@@ -3675,31 +3662,6 @@ def main() -> None:
 
     if not args.recdir or not args.edi:
         ap.error("recdir and at least one EDI file are required")
-
-    if args.seed_input_log:
-        _, _, qsos_all = merge_edi(args.edi)
-        with open(args.seed_input_log, "w") as fh:
-            for q in qsos_all:
-                fh.write(
-                    json.dumps(
-                        {
-                            "t": q.dt.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z",
-                            "event": "qso",
-                            "call": q.call,
-                            "nr_s": q.nr_s,
-                            "loc": q.loc,
-                            "dup": q.dup,
-                        }
-                    )
-                    + "\n"
-                )
-        print(f"wrote {len(qsos_all)} seed 'qso' events to {args.seed_input_log}")
-        print(
-            "each 't' is just the EDI's own minute, seconds zeroed -- edit it to the "
-            "QSO's real time from the audio, then pass "
-            f"--input-log {args.seed_input_log} when rendering"
-        )
-        return
 
     W, H = RESOLUTIONS[args.res]
     segs = scan_segments(args.recdir)

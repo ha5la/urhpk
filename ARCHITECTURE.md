@@ -327,10 +327,8 @@ first transmission within it, `_snap_to_cluster` takes the *latest* burst at or
 before the anchor. `--input-log` supplies an exact anchor where available
 (`match_qso_times` pairs EDI QSOs to logged `'qso'` events **by call in
 chronological order**, never by minute — a hand-edited seed log is expected to move
-timestamps across minute boundaries). `--seed-input-log` writes that hand-editable
-skeleton from the EDI for a recording made before input logs existed. Each rule here
-fixed a specific reported bug; RECORDING.md has the cases, and the regression tests
-name them.
+timestamps across minute boundaries). Each rule here fixed a specific reported bug;
+RECORDING.md has the cases, and the regression tests name them.
 
 ### ffmpeg composition — where the real bugs live
 

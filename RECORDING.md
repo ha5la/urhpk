@@ -38,7 +38,6 @@ band field, so this only matters for merging QSO lists, not for rendering.
 | `--duration SECONDS` | Chronological preview: trim to the first `SECONDS` of real session time, skip CW-decoding past the cutoff (a 10-minute preview of a 2-hour session decodes ~12× less audio) |
 | `--telemetry FILE` | `*-telemetry.jsonl` — optional; adds the compass needle and the meter panel, mode-gates the CW ticker, recovers CW from long segments, and catches freq/mode changes inside one. The WAV files themselves already give RX/TX and the starting QRG/mode |
 | `--input-log FILE` | `*-input.jsonl` — optional; gives exact (not audio-structure-heuristic) QSO start/end times for chapters/captions where the operator logged the QSO during this recording |
-| `--seed-input-log OUT.jsonl` | Write a hand-editable QSO-timestamp skeleton from the EDI(s) and exit without rendering — for a recording made before `--input-log` existed |
 | `--cast FILE` | asciinema `.cast` recording of the logger/irssi tmux session, shown as a large picture-in-picture |
 | `--webcam FILE` | Webcam/selfie clip, shown as a small picture-in-picture bottom-right |
 | `--webcam-offset SECONDS` | Manual fallback sync correction for `--webcam`, bypassing automatic sync entirely |
@@ -49,7 +48,6 @@ band field, so this only matters for merging QSO lists, not for rendering.
 | `--hud-theme DIR` | HUD theme directory (`artwork.png` + `theme.json`), default the `hud-theme/` beside the script |
 | `--hud-theme-check [OUT.png]` | Draw every rect in the theme back onto its artwork and exit — the way to check a hand-edited theme |
 | `--keep-intermediates` | Keep the intermediate `.wav`/`.cast.mp4`/`.scope.mp4`/`.hud.mp4` files for inspection |
-| `--contest TEXT` | Contest name text (default `"URH OB 2026 - CW"`) |
 
 Render speed, measured with everything on (HUD + cast + webcam) at 720p: a
 20-minute cut of the August round took ~30 minutes, i.e. ~0.67× realtime. The
@@ -270,19 +268,14 @@ calculation implicitly did.
 rather than replacing it entirely. `puskas_logger.py` writes one `'qso'`
 event per logged QSO to `*-input.jsonl`, timestamped at the exact moment
 the operator hit Enter — `match_qso_times` pairs each EDI QSO to its event
-by callsign, in chronological order (not by exact minute — an edited seed
-log, see `--seed-input-log`, can freely move a timestamp across a minute
-boundary). `qso_windows()` then uses that exact time instead of the EDI's
+by callsign, in chronological order rather than by minute, so a log whose
+timestamps disagree with the EDI's still matches. `qso_windows()` then uses that exact time instead of the EDI's
 minute-truncated one as the anchor into `_snap_to_cluster`, and uses it
 directly (not the next QSO's start) as the window's *end* wherever known —
 the moment logging finished, not whenever the next over happens to begin.
 Falls back to the plain audio-structure heuristics above wherever a QSO has
-no matching event (no input log, an older recording, or a `--duration` cut
-that excludes it). `--seed-input-log OUT.jsonl` bootstraps one for a
-recording made before this file was ever produced: it writes one event per
-EDI QSO with a placeholder minute-truncated timestamp, exits without
-rendering, and you hand-edit each `t` against the audio before passing the
-result back in as `--input-log`.
+no matching event (a `--duration` cut that excludes it, or a recording made
+before the logger wrote these files).
 
 ### The HUD status bar
 

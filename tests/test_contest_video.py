@@ -1848,12 +1848,12 @@ class TestMatchQsoTimes:
         [t] = match_qso_times(qsos, log)
         assert t == datetime(2026, 7, 6, 16, 1, 42, 123456)
 
-    def test_matches_across_a_hand_edited_minute_boundary(self):
-        # A seeded skeleton (--seed-input-log) starts with the EDI's own
-        # minute, but the whole point is the operator then edits 't' to the
-        # real time from the audio -- which can easily land in a different
-        # minute than the EDI recorded (e.g. the over started well before
-        # Enter was pressed). Matching must not depend on the two agreeing.
+    def test_matches_when_the_log_and_the_edi_disagree_on_the_minute(self):
+        # Normally they agree exactly, both deriving from one captured `now`.
+        # Matching must not *depend* on that: a hand-written or edited log can
+        # put the QSO in a different minute than the EDI recorded, and getting
+        # nothing back would be a silent, total failure rather than a visible
+        # one.
         qsos = [self._qso(datetime(2026, 7, 6, 16, 5), "HA3KHB")]
         log = [
             _qso_ev(datetime(2026, 7, 6, 16, 1, 42), "HA3KHB")
