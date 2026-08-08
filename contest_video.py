@@ -2044,7 +2044,8 @@ CAST_PIP_WIDTH_FRAC = 0.73  # terminal-session PiP is the dominant visual
 # room below for the CW ticker rather than
 # visually covering it.
 CAST_PIP_X_FRAC = 0.0104
-CAST_PIP_Y_FRAC = 0.11  # clears the RX/TX badge above it
+CAST_PIP_Y_FRAC = 0.11  # clears the RX/TX badge above it (no-HUD layout only)
+CAST_PIP_MARGIN_FRAC = 0.015  # top/bottom gap around the cast when a HUD is present
 CAST_PIP_ALPHA = 0.85  # slightly transparent so the waterfall shows
 # faintly through the terminal PiP; 1.0 = opaque
 STREAM_TRIM_MARGIN_S = 5.0  # slack when trimming a side stream to the cut,
@@ -3411,19 +3412,6 @@ def render(
         )
         bg = "bg2"
     cur = bg
-    if hud:
-        # No -itsoffset: unlike every other side stream here, the HUD clip is
-        # generated *from* the output timeline rather than captured against an
-        # independent clock, so its t=0 already is the output's t=0. Composited
-        # before the webcam branch so the webcam lands on top of it, inside the
-        # face recess.
-        hud_idx = add_input(["-i", hud])
-        fchain += (
-            f";[{hud_idx}:v]scale={W}:{hud_h},fps={RENDER_FPS},"
-            f"tpad=stop_mode=clone:stop_duration=99999[hudbar]"
-            f";[{cur}][hudbar]overlay=x=0:y=main_h-h[vhud]"
-        )
-        cur = "vhud"
     if cast:
         # cast is our own render_cast_video output -- a synthetic, constant-
         # framerate file we just encoded, so no drift *of its own* -- but
@@ -3436,21 +3424,43 @@ def render(
         # cast_start in the output timeline. tpad clones its last frame so a
         # cast shorter than the session can't truncate the shared filtergraph,
         # same reasoning as the webcam branch below.
-        cast_w = round(W * CAST_PIP_WIDTH_FRAC)
         cast_x = round(W * CAST_PIP_X_FRAC)
-        cast_y = round(H * CAST_PIP_Y_FRAC)
+        if hud:
+            # Height-constrained, not width-constrained: with a bar along the
+            # bottom the terminal's limit is the room above it, and a width
+            # fraction chosen before the HUD existed simply overran it -- the
+            # logger's own toolbar was drawn across the SCORE and QSOS panels.
+            cast_y = round(H * CAST_PIP_MARGIN_FRAC)
+            cast_h = H - hud_h - 2 * cast_y
+            cast_scale = f"-2:{cast_h}"
+        else:
+            cast_y = round(H * CAST_PIP_Y_FRAC)
+            cast_scale = f"{round(W * CAST_PIP_WIDTH_FRAC)}:-2"
         cast_idx = add_input(_stream_input_args(cast_start, cast))
         # format=yuva420p + colorchannelmixer=aa lowers the PiP's alpha so the
         # overlay blends it over the waterfall (a little transparency, not a
         # wash) -- overlay honours the top input's own alpha channel.
         fchain += (
-            f";[{cast_idx}:v]setpts=PTS/{1 - cast_rate:.8f},scale={cast_w}:-2,fps={RENDER_FPS},"
+            f";[{cast_idx}:v]setpts=PTS/{1 - cast_rate:.8f},scale={cast_scale},fps={RENDER_FPS},"
             f"format=yuva420p,colorchannelmixer=aa={CAST_PIP_ALPHA},"
             f"tpad=stop_mode=clone:stop_duration=99999[castpip]"
             f";[{cur}][castpip]overlay=x={cast_x}:y={cast_y}:"
             f"enable='gte(t,{max(cast_start, 0.0):.3f})'[v1]"
         )
         cur = "v1"
+    if hud:
+        # No -itsoffset: unlike every other side stream here, the HUD clip is
+        # generated *from* the output timeline rather than captured against an
+        # independent clock, so its t=0 already is the output's t=0. Composited after
+        # the cast (the bar is a status bar -- nothing overlaps it) and before
+        # the webcam, which lands on top of it inside the face recess.
+        hud_idx = add_input(["-i", hud])
+        fchain += (
+            f";[{hud_idx}:v]scale={W}:{hud_h},fps={RENDER_FPS},"
+            f"tpad=stop_mode=clone:stop_duration=99999[hudbar]"
+            f";[{cur}][hudbar]overlay=x=0:y=main_h-h[vhud]"
+        )
+        cur = "vhud"
     if webcam:
         # itsoffset delays the whole cam stream's presentation timestamps so
         # its own frame 0 lands at webcam_start in the output timeline --

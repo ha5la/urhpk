@@ -2965,3 +2965,30 @@ class TestRenderInputIndices:
             "hudbar": "h.mp4",
         }
         assert self._sources(hud="h.mp4") == {"hudbar": "h.mp4"}
+
+
+class TestHudLayering:
+    def _graph(self, **kw):
+        cmd = _render_cmd(**kw)
+        return cmd[cmd.index("-filter_complex") + 1]
+
+    def test_the_bar_is_composited_after_the_cast_so_nothing_covers_it(self):
+        # Regression from a rendered frame: the terminal PiP was drawn over
+        # the bar, putting the logger's own toolbar across SCORE and QSOS.
+        graph = self._graph(cast="c.mp4", hud="h.mp4")
+        assert graph.index("[castpip]overlay") < graph.index("[hudbar]overlay")
+
+    def test_the_webcam_is_composited_after_the_bar_to_sit_in_the_recess(self):
+        graph = self._graph(webcam="w.mp4", hud="h.mp4")
+        assert graph.index("[hudbar]overlay") < graph.index("[pip]overlay")
+
+    def test_the_cast_is_sized_to_the_room_above_the_bar(self):
+        # Height-constrained with a HUD: a width fraction picked before the
+        # bar existed overran the space and had to be clipped by the bar.
+        H = 1080
+        expect = H - cv.hud_height(H) - 2 * round(H * cv.CAST_PIP_MARGIN_FRAC)
+        assert f"scale=-2:{expect}" in self._graph(cast="c.mp4", hud="h.mp4")
+
+    def test_without_a_hud_the_cast_keeps_its_width_based_size(self):
+        graph = self._graph(cast="c.mp4")
+        assert f"scale={round(1920 * cv.CAST_PIP_WIDTH_FRAC)}:-2" in graph
