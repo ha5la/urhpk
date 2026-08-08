@@ -2185,9 +2185,9 @@ def render_scope_video(
 # not drawing code.
 # ---------------------------------------------------------------------------
 
-HUD_TICKER_CHARS = 13  # cells in the ticker display, from the artwork's own
-# CW slot: 13 is what leaves a legible dot pitch in a width-limited panel
-# (6px at 1080p, 4px at 720p). The display scrolls, so a shorter window loses
+HUD_TICKER_CHARS = 15  # cells in the ticker display, set by the artwork's own
+# CW slot: 15 cells at a 5px dot pitch fill 445 of its 446 pixels at 1080p, and
+# 16 would drop the pitch to 4. The display scrolls, so a short window loses
 # nothing -- its value is "something is arriving right now", not a backlog.
 HUD_TICKER_SPAN_S = 8.0  # seconds for a character to cross it
 HUD_RATE_WINDOW_S = 600.0  # trailing window behind the QSOs/hour readout
