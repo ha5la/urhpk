@@ -77,17 +77,6 @@ uv run puskas_harvester.py
   observed in any Puskás round appears first)
 - All API responses cached in `.puskas_cache/`; delete it to force a fresh fetch
 
-## puskas_visualizer.py – Map and polar diagram
-
-```
-uv run puskas_visualizer.py [CALLSIGN LOCATOR]
-```
-- Loads `~/.puskas/puskas-seen-stations.json` (built by harvester)
-- Loads own log EDI files from `my-logs/` for callsign, locator, and worked-station marking
-- Generates `puskas_map.html` (interactive Folium map) and `puskas_polar.png` (polar scatter)
-- Missed stations (in seen_stations but not worked) shown in red on map
-- Dependencies: `folium`, `matplotlib`, `numpy`
-
 ## hamlib_supervisor.py – rotctld USB-replug supervisor
 
 Problem this solves: if the USB connection drops (cable wiggle, radio power-cycle)

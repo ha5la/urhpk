@@ -2198,9 +2198,9 @@ HUD_S_HOLD_S = 1.0  # no sweep for this long = no signal reading at all
 
 def maidenhead_to_latlon(loc: str) -> tuple[float, float] | None:
     """Centre of a 4- or 6-character Maidenhead locator, or None if it isn't
-    one. Same formula as puskas_logger/puskas_visualizer (which each carry
-    their own copy of these two tiny helpers already); None rather than an
-    exception because EDI fields come from an external file."""
+    one. Same formula as puskas_logger, which carries its own copy of these two
+    tiny helpers; None rather than an exception because EDI fields come from an
+    external file."""
     loc = (loc or "").strip().upper()
     if not re.fullmatch(r"[A-R]{2}[0-9]{2}([A-X]{2})?", loc):
         return None

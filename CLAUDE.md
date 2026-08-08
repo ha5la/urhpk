@@ -126,5 +126,4 @@ scoping it to one file has already missed a CI failure.
 
 ## Repository
 
-`.gitignore` excludes generated files (`puskas_map.html`, `puskas_polar.png`) and
-scratch files (`*.json`, `*.url`, `*.txt`).
+`.gitignore` excludes scratch files (`*.json`, `*.url`, `*.txt`).

@@ -94,9 +94,6 @@ part that actually counts for the contest; everything else here is storytelling.
 after reviewing the render. It lands *private*; flipping it to public is a human
 decision made in YouTube Studio, and nothing in this repo auto-publishes.
 
-Afterwards, `uv run puskas_visualizer.py` draws a map and polar diagram from the
-harvested database plus your own logs — who you worked, and who you could have.
-
 ### Uploading a rendered video to YouTube
 `contest_video.py` only renders the mp4 + `.chapters.txt` + `.srt` — it does not upload.
 Uploading is a deliberate separate manual step, run after reviewing the render, using
