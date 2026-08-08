@@ -4,8 +4,8 @@ Things that cost real time to discover and would cost real time to rediscover:
 hardware measurements, protocol details reverse-engineered from packet captures,
 and approaches that were tried and rejected *with evidence*.
 
-CLAUDE.md keeps the **rules** ("do not remove this error handling"); this file
-keeps the **evidence** behind them. Narrative that only explains how the code
+ARCHITECTURE.md keeps the **rules** ("do not remove this error handling"); this
+file keeps the **evidence** behind them. Narrative that only explains how the code
 used to look is not here at all — git history keeps that.
 
 ## Hamlib

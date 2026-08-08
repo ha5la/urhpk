@@ -2,8 +2,8 @@
 
 Started as notes from the URH Országos Bajnokság 2026-07-04 session (first
 test run) — kept up to date since as `contest_video.py` gained features.
-CLAUDE.md keeps the rules and invariants for editing the code, and FINDINGS.md
-the measurements and dead ends behind them; this file is the practical "how to
+ARCHITECTURE.md holds the pipeline's own constraints and FINDINGS.md the
+measurements and dead ends behind them; this file is the practical "how to
 actually use it" companion, with real numbers from real sessions.
 
 ## Recording setup
@@ -12,7 +12,7 @@ actually use it" companion, with real numbers from real sessions.
   splits audio on every RX/TX switch and names segments `YYYYMMDD_HHMMSS*.wav` in local
   time, no separate recording software involved. Each file also carries the radio's own
   frequency/mode/RX-TX metadata in its WAV `title` tag (see `contest_video.py`'s
-  `parse_wav_title`/`read_wav_metadata` in CLAUDE.md).
+  `parse_wav_title`/`read_wav_metadata` in ARCHITECTURE.md).
 - **Format**: 16 kHz mono PCM WAV, one file per transmission (RX or TX)
 - **Segments are contiguous**: sub-second gaps between files; total duration of
   all WAVs equals the session length
@@ -296,7 +296,7 @@ bigger it is drawn. SCORE and QSOS take the health and ammo slots, the webcam
 takes DOOMguy's face slot, and the rest of the panels carry QRG, band/mode,
 an RX/TX lamp, an S-meter, a compass, UTC/rate/ODX and the CW ticker. It is a
 piece of artwork (`hud-theme/`) with values drawn into its recesses — see
-CLAUDE.md's HUD section for what that means when editing, and
+ARCHITECTURE.md's HUD section for what that means when editing, and
 `hud-artwork-prompt.md` for the artwork itself.
 
 Where each value comes from:
@@ -360,10 +360,9 @@ device (below). Rendering the cast is its own pipeline stage
 Pillow to draw them), producing a standalone intermediate mp4 that the main
 pass then composites — the same pattern the scope and HUD stages use.
 
-See CLAUDE.md's "Recording the logger session" section for how to actually
-make the recording (`run-recorded-contest-session.sh` does this
-automatically now), and its `--cast` section for the tmux/pyte
-implementation details (dirty-row-only redraw for render speed, the
+See PIPELINE.md for how the recording is actually made
+(`run-recorded-contest-session.sh` does it automatically) and
+ARCHITECTURE.md's `--cast` notes for the tmux/pyte implementation details (dirty-row-only redraw for render speed, the
 DECSLRM/SU/SD terminal-emulation fixes needed because the recording is made
 *inside* tmux, and the PiP's aspect-ratio/layout constants).
 
