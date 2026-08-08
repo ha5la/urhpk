@@ -89,6 +89,7 @@ takes about half the width of a full digit.
 6. Panel with a circular compass rose showing only the letters N, E, S and W
    around its edge and NO needle or pointer of any kind. Below the circle,
    empty space, then the small label "ROT".
+
 The last three panels form a two-row block occupying the bar's full height,
 so read all three before drawing any of them: panels 7 and 8 sit side by side
 across the UPPER HALF only, and panel 9 spans the full width of both of them
