@@ -1430,7 +1430,7 @@ uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
     shells out to real ffmpeg and takes real wall-clock time, unlike the rest of the
     suite.
 
-### HUD (DOOM-style status bar) — data layer + preview
+### HUD (DOOM-style status bar)
 
 A full-width opaque status bar modelled on DOOM's, replacing readouts that are
 technically visible in the terminal PiP but too small to read: the logger's own screen
@@ -1443,25 +1443,49 @@ is that the more important a value, the bigger it is drawn.
   portrait sits), Vd/Id take armor, and band/mode chips take the weapon-slot strip.
   Everything else — QRG, RX/TX lamp, S-meter bar, compass, UTC/rate/best-DX, CW ticker —
   fills the remaining panels.
-- **The drawing layer is itself split into chrome and values.** `draw_hud_chrome` paints
-  panel frames, recesses, the compass rose and *every* static label, and runs **only when
-  no `--hud-background` is given** — with artwork none of it runs, because the artwork
-  already carries all of it. Anything whose text changes at render time stays in
-  `draw_hud_frame`. Getting this wrong is not cosmetic: before the split, the stats
-  captions were drawn in the value path, so with real artwork every one of them would have
-  been printed twice, slightly offset. A consequence worth knowing: a baked label can't
-  change, which is why the meter's caption is a fixed "S" and no longer switches to "PO"
-  on transmit — the RX/TX lamp beside it already says which is being shown.
-- **Band/mode chips are drawn (and baked) lit, and the inactive ones dimmed**
-  (`_dim_region`, `HUD_CHIP_DIM`) rather than existing as a lit/unlit pair of assets that
-  would have to be kept stylistically in sync. `_chip_rects` is shared by the drawing and
-  dimming passes so the two can never disagree about where a chip is.
+- **The bar *is* the artwork, and nothing static is drawn any more.** The finished art
+  (`hud-theme/artwork.png`) carries every panel, recess, static label and the compass
+  rose; `hud-theme/theme.json` says where each value goes, in artwork pixels. So the
+  drawing code paints only what changes — readouts, five sprites, and the dimming of
+  whatever is not currently selected. This replaced a procedural placeholder
+  (`draw_hud_chrome`, `HUD_SLOTS`, `hud_layout`, `_bevel`/`_panel`/`_chips`/`_label`/
+  `_fit_font`/`_hud_font`, `_needle`, `_draw_meter`, `--hud-background`, ~250 lines),
+  deleted outright rather than kept as a no-artwork fallback: the artwork now lives in
+  the repo and is the default, so the placeholder was a second, unused way to draw the
+  same bar, and `--hud-demo` renders the real thing instead. The chrome/values split it
+  existed to enforce is now structural — there is no code path that can print a baked
+  label twice. One consequence to know: a baked label can't change, which is why the
+  meter's caption is a fixed "S" rather than switching to "PO" on transmit (the RX/TX
+  lamp beside it already says which is being shown), and why the compass has no numeric
+  azimuth readout — the artwork has no recess for one, and the needle is the reading.
+- **`hud_art(theme, W, H)` prepares the artwork once per render**, not per frame: it
+  crops the bar out of the sheet, scales it and every rect into the output size, and cuts,
+  keys and pre-scales the sprites. A frame is then a copy of that bar plus the values,
+  which matters at ~24,000 frames for a 2 h session.
+- **`HUD_THEME_DIR` is script-relative** (`os.path.dirname(__file__)`), not CWD-relative:
+  renders are run from a contest directory (`cd 26augusztus && uv run ../contest_video.py`),
+  where a relative `hud-theme` does not exist.
+- **Band/mode chips and the S-meter are baked lit and dimmed back** (`_dim_region`,
+  `HUD_UNLIT_DIM`) rather than existing as a lit/unlit pair of assets that would have to
+  be kept stylistically in sync. The meter is a sprite of a fully lit LED bar pasted over
+  the whole recess and dimmed from the current level rightwards — the cut lands *between*
+  LEDs (`HUD_METER_SEGMENTS`, `HUD_METER_X0`/`X1`, measured off the sprite), since a
+  half-lit segment reads as a rendering fault rather than as a reading.
+- **Sprites are keyed off the sheet's magenta with a hard threshold on `min(R,B) - G`**,
+  which is large only for the background and at most zero for anything the sprites are
+  made of (red, orange, green, white highlights, the grey pivot ball). Not an exact-colour
+  match and not a soft alpha ramp: the sheet is *not* flat `#FF00FF` in practice — only
+  145 pixels of the whole artwork are exactly the key colour, the rest carrying
+  generation/compression noise — so an exact match keys almost nothing and a ramp leaves
+  every edge pixel semi-opaque and magenta-tinted, i.e. a pink halo. Keyed pixels are
+  blacked as well as cleared, so resampling blends edges toward black; the sprites already
+  have black outlines, so the fringe that leaves is the outline itself. A test asserts no
+  magenta survives onto the rendered bar at all.
 - **Split into a data layer and a drawing layer, deliberately.** Everything up to
   `draw_hud_frame` is pure functions over the recording's own sources, so it needs no
   art, no fonts and no ffmpeg and is fully unit-tested; `HudTimeline.at(t)` returns a
-  `HudState` for any video time. Geometry lives in one table (`HUD_SLOTS`, scaled by
-  `hud_layout`), so replacing the placeholder background with finished artwork is an edit
-  to coordinates, not to drawing code.
+  `HudState` for any video time. Geometry is entirely data (`theme.json`), so re-fitting
+  the bar to new artwork is an edit to coordinates, not to drawing code.
 - **`HudTimeline` looks everything up by bisect, never by scanning.** A two-hour render
   queries it ~216,000 times; a linear scan per frame over hundreds of segments or
   thousands of decoded characters would dominate the entire pass.
@@ -1470,6 +1494,18 @@ is that the more important a value, the bigger it is drawn.
   EDI locator). The swing of one onto the other is a QSO's whole story in one glyph.
   Validated on the real August round — at a sampled instant the rotator read 310.0° and
   the target bearing computed to 310.38°, i.e. two independent sources agreeing.
+  Both are artwork sprites, and **they pivot on the ball at their base, not on their
+  bounding box's centre** — the pivot is stored per sprite in `theme.json`, and
+  `_paste_needle` pads the sprite into a square canvas centred on it, which turns "rotate
+  about an arbitrary point" into PIL's own "rotate about the centre". Getting this wrong
+  does not merely look off: about half the needle would sit *behind* the compass centre,
+  so the whole needle would orbit rather than point. That is what the regression test
+  measures (extent ahead of the centre vs. behind it), confirmed red by pivoting on the
+  box centre. `HUD_NEEDLE_FRAC` is a fit, not a measurement — the sprites are not drawn
+  to the rose's own scale, and at 1:1 they overshoot the compass card entirely.
+  The **hollow needle is drawn on top of the solid one**: the two coinciding is the normal
+  case, and underneath, its outline is simply invisible, so "on target" would look
+  identical to "no target known".
 - **The S-meter comes from the `.scope` recording's own centre bins**, not from CI-V's
   `15 02` (which is polled-only — see icom_net's meter notes). The IC-9700's scope runs in
   Centre mode and 475 bins across a 1 MHz span makes one bin ~2.1 kHz, close enough to an
@@ -1481,13 +1517,14 @@ is that the more important a value, the bigger it is drawn.
 - **The PWR panel renders placeholders rather than hiding itself** when Vd/Id are absent,
   which is every recording to date — a panel that appears and disappears between
   recordings would shift the whole layout.
-- **Every readout is fitted to its own panel (`_fit_font` for text, `_seven_seg`'s own
-  shrink loop for segment digits)**, because nothing on this bar has a fixed width: the
-  score gains a digit partway through a contest and a callsign-shaped ticker line is wider
-  than a report. Found by rendering the demo frame and looking at it — a fixed point size
-  spilled five-digit scores clean across the gutter into the QSOS panel. The regression
-  test asserts no lit pixels in that gutter, and was confirmed red by monkeypatching
-  `_fit_font` back to a plain fixed-size lookup.
+- **Every readout is fitted to its own recess** (`_seven_seg`'s own shrink loop), because
+  nothing on this bar has a fixed width: the score gains a digit partway through a
+  contest. Found by rendering the demo frame and looking at it — a fixed point size
+  spilled five-digit scores clean across the gutter into the QSOS panel. With artwork
+  underneath, the regression test can't assert the gutter is *dark* (it is a metal frame);
+  it asserts the gutter comes out of the render byte-identical to the artwork, and a
+  companion test generalises that to the whole bar — every pixel the drawing changes must
+  fall inside some recess, which is what keeps a readout from painting over a baked label.
 - **Numerals are real segment glyphs from DSEG7 (Debian `fonts-dseg`, SIL OFL)** — every
   value on the bar is numeric, so the alphabetic DSEG14 the stats rows briefly used is
   gone: once their captions became chrome (see the chrome/values split above) there was
@@ -1513,14 +1550,15 @@ is that the more important a value, the bigger it is drawn.
   non-magenta is sprite, magenta is not, so bounding boxes come from connected-component
   detection and identity from left-to-right order.
 - **The artwork has no font to match — its "text" is drawn, not typeset** (confirmed with
-  the generator directly). So the typography is ours to choose and the artwork can only
-  ever be *chrome*: request future iterations as texture and bevels with no text at all.
-  `HUD_FONT_PATH`/`HUD_FONT_BOLD` are the HUD's own label face, deliberately separate from
-  the cast renderer's `CAST_FONT_PATH`, so swapping in a chunky pixel font (DOOM's own
-  labels are pixel art, not type) is a one-line change that can't disturb the terminal PiP.
-  Debian's `fonts-dotgothic16` (OFL, TrueType, 16x16-bitmap-derived) is the candidate;
-  the authentic recommendations — DooM Font, Small Fonts, Px437 IBM VGA8 — are dafont or
-  font-pack downloads whose licences would need checking before living in this repo.
+  the generator directly). That stopped mattering once the chosen artwork's labels turned
+  out to be good enough to keep: every label on the bar is now *painted into the image*,
+  so the HUD has no label face at all and `HUD_FONT_PATH`/`HUD_FONT_BOLD`/`_hud_font`/
+  `_fit_font` are gone. The only typography left is DSEG7 (the numerals) and the 5x7
+  matrix table (the ticker), neither of which the artwork could supply. If a future
+  artwork arrives *without* baked labels, they come back — Debian's `fonts-dotgothic16`
+  (OFL, TrueType, 16x16-bitmap-derived) was the candidate; the authentic recommendations —
+  DooM Font, Small Fonts, Px437 IBM VGA8 — are dafont or font-pack downloads whose
+  licences would need checking before living in this repo.
 - **The ticker scrolls on a clock, and that replaced the whole flush mechanism.** A
   character's position comes from *when it was keyed*: it enters at the right edge when
   the scroll reaches its own column and leaves on the left `HUD_TICKER_SPAN_S` (8 s)
@@ -1547,31 +1585,31 @@ is that the more important a value, the bigger it is drawn.
   at, so 36 glyphs would be 36 chances to be wrong with no way to fix one without
   regenerating everything. Glyphs were verified by rendering the whole set as a sheet and
   reading it, since a mistyped row is a plausible-looking letter rather than an error.
-- **The ticker is `HUD_TICKER_CHARS` (20) cells wide**, down from the full-width
-  84-character overlay — the value of a ticker is "something is arriving right now", not
-  a readable backlog. 20 rather than 16 simply because the panel has room; the final
-  artwork's own slot width is what will settle it. `build_ass` and the HUD now share one
-  source for it (`ticker_chunks` / `ticker_stream` / `ticker_texts`, extracted from
-  `build_ass`) rather than each deriving the transcript independently.
-- **PWR and STATS are half-height so the ticker spans underneath them**, which is what the
-  artwork does. The first layout gave the ticker a full-height column of its own, leaving
-  it far too narrow for 16 characters to be legible while PWR and STATS were stretched
-  vertically to fill space they didn't need. Folding the V/A units onto the same line as
-  their values is what freed the height. The unbalanced left/right halves are the one
-  thing the artwork gets wrong on its own terms, and the one place to diverge from it;
-  everything else follows it closely, down to the portrait face recess.
+- **The ticker is `HUD_TICKER_CHARS` (13) cells wide**, settled by the artwork's own CW
+  slot — 13 is what leaves a legible dot pitch in a width-limited panel, and the display
+  scrolls, so a shorter window loses nothing: the value of a ticker is "something is
+  arriving right now", not a readable backlog. It is also the one readout drawn to its
+  slot's full extent rather than inset, because the slot is only seven dots tall to begin
+  with and a margin there costs a whole dot of pitch (4px instead of 5 at 1080p).
+  `ticker_chunks` / `ticker_stream` / `ticker_texts` are the single source of the
+  transcript.
 - **Best DX is labelled ODX**, the contest term, not "BEST".
 - **Two preview modes, both single-frame PNG**, because iterating layout against a full
-  render is absurd: `--hud-demo OUT.png` needs no recording at all and draws the mockup's
-  dummy values (this is what to check artwork against); `--hud-preview OUT.png
-  --hud-preview-t SECONDS` builds real state from an actual recording. `recdir`/`edi` are
+  render is absurd: `--hud-demo OUT.png` needs no recording at all and draws dummy values
+  (this is what to check the artwork against); `--hud-preview OUT.png --hud-preview-t
+  SECONDS` builds real state from an actual recording. `recdir`/`edi` are
   `nargs="?"`/`nargs="*"` purely so `--hud-demo` can run standalone; every other mode
-  still errors without them.
-- **Vertical budget is the real constraint, and the first artwork missed it.** The
-  ChatGPT mockup came out at 4.4:1, i.e. 435px at 1920 wide — 40% of a 1080p frame, which
-  collides with the cast PiP (73% width x 1.69 aspect = 830px tall). The workable budget
-  is ~260px (24%, 7.4:1), at which the cast PiP only has to shrink from 0.73 to ~0.70
-  width. `HUD_W`/`HUD_H` are 1920x260 for that reason.
+  still errors without them. A third, `--hud-theme-check`, draws every rect in
+  `theme.json` back onto the artwork — the way to check a hand-edited theme, since
+  theme.json's coordinates are read by hand off the image.
+- **`HUD_W`/`HUD_H` (1920x340) come from the artwork's own aspect**, 1982x351 = 5.65:1,
+  and the bar is scaled uniformly or not at all: squashing it to another aspect turns the
+  compass into an ellipse, which is the specific reason this artwork was chosen. A test
+  asserts every supported resolution lands within 1% of the artwork's ratio, so new
+  artwork with a different aspect fails loudly rather than being silently stretched.
+  340px is 31% of a 1080p frame; the cast PiP absorbs it by shrinking, since it is
+  height-constrained whenever a HUD is present. (The pre-artwork placeholder was 260px at
+  7.4:1, chosen as a vertical budget before there was any art to measure.)
 - **`render_hud_video` renders the bar to its own clip**, same separate-stage-then-
   composite pattern as `render_cast_video`/`render_scope_video`. It needs no `-itsoffset`
   at all, unlike every other side stream: the clip is generated *from* the output timeline
@@ -1582,10 +1620,12 @@ is that the more important a value, the bigger it is drawn.
   Without that quantisation the scope-derived signal level alone forces a fresh draw ~30
   times a second for sub-pixel differences. On a short synthetic clip this drew 22 frames
   out of 120; over a real session the clock's once-a-second tick is the dominant driver.
-- **The webcam moves into the face recess when a HUD is present**, centre-cropped to the
-  recess's aspect rather than letterboxed (a centre crop of a webcam pointed at the
-  operator *is* a face portrait). Bottom-right is under the bar now, so the old corner PiP
-  would simply be hidden. `--no-hud` keeps the pre-HUD look, corner PiP included.
+- **The webcam moves into the artwork's own face recess when a HUD is present**,
+  centre-cropped to the recess's aspect rather than letterboxed (a centre crop of a webcam
+  pointed at the operator *is* a face portrait). Bottom-right is under the bar now, so the
+  old corner PiP would simply be hidden. `render()` takes the recess as a plain
+  `hud_face` rect rather than looking it up itself, so the geometry has exactly one owner
+  (`hud_art`). `--no-hud` keeps the pre-HUD look, corner PiP included.
 - **`hud_height()` forces an even pixel height**, because libx264 refuses an odd dimension
   and 720p rounds to 173. Found by rendering an actual 720p clip and reading the ffmpeg
   error — every string-level test used the 1080p reference height, which is already even.
@@ -1605,10 +1645,9 @@ is that the more important a value, the bigger it is drawn.
   string-matching Dialogue lines were rewritten against those functions rather than
   deleted — they cover real bugs (a ticker leaking across a genuine gap, and across many
   short non-CW segments) that no longer have anything to do with subtitles. They keep 999
-  characters of transcript rather than the HUD's 16, deliberately: with a 16-cell window
+  characters of transcript rather than the HUD's 13, deliberately: with a 13-cell window
   stale characters would scroll off by themselves and the assertions would pass for the
   wrong reason.
-- **Still to do**: slicing sprites from the artwork once it exists.
 
 ## Uploading a rendered video to YouTube
 `contest_video.py` only renders the mp4 + `.chapters.txt` + `.srt` — it does not upload.

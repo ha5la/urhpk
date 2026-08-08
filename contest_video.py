@@ -2219,7 +2219,10 @@ def render_scope_video(
 # not drawing code.
 # ---------------------------------------------------------------------------
 
-HUD_TICKER_CHARS = 20  # cells in the ticker display
+HUD_TICKER_CHARS = 13  # cells in the ticker display, from the artwork's own
+# CW slot: 13 is what leaves a legible dot pitch in a width-limited panel
+# (6px at 1080p, 4px at 720p). The display scrolls, so a shorter window loses
+# nothing -- its value is "something is arriving right now", not a backlog.
 HUD_TICKER_SPAN_S = 8.0  # seconds for a character to cross it
 HUD_RATE_WINDOW_S = 600.0  # trailing window behind the QSOs/hour readout
 HUD_SCORE_ANIM_S = 0.6  # score count-up + panel flash after each QSO
@@ -2577,26 +2580,110 @@ def build_hud_timeline(
     )
 
 
-# --- drawing -----------------------------------------------------------------
+# --- the artwork: theme file, sprites, prepared layout -----------------------
+#
+# The bar *is* the finished artwork (hud-theme/). It carries every panel,
+# recess, static label and the compass rose, so nothing static is drawn here --
+# drawing a label the artwork already bakes would simply print it twice. What
+# this file draws is only what changes: the readouts, five sprites, and the
+# dimming of whatever is not currently selected.
+#
+# theme.json holds every coordinate in *artwork pixels*, hand-verified against
+# the image (see --hud-theme-check). Coordinates as data rather than as source
+# is what makes the artwork replaceable: new art means a new theme.json, not a
+# code change. Auto-detection off the artwork's own pixels finds the
+# high-contrast recesses and the magenta-keyed sprites reliably, but a recess
+# whose interior is close in brightness to the panel around it cannot be
+# separated from it, so those were read by hand -- which is why the check tool
+# exists at all.
+#
+# Script-relative, not CWD-relative: contest renders are run from a contest
+# directory (`cd 26augusztus && uv run ../contest_video.py ...`), where a
+# relative "hud-theme" would not exist.
+HUD_THEME_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hud-theme")
+_THEME_OUTLINES = {  # group -> colour, matching what the overlay draws
+    "slots": (0, 255, 255),
+    "chips": (255, 140, 0),
+    "stats": (255, 255, 0),
+    "sprites": (0, 255, 0),
+}
 
-HUD_W, HUD_H = 1920, 260  # reference layout; scaled by hud_layout for other sizes
-HUD_BG = (26, 24, 20)
-HUD_PANEL = (16, 15, 13)
-HUD_FRAME = (58, 53, 44)
-HUD_BEVEL_HI = (104, 96, 82)
-HUD_BEVEL_LO = (10, 9, 8)
+
+def load_hud_theme(path: str = HUD_THEME_DIR) -> dict:
+    """Read a theme directory into {..., 'image': PIL.Image}."""
+    with open(os.path.join(path, "theme.json")) as fh:
+        theme = json.load(fh)
+    theme["image"] = Image.open(
+        os.path.join(path, theme.get("artwork", "artwork.png"))
+    ).convert("RGB")
+    return theme
+
+
+def hud_theme_rects(theme: dict) -> list[tuple[str, tuple, tuple]]:
+    """(group, colour, rect) for everything theme.json positions, flattened."""
+    out = []
+    for name, rect in theme.get("slots", {}).items():
+        out.append((f"slots.{name}", _THEME_OUTLINES["slots"], tuple(rect)))
+    for row, rects in theme.get("chips", {}).items():
+        for i, rect in enumerate(rects):
+            out.append((f"chips.{row}[{i}]", _THEME_OUTLINES["chips"], tuple(rect)))
+    for i, rect in enumerate(theme.get("stats", [])):
+        out.append((f"stats[{i}]", _THEME_OUTLINES["stats"], tuple(rect)))
+    for name, sp in theme.get("sprites", {}).items():
+        out.append((f"sprites.{name}", _THEME_OUTLINES["sprites"], tuple(sp["box"])))
+    return out
+
+
+def hud_theme_overlay(theme: dict) -> Image.Image:
+    """The artwork with every rect in theme.json drawn onto it, and each
+    needle's pivot marked -- the check for a hand-edited theme."""
+    img = theme["image"].copy()
+    draw = ImageDraw.Draw(img)
+    bar = theme.get("bar")
+    if bar:
+        draw.rectangle(
+            [bar[0], bar[1], bar[0] + bar[2] - 1, bar[1] + bar[3] - 1],
+            outline=(255, 0, 255),
+            width=3,
+        )
+    for name, colour, (x, y, w, h) in hud_theme_rects(theme):
+        draw.rectangle([x, y, x + w, y + h], outline=colour, width=3)
+        draw.text((x + 3, y + 3), name.split(".")[-1], fill=colour)
+    for sp in theme.get("sprites", {}).values():
+        if "pivot" in sp:
+            px, py = sp["pivot"]
+            draw.ellipse([px - 8, py - 8, px + 8, py + 8], outline=(255, 0, 0), width=3)
+            draw.line([px - 12, py, px + 12, py], fill=(255, 0, 0), width=1)
+            draw.line([px, py - 12, px, py + 12], fill=(255, 0, 0), width=1)
+    return img
+
+
+# The bar is drawn at the artwork's own aspect (1982x351 = 5.65:1) and never at
+# any other: it is scaled uniformly or not at all, since squashing it to a
+# different aspect turns the compass into an ellipse -- and the compass is the
+# specific reason this artwork was chosen. 340px of a 1080p frame is 31% of its
+# height, which the cast PiP (height-constrained when a HUD is present, see
+# render) absorbs by shrinking.
+HUD_W, HUD_H = 1920, 340
 HUD_RED = (255, 48, 32)
-HUD_RED_OFF = (74, 18, 12)
 HUD_AMBER = (255, 176, 32)
 HUD_GREEN = (72, 255, 96)
-HUD_GREEN_OFF = (24, 70, 30)
-HUD_LABEL = (156, 148, 132)
 
 _HUD_BANDS = ("2M", "70CM", "23CM")
 _HUD_MODES = ("SSB", "CW", "FM")
-# Baked into the artwork; drawn by draw_hud_chrome for the placeholder only.
-_HUD_STAT_CAPTIONS = ("UTC", "RATE /H", "ODX KM")
-HUD_CHIP_DIM = 0.15  # how far an unselected band/mode chip is knocked back
+# The artwork bakes the band/mode chips and the whole S-meter *lit*; whatever
+# is not currently selected (or not currently reading) is dimmed in place
+# rather than being a second, unlit asset that would have to be kept
+# stylistically in sync with the lit one.
+HUD_UNLIT_DIM = 0.15
+HUD_SLOT_PAD = 0.06  # margin inside a recess, as a fraction of its short side
+HUD_METER_SEGMENTS = 21  # LEDs in the meter sprite, counted off the artwork
+HUD_METER_X0, HUD_METER_X1 = 15 / 457, 441 / 457  # first/last LED, within it
+# How far a needle reaches, as a fraction of the compass slot's radius. The
+# sprites are not drawn to the rose's own scale (at 1:1 they overshoot the
+# compass card entirely), so this is a fit, not a measurement: it lands the tip
+# just inside the ring of N/E/S/W letters.
+HUD_NEEDLE_FRAC = 0.75
 # Physical cell counts, as a real instrument's display would have. A leading
 # "1" is a half digit: the cell can only ever show a 1, which is what the unlit
 # backdrop then advertises. Sized from real results -- the best single-round
@@ -2611,88 +2698,100 @@ HUD_QSOS_FIELD = "188"
 # this radio has is 1296 MHz, so a thousands digit above 1 cannot occur.
 HUD_QRG_FIELD = "1888.888"
 
-# Reference-layout slots at HUD_W x HUD_H, left to right in DOOM's own order
-# (ammo | health | face | armor | arms). Replacing the placeholder background
-# with real artwork is an edit to this table alone.
-HUD_SLOTS: dict[str, tuple[int, int, int, int]] = {
-    "score": (10, 10, 270, 240),
-    "qsos": (288, 10, 140, 240),
-    "freq": (436, 10, 300, 240),
-    "meter": (744, 10, 140, 240),
-    "face": (892, 10, 190, 240),
-    "compass": (1090, 10, 190, 240),
-    # PWR and STATS are half-height so the CW ticker can span underneath them,
-    # matching the artwork -- a full-height ticker column of its own left it
-    # far too tall and narrow for 16 characters to be legible.
-    "pwr": (1288, 10, 190, 150),
-    "stats": (1486, 10, 424, 150),
-    "ticker": (1288, 168, 622, 82),
-}
 
-_HUD_FONTS: dict[tuple[int, bool], ImageFont.FreeTypeFont] = {}
+def _key_magenta(img: Image.Image) -> Image.Image:
+    """Cut a sprite out of the sheet's flat magenta background.
 
-
-# The HUD's own label face, deliberately not shared with the cast renderer's
-# CAST_FONT_PATH: the two have unrelated reasons to change, and swapping in a
-# chunky 90s pixel font (DOOM's status bar labels are pixel art, not type)
-# should not touch how the terminal PiP renders.
-HUD_FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
-HUD_FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"
+    The key is a hard threshold on "magenta-ness" (min(R,B) - G), which is
+    large only for the background and at most zero for anything the sprites are
+    actually made of -- red, orange, green, white highlights and the grey
+    pivot ball all have G at least as high as one of R/B. A hard threshold
+    rather than a soft alpha ramp because the sheet is not flat #FF00FF in
+    practice (it carries generation/compression noise, and only 145 pixels of
+    the whole image are exactly the key colour), so the edge pixels a ramp
+    would keep semi-opaque are magenta-tinted and would read as a pink fringe.
+    Keyed-out pixels are blacked as well as cleared so that resampling blends
+    edges toward black -- the sprites already have black outlines, so the
+    fringe that leaves is the outline itself."""
+    a = np.asarray(img.convert("RGB")).astype(np.int16)
+    bg = np.minimum(a[:, :, 0], a[:, :, 2]) - a[:, :, 1] > 60
+    rgba = np.dstack([np.asarray(img.convert("RGB")), np.where(bg, 0, 255)])
+    rgba[bg] = 0
+    return Image.fromarray(rgba.astype(np.uint8), "RGBA")
 
 
-def _hud_font(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
-    key = (size, bold)
-    if key not in _HUD_FONTS:
-        path = HUD_FONT_BOLD if bold else HUD_FONT_PATH
-        _HUD_FONTS[key] = ImageFont.truetype(path, size)
-    return _HUD_FONTS[key]
+@dataclass
+class HudArt:
+    """The artwork prepared for one bar size, so a render frame is a copy plus
+    the values: the bar image itself, every theme.json rect scaled into it, and
+    the sprites cut out, keyed and pre-scaled to where they get pasted.
+
+    Needle pivots are in their own sprite's coordinates -- these needles turn
+    about the ball at their base, not about their bounding box's centre."""
+
+    bar: Image.Image
+    slots: dict[str, tuple[int, int, int, int]]
+    chips: dict[str, list[tuple[int, int, int, int]]]
+    stats: list[tuple[int, int, int, int]]
+    sprites: dict[str, Image.Image]
+    pivots: dict[str, tuple[float, float]]
 
 
-def hud_layout(W: int = HUD_W, H: int = HUD_H) -> dict[str, tuple[int, int, int, int]]:
-    """HUD_SLOTS scaled to an arbitrary bar size."""
-    sx, sy = W / HUD_W, H / HUD_H
-    return {
-        name: (round(x * sx), round(y * sy), round(w * sx), round(h * sy))
-        for name, (x, y, w, h) in HUD_SLOTS.items()
-    }
+def hud_art(theme: dict, W: int = HUD_W, H: int = HUD_H) -> HudArt:
+    """Scale a theme's artwork and coordinates to a W x H bar."""
+    bx, by, bw, bh = theme["bar"]
+    sx, sy = W / bw, H / bh
 
-
-def _bevel(draw: ImageDraw.ImageDraw, rect, fill, depth: int = 3) -> None:
-    """A recessed panel: light along the bottom/right, dark along the
-    top/left, which is what reads as "sunk into the metal"."""
-    x, y, w, h = rect
-    draw.rectangle([x, y, x + w - 1, y + h - 1], fill=fill)
-    for i in range(depth):
-        draw.line([x + i, y + i, x + w - 1 - i, y + i], fill=HUD_BEVEL_LO)
-        draw.line([x + i, y + i, x + i, y + h - 1 - i], fill=HUD_BEVEL_LO)
-        draw.line(
-            [x + w - 1 - i, y + i, x + w - 1 - i, y + h - 1 - i], fill=HUD_BEVEL_HI
-        )
-        draw.line(
-            [x + i, y + h - 1 - i, x + w - 1 - i, y + h - 1 - i], fill=HUD_BEVEL_HI
+    def scaled(rect):
+        x, y, w, h = rect
+        return (
+            round((x - bx) * sx),
+            round((y - by) * sy),
+            round(w * sx),
+            round(h * sy),
         )
 
+    art = theme["image"]
+    bar = art.crop((bx, by, bx + bw, by + bh)).resize((W, H), Image.LANCZOS)
+    slots = {name: scaled(r) for name, r in theme["slots"].items()}
 
-def _panel(draw: ImageDraw.ImageDraw, rect) -> tuple[int, int, int, int]:
-    """Draw a slot's frame + recess; return the usable interior rect."""
+    def cut(name: str) -> Image.Image:
+        x, y, w, h = theme["sprites"][name]["box"]
+        return _key_magenta(art.crop((x, y, x + w, y + h)))
+
+    def fit(name: str, slot: str) -> Image.Image:
+        return cut(name).resize(slots[slot][2:], Image.LANCZOS)
+
+    sprites = {"rx": fit("rx", "lamp"), "tx": fit("tx", "lamp")}
+    sprites["meter"] = fit("meter", "smeter")
+    pivots = {}
+    for name in ("needle", "target"):
+        sp = theme["sprites"][name]
+        px, py = sp["pivot"][0] - sp["box"][0], sp["pivot"][1] - sp["box"][1]
+        # py is the sprite's own tip length: the tip sits at its top edge.
+        scale = HUD_NEEDLE_FRAC * min(slots["compass"][2:]) / 2 / py
+        img = cut(name)
+        sprites[name] = img.resize(
+            (max(1, round(img.width * scale)), max(1, round(img.height * scale))),
+            Image.LANCZOS,
+        )
+        pivots[name] = (px * scale, py * scale)
+    return HudArt(
+        bar=bar,
+        slots=slots,
+        chips={r: [scaled(c) for c in cs] for r, cs in theme["chips"].items()},
+        stats=[scaled(r) for r in theme["stats"]],
+        sprites=sprites,
+        pivots=pivots,
+    )
+
+
+def _inset(rect, frac: float = HUD_SLOT_PAD) -> tuple[int, int, int, int]:
+    """A recess's usable interior: the readout must not sit hard against the
+    frame the artwork drew around it."""
     x, y, w, h = rect
-    _bevel(draw, rect, HUD_FRAME, depth=2)
-    inner = (x + 6, y + 6, w - 12, h - 12)
-    _bevel(draw, inner, HUD_PANEL, depth=2)
-    return inner
-
-
-def _fit_font(text: str, max_w: int, size: int, bold: bool = True):
-    """Largest font at or below `size` whose rendering of `text` fits
-    `max_w`. Nothing on this bar has a fixed width -- the score grows a digit
-    partway through a contest, a callsign-shaped ticker line is wider than a
-    report -- so a fixed size either overflows its panel or is drawn far
-    smaller than it could be."""
-    font = _hud_font(size, bold)
-    while size > 6 and font.getlength(text) > max_w:
-        size = max(6, int(size * 0.92))
-        font = _hud_font(size, bold)
-    return font
+    d = round(min(w, h) * frac)
+    return (x + d, y + d, w - 2 * d, h - 2 * d)
 
 
 # Seven-segment digits come from DSEG7 (Debian's fonts-dseg, SIL OFL) rather
@@ -2723,11 +2822,8 @@ def _all_segments(text: str) -> str:
     return "".join(ch if ch in ".: " else "8" for ch in text)
 
 
-def _seven_seg(
-    draw, text, x, y, max_w, max_h, colour, anchor="mm", field=None
-) -> float:
-    """Draw `text` as segment digits, scaled down to fit max_w x max_h, and
-    return the rendered width.
+def _seven_seg(draw, text, x, y, max_w, max_h, colour, anchor="mm", field=None) -> None:
+    """Draw `text` as segment digits, scaled down to fit max_w x max_h.
 
     `field` is the display's *physical* set of cells, e.g. "18888" for a
     four-and-a-half digit readout. Given one, the value is drawn right-aligned
@@ -2746,7 +2842,7 @@ def _seven_seg(
     has a box only as tall as the middle segment, so anchoring on the value's
     own box would float the dashes above where the digits they replace sit."""
     if not text:
-        return 0.0
+        return
     box = _all_segments(text)
     if field is not None and len(text) <= len(field):
         box = field
@@ -2775,79 +2871,29 @@ def _seven_seg(
     draw.text(
         (ax + w - draw.textlength(text, font=font), ay), text, font=font, fill=colour
     )
-    return w
 
 
-def _label(
-    draw: ImageDraw.ImageDraw, cx: int, y: int, text: str, size: int, max_w: int
-) -> None:
-    draw.text(
-        (cx, y),
-        text,
-        font=_fit_font(text, max_w, size, bold=False),
-        fill=HUD_LABEL,
-        anchor="ma",
-    )
+def _paste_needle(img: Image.Image, sprite, pivot, centre, az: float) -> None:
+    """Paste a compass needle pointing at bearing `az` (0 = north, clockwise),
+    turned about its own pivot -- the ball at its base, well below the middle
+    of its bounding box, so rotating about the box centre would swing the whole
+    needle around the compass instead of pointing it.
 
-
-def _big(draw, cx: int, y: int, text: str, size: int, fill, max_w: int) -> None:
-    draw.text((cx, y), text, font=_fit_font(text, max_w, size), fill=fill, anchor="ma")
-
-
-def _chip_rects(rect, names) -> list[tuple[tuple[int, int, int, int], str]]:
-    """Where each selector chip sits. Shared by the drawing pass and the
-    dimming pass so the two can never disagree about a chip's box."""
-    x, y, w, h = rect
-    gap = max(2, round(w * 0.02))
-    cw = (w - gap * (len(names) - 1)) // len(names)
-    return [((x + i * (cw + gap), y, cw, h), n) for i, n in enumerate(names)]
-
-
-def _chips(draw, rect, names, size: int) -> None:
-    """One row of DOOM weapon-slot style selector chips, all drawn lit --
-    the inactive ones are dimmed afterwards (see _dim_region)."""
-    for (cx, cy, cw, ch), name in _chip_rects(rect, names):
-        _bevel(draw, (cx, cy, cw, ch), HUD_PANEL, depth=1)
-        draw.text(
-            (cx + cw // 2, cy + ch // 2),
-            name,
-            font=_hud_font(size),
-            fill=HUD_AMBER,
-            anchor="mm",
+    Done by padding the sprite into a square canvas centred on that pivot,
+    which turns "rotate about an arbitrary point" into PIL's own "rotate about
+    the centre"."""
+    px, py = pivot
+    r = math.ceil(
+        max(
+            math.hypot(dx - px, dy - py)
+            for dx in (0, sprite.width)
+            for dy in (0, sprite.height)
         )
-
-
-def _needle(draw, cx, cy, r, az, fill, outline_only=False, width=1) -> None:
-    """A compass needle pointing at bearing `az` (0 = north, clockwise).
-
-    outline_only draws the "ghost" needle -- the bearing to the station being
-    worked -- which has to stay readable while the solid rotator needle sits
-    almost on top of it, since the two coinciding is the normal case."""
-
-    def pt(angle_deg: float, radius: float) -> tuple[float, float]:
-        a = math.radians(angle_deg)
-        return (cx + radius * math.sin(a), cy - radius * math.cos(a))
-
-    poly = [pt(az, r), pt(az + 148, r * 0.34), pt(az - 148, r * 0.34)]
-    if outline_only:
-        draw.line(poly + [poly[0]], fill=fill, width=width, joint="curve")
-    else:
-        draw.polygon(poly, fill=fill)
-
-
-def _draw_meter(draw, rect, level: float | None, segments: int = 18) -> None:
-    """Segmented LED bar: green, then yellow, then red past S9."""
-    x, y, w, h = rect
-    gap = 2
-    sw = (w - gap * (segments - 1)) / segments
-    lit = 0 if level is None else round(level * segments)
-    for i in range(segments):
-        frac = (i + 1) / segments
-        colour = HUD_GREEN if frac <= 0.55 else HUD_AMBER if frac <= 0.75 else HUD_RED
-        if i >= lit:
-            colour = tuple(c // 5 for c in colour)
-        sx = round(x + i * (sw + gap))
-        draw.rectangle([sx, y, sx + round(sw) - 1, y + h - 1], fill=colour)
+    )
+    canvas = Image.new("RGBA", (2 * r, 2 * r), (0, 0, 0, 0))
+    canvas.alpha_composite(sprite, (r - round(px), r - round(py)))
+    turned = canvas.rotate(-az, resample=Image.BILINEAR)  # PIL turns the other way
+    img.paste(turned, (round(centre[0]) - r, round(centre[1]) - r), turned)
 
 
 # --- 5x7 dot-matrix font, for the CW ticker -------------------------------
@@ -2952,337 +2998,114 @@ def _draw_matrix_text(draw, cells, rect, colour, width_chars) -> None:
 
 
 def _dim_region(img: Image.Image, rect, factor: float) -> None:
-    """Darken one rectangle in place -- how an inactive band/mode chip is
-    made. The chips are drawn (and, in the artwork, baked) *lit*, and the
-    inactive ones are dimmed rather than being a separate lit/unlit pair of
-    assets, so nothing has to stay stylistically in sync."""
+    """Darken one rectangle in place -- how an unselected band/mode chip and
+    the unreached part of the S-meter are made. Both are baked (and pasted)
+    *lit*, and dimmed back rather than being a separate unlit pair of assets,
+    so nothing has to stay stylistically in sync."""
     x, y, w, h = rect
     box = (x, y, x + w, y + h)
     img.paste(img.crop(box).point(lambda v: round(v * factor)), box)
 
 
-def draw_hud_chrome(draw: ImageDraw.ImageDraw, slots: dict, fs, iw) -> None:
-    """Everything the finished artwork provides: panel frames, empty recesses,
-    the compass rose and every static label.
-
-    Drawn only when no --hud-background is supplied, which is what keeps the
-    procedural placeholder an honest stand-in: with artwork, none of this runs
-    and nothing gets drawn twice. Anything whose text changes at render time
-    lives in draw_hud_frame instead, because the artwork bakes its labels and
-    cannot change them -- which is also why the meter's caption is a fixed "S"
-    rather than switching to "PO" on transmit. The RX/TX lamp beside it
-    already says which is being shown."""
-    for name, rect in slots.items():
-        if name != "face":
-            _panel(draw, rect)
-
-    x, y, w, h = slots["score"]
-    _label(draw, x + w // 2, y + h - fs(48), "SCORE", fs(30), iw(w))
-
-    x, y, w, h = slots["qsos"]
-    _label(draw, x + w // 2, y + h - fs(48), "QSOS", fs(30), iw(w))
-
-    x, y, w, h = slots["freq"]
-    _label(draw, x + w // 2, y + fs(78), "MHz", fs(24), iw(w))
-    # Every chip lit; draw_hud_frame dims the inactive ones.
-    for row, names in ((112, _HUD_BANDS), (174, _HUD_MODES)):
-        _chips(draw, (x + fs(12), y + fs(row), w - fs(24), fs(52)), names, fs(26))
-
-    x, y, w, h = slots["meter"]
-    _label(draw, x + w // 2, y + h - fs(50), "S", fs(24), iw(w))
-
-    x, y, w, h = slots["face"]
-    _bevel(draw, (x, y, w, h), HUD_FRAME, depth=3)
-    _bevel(draw, (x + 8, y + 8, w - 16, h - 16), (34, 32, 28), depth=2)
-
-    x, y, w, h = slots["compass"]
-    r, cx, cy = _compass_geometry(slots, fs)
-    draw.ellipse(
-        [cx - r, cy - r, cx + r, cy + r], fill=(12, 11, 10), outline=HUD_BEVEL_HI
-    )
-    for i, point in enumerate("NESW"):
-        a = math.radians(i * 90)
-        draw.text(
-            (cx + (r - fs(13)) * math.sin(a), cy - (r - fs(13)) * math.cos(a)),
-            point,
-            font=_hud_font(fs(20), bold=False),
-            fill=HUD_LABEL,
-            anchor="mm",
-        )
-    _label(draw, cx, y + h - fs(26), "ROT", fs(22), iw(w))
-
-    x, y, w, h = slots["pwr"]
-    for i, unit in enumerate("VA"):
-        draw.text(
-            (x + w - fs(14), y + fs(40) + i * fs(50)),
-            unit,
-            font=_hud_font(fs(24), bold=False),
-            fill=HUD_LABEL,
-            anchor="rm",
-        )
-    _label(draw, x + w // 2, y + h - fs(26), "PWR", fs(22), iw(w))
-
-    x, y, w, h = slots["stats"]
-    for i, caption in enumerate(_HUD_STAT_CAPTIONS):
-        draw.text(
-            (x + fs(14), y + fs(30) + i * fs(46)),
-            caption,
-            font=_hud_font(fs(22), bold=False),
-            fill=HUD_LABEL,
-            anchor="lm",
-        )
-
-    x, y, w, h = slots["ticker"]
-    _label(draw, x + w // 2, y + h - fs(28), "CW", fs(22), iw(w))
-
-
-def _compass_geometry(slots: dict, fs) -> tuple[int, int, int]:
-    x, y, w, h = slots["compass"]
-    return min(w, h) // 2 - fs(22), x + w // 2, y + h // 2 - fs(14)
-
-
-def draw_hud_frame(
-    state: HudState,
-    W: int = HUD_W,
-    H: int = HUD_H,
-    background: Image.Image | None = None,
-) -> Image.Image:
-    """Render one HUD bar. `background` is the finished artwork -- chrome and
-    static labels only, with every value area left as an empty recess (see
-    hud-artwork-prompt.md). Without one, draw_hud_chrome paints a procedural
-    placeholder so the layout can be developed before the art exists."""
-    slots = hud_layout(W, H)
-    sx = W / HUD_W
-
-    def fs(px: float) -> int:
-        return max(6, round(px * sx))
-
-    def iw(w: int) -> int:
-        return w - fs(24)
-
-    if background is not None:
-        img = background.convert("RGB").resize((W, H))
-        draw = ImageDraw.Draw(img)
+def _seg_in(draw, rect, text, colour, field=None, right=False) -> None:
+    """Draw a segment readout into a recess, fitted to it. Right-aligned for
+    the stats rows, whose values change width; centred everywhere else."""
+    x, y, w, h = _inset(rect)
+    if right:
+        _seven_seg(draw, text, x + w, y + h // 2, w, h, colour, anchor="rm")
     else:
-        img = Image.new("RGB", (W, H), HUD_BG)
-        draw = ImageDraw.Draw(img)
-        draw_hud_chrome(draw, slots, fs, iw)
+        _seven_seg(draw, text, x + w // 2, y + h // 2, w, h, colour, field=field)
+
+
+def draw_hud_frame(state: HudState, art: HudArt) -> Image.Image:
+    """Render one HUD bar: the artwork, plus this instant's values.
+
+    Nothing static is drawn -- every label, frame and the compass rose come
+    from the artwork itself (see HudArt), so this only ever paints readouts,
+    sprites and dimming."""
+    img = art.bar.copy()
+    draw = ImageDraw.Draw(img)
 
     # --- SCORE (DOOM's health): the biggest number on the bar, flashing as
     # it counts up after each QSO.
-    x, y, w, h = slots["score"]
     colour = tuple(
         round(c + (255 - c) * state.score_flash) for c in HUD_RED
     )  # washes toward white at the moment of a QSO
-    _seven_seg(
-        draw,
-        f"{state.score}",
-        x + w // 2,
-        y + fs(96),
-        iw(w),
-        fs(112),
-        colour,
-        field=HUD_SCORE_FIELD,
-    )
-
-    x, y, w, h = slots["qsos"]
-    _seven_seg(
-        draw,
-        f"{state.qsos}",
-        x + w // 2,
-        y + fs(96),
-        iw(w),
-        fs(112),
-        HUD_RED,
-        field=HUD_QSOS_FIELD,
-    )
+    _seg_in(draw, art.slots["score"], f"{state.score}", colour, field=HUD_SCORE_FIELD)
+    _seg_in(draw, art.slots["qsos"], f"{state.qsos}", HUD_RED, field=HUD_QSOS_FIELD)
 
     # --- QRG, then dim whichever band/mode chips are not the current one.
-    x, y, w, h = slots["freq"]
     qrg = f"{state.freq_hz / 1e6:.3f}" if state.freq_hz else "---.---"
-    _seven_seg(
-        draw, qrg, x + w // 2, y + fs(42), iw(w), fs(58), HUD_AMBER, field=HUD_QRG_FIELD
-    )
+    _seg_in(draw, art.slots["freq"], qrg, HUD_AMBER, field=HUD_QRG_FIELD)
     for row, names, active in (
-        (112, _HUD_BANDS, state.band),
-        (174, _HUD_MODES, state.mode),
+        ("band", _HUD_BANDS, state.band),
+        ("mode", _HUD_MODES, state.mode),
     ):
-        for rect, name in _chip_rects(
-            (x + fs(12), y + fs(row), w - fs(24), fs(52)), names
-        ):
+        for rect, name in zip(art.chips[row], names):
             if name != active:
-                _dim_region(img, rect, HUD_CHIP_DIM)
+                _dim_region(img, rect, HUD_UNLIT_DIM)
 
-    # --- RX/TX lamp + signal meter
-    x, y, w, h = slots["meter"]
-    label = "TX" if state.ptt else "RX" if state.ptt is not None else "--"
-    lamp = (
-        HUD_RED if state.ptt else HUD_GREEN if state.ptt is not None else HUD_GREEN_OFF
-    )
-    _label(draw, x + w // 2, y + fs(12), label, fs(34), iw(w))
-    r = fs(30)
-    cx, cy = x + w // 2, y + fs(96)
-    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=lamp, outline=HUD_BEVEL_HI)
-    _draw_meter(draw, (x + fs(12), y + h - fs(84), w - fs(24), fs(26)), state.s_level)
+    # --- RX/TX lamp. With no rig state at all the socket is simply left
+    # empty, which is what the artwork already draws there.
+    if state.ptt is not None:
+        lamp = art.sprites["tx" if state.ptt else "rx"]
+        img.paste(lamp, art.slots["lamp"][:2], lamp)
+
+    # --- signal meter: the sprite is a fully lit LED bar, pasted over the
+    # whole recess and then dimmed back from the current level rightwards, so
+    # lit and unlit LEDs are the same artwork rather than two assets. The cut
+    # lands between LEDs -- a half-lit segment reads as a rendering fault.
+    x, y, w, h = art.slots["smeter"]
+    img.paste(art.sprites["meter"], (x, y), art.sprites["meter"])
+    lit = 0 if state.s_level is None else round(state.s_level * HUD_METER_SEGMENTS)
+    if lit < HUD_METER_SEGMENTS:
+        edge = HUD_METER_X0 + (HUD_METER_X1 - HUD_METER_X0) * lit / HUD_METER_SEGMENTS
+        cut = x + round(w * edge)
+        _dim_region(img, (cut, y, x + w - cut, h), HUD_UNLIT_DIM)
 
     # --- compass: solid needle = where the rotator points, hollow needle =
     # bearing to the station being worked, so the swing onto target is visible.
-    x, y, w, h = slots["compass"]
-    r, cx, cy = _compass_geometry(slots, fs)
-    if state.target_az is not None:
-        _needle(
-            draw,
-            cx,
-            cy,
-            r - fs(18),
-            state.target_az,
-            HUD_AMBER,
-            outline_only=True,
-            width=max(2, fs(4)),
-        )
-    if state.rot_az is not None:
-        _needle(draw, cx, cy, r - fs(26), state.rot_az, HUD_RED)
-    rot = f"{round(state.rot_az):03d}" if state.rot_az is not None else "---"
-    # DSEG7 has no degree glyph, so it is drawn alongside in the mono face and
-    # the digits are shifted left by half its width to keep the pair centred.
-    deg_w = fs(18) if state.rot_az is not None else 0
-    rot_w = _seven_seg(
-        draw, rot, cx - deg_w / 2, y + fs(194), iw(w) - deg_w, fs(34), HUD_RED
-    )
-    if deg_w:
-        draw.text(
-            (cx - deg_w / 2 + rot_w / 2 + fs(4), y + fs(194)),
-            "\u00b0",
-            font=_hud_font(fs(22), bold=False),
-            fill=HUD_RED,
-            anchor="lm",
-        )
+    cx, cy, cw, ch = art.slots["compass"]
+    centre = (cx + cw / 2, cy + ch / 2)
+    # The hollow one goes on top: the two coinciding is the normal case, and
+    # underneath the solid needle its outline would simply be invisible, so
+    # "on target" would look identical to "no target known".
+    for name, az in (("needle", state.rot_az), ("target", state.target_az)):
+        if az is not None:
+            _paste_needle(img, art.sprites[name], art.pivots[name], centre, az)
 
     # --- PWR: supply volts + PA current. No recording carries these yet --
     # the radio only reports them when polled, which the logger doesn't do --
-    # so this renders placeholders rather than hiding, which would shift the
-    # layout between old and new recordings.
-    x, y, w, h = slots["pwr"]
-    for i, value in enumerate(
-        [
-            f"{state.vd:.1f}" if state.vd is not None else "--.-",
-            f"{state.id_a:.1f}" if state.id_a is not None else "--.-",
-        ]
+    # so this renders placeholders rather than hiding, which would leave two
+    # empty recesses on the bar looking like a fault.
+    for name, value in (("vd", state.vd), ("id", state.id_a)):
+        _seg_in(
+            draw,
+            art.slots[name],
+            f"{value:.1f}" if value is not None else "--.-",
+            HUD_RED,
+        )
+
+    # --- stats: values only, right-aligned. Their captions (UTC / RATE /H /
+    # ODX KM) are part of the artwork, printed beside these recesses.
+    for rect, value in zip(
+        art.stats,
+        (
+            state.utc.strftime("%H:%M:%S") if state.utc else "--:--:--",
+            f"{state.rate_per_h:.0f}",
+            f"{state.best_km}",
+        ),
     ):
-        _seven_seg(
-            draw,
-            value,
-            x + w // 2 - fs(14),
-            y + fs(40) + i * fs(50),
-            iw(w) - fs(28),
-            fs(40),
-            HUD_RED,
-        )
+        _seg_in(draw, rect, value, HUD_RED, right=True)
 
-    # --- stats: values only, right-aligned. Their captions are chrome (see
-    # draw_hud_chrome) and in a finished render come from the artwork, so
-    # drawing them here too would print each one twice.
-    x, y, w, h = slots["stats"]
-    values = [
-        state.utc.strftime("%H:%M:%S") if state.utc else "--:--:--",
-        f"{state.rate_per_h:.0f}",
-        f"{state.best_km}",
-    ]
-    for i, value in enumerate(values):
-        _seven_seg(
-            draw,
-            value,
-            x + w - fs(16),
-            y + fs(30) + i * fs(46),
-            w - fs(150),
-            fs(34),
-            HUD_RED,
-            anchor="rm",
-        )
-
-    # --- CW ticker: a fixed HUD_TICKER_CHARS-wide dot-matrix display,
-    # right-aligned so new characters always arrive at the same place rather
-    # than the text re-centring on every keyed letter.
-    x, y, w, h = slots["ticker"]
+    # --- CW ticker: a fixed HUD_TICKER_CHARS-wide dot-matrix display, with
+    # characters entering at the right edge as they are keyed. Uninset,
+    # unlike every other readout: its slot is only seven dots tall to begin
+    # with, so a margin there costs a whole dot of pitch. _draw_matrix_text
+    # centres the grid in whatever it is given.
     _draw_matrix_text(
-        draw,
-        state.ticker,
-        (x + fs(14), y + fs(8), w - fs(28), h - fs(44)),
-        HUD_GREEN,
-        HUD_TICKER_CHARS,
+        draw, state.ticker, art.slots["ticker"], HUD_GREEN, HUD_TICKER_CHARS
     )
-    return img
-
-
-# --- HUD theme -------------------------------------------------------------
-#
-# The artwork and every coordinate that belongs to it live together in a theme
-# directory: artwork.png plus theme.json, whose rects are in *artwork pixels*
-# and get scaled at render time. Coordinates as data rather than as source is
-# what makes the artwork replaceable -- a new image means a new theme.json, not
-# a code change.
-#
-# Auto-detection off the artwork's own pixels finds the high-contrast recesses
-# and the magenta-keyed sprites reliably, but recesses whose interior is close
-# in brightness to the panel around them cannot be separated from it, so those
-# are read by hand. Hence hud_theme_overlay: editing theme.json is expected,
-# and the only way to be sure of an edit is to see the rects drawn back onto
-# the artwork.
-HUD_THEME_DIR = "hud-theme"
-_THEME_OUTLINES = {  # group -> colour, matching what the overlay draws
-    "slots": (0, 255, 255),
-    "chips": (255, 140, 0),
-    "stats": (255, 255, 0),
-    "sprites": (0, 255, 0),
-}
-
-
-def load_hud_theme(path: str = HUD_THEME_DIR) -> dict:
-    """Read a theme directory into {..., 'image': PIL.Image}."""
-    with open(os.path.join(path, "theme.json")) as fh:
-        theme = json.load(fh)
-    theme["image"] = Image.open(
-        os.path.join(path, theme.get("artwork", "artwork.png"))
-    ).convert("RGB")
-    return theme
-
-
-def hud_theme_rects(theme: dict) -> list[tuple[str, tuple, tuple]]:
-    """(group, colour, rect) for everything theme.json positions, flattened."""
-    out = []
-    for name, rect in theme.get("slots", {}).items():
-        out.append((f"slots.{name}", _THEME_OUTLINES["slots"], tuple(rect)))
-    for row, rects in theme.get("chips", {}).items():
-        for i, rect in enumerate(rects):
-            out.append((f"chips.{row}[{i}]", _THEME_OUTLINES["chips"], tuple(rect)))
-    for i, rect in enumerate(theme.get("stats", [])):
-        out.append((f"stats[{i}]", _THEME_OUTLINES["stats"], tuple(rect)))
-    for name, sp in theme.get("sprites", {}).items():
-        out.append((f"sprites.{name}", _THEME_OUTLINES["sprites"], tuple(sp["box"])))
-    return out
-
-
-def hud_theme_overlay(theme: dict) -> Image.Image:
-    """The artwork with every rect in theme.json drawn onto it, and each
-    needle's pivot marked -- the check for a hand-edited theme."""
-    img = theme["image"].copy()
-    draw = ImageDraw.Draw(img)
-    bar = theme.get("bar")
-    if bar:
-        draw.rectangle(
-            [bar[0], bar[1], bar[0] + bar[2] - 1, bar[1] + bar[3] - 1],
-            outline=(255, 0, 255),
-            width=3,
-        )
-    for name, colour, (x, y, w, h) in hud_theme_rects(theme):
-        draw.rectangle([x, y, x + w, y + h], outline=colour, width=3)
-        draw.text((x + 3, y + 3), name.split(".")[-1], fill=colour)
-    for sp in theme.get("sprites", {}).values():
-        if "pivot" in sp:
-            px, py = sp["pivot"]
-            draw.ellipse([px - 8, py - 8, px + 8, py + 8], outline=(255, 0, 0), width=3)
-            draw.line([px - 12, py, px + 12, py], fill=(255, 0, 0), width=1)
-            draw.line([px, py - 12, px, py + 12], fill=(255, 0, 0), width=1)
     return img
 
 
@@ -3303,9 +3126,7 @@ def hud_demo_state() -> HudState:
         rot_az=135,
         target_az=118,
         s_level=0.62,
-        ticker=[
-            (i * HUD_TICKER_CELL_COLS + 4, c) for i, c in enumerate("TU 5NN JN86SR")
-        ],
+        ticker=[(i * HUD_TICKER_CELL_COLS, c) for i, c in enumerate("TU 5NN JN86SR")],
         vd=13.8,
         id_a=12.4,
     )
@@ -3357,11 +3178,9 @@ def hud_frame_key(state: HudState) -> tuple:
 def render_hud_video(
     timeline: HudTimeline,
     out_path: str,
-    W: int,
-    H: int,
+    art: HudArt,
     duration: float,
     fps: int = RENDER_FPS,
-    background: Image.Image | None = None,
 ) -> int:
     """Render the HUD bar to its own clip, to be composited by render().
 
@@ -3374,6 +3193,7 @@ def render_hud_video(
 
     Returns the number of frames actually drawn, which is what the reuse
     optimisation is measured by."""
+    W, H = art.bar.size
     cmd = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "warning",
         "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", f"{fps}",
@@ -3389,7 +3209,7 @@ def render_hud_video(
             state = timeline.at(i / fps)
             key = hud_frame_key(state)
             if key != last_key or frame is None:
-                frame = draw_hud_frame(state, W, H, background).tobytes()
+                frame = draw_hud_frame(state, art).tobytes()
                 last_key = key
                 drawn += 1
             proc.stdin.write(frame)
@@ -3426,6 +3246,7 @@ def render(
     scope_start: float = 0.0,
     scope_end: float = 0.0,
     hud: str | None = None,
+    hud_face: tuple[int, int, int, int] | None = None,
 ) -> None:
     cmd = ["ffmpeg", "-y", "-hide_banner", "-stats", "-loglevel", "warning", "-i", wav]
 
@@ -3579,13 +3400,14 @@ def render(
         # webcam_rate defaults to 0.0 (identity scaling) when no rate was
         # determined (e.g. --webcam-offset was used instead, or
         # cross-correlation found no confident match).
-        # With a HUD the webcam belongs in its face recess, exactly where
-        # DOOM's portrait sits -- not in the bottom-right corner, which the
-        # bar now covers. Cropped to the recess's own aspect (a centre crop of
-        # a webcam pointed at the operator *is* a face portrait) rather than
-        # letterboxed, which would leave bars inside the frame.
-        if hud:
-            fx, fy, fw, fh = hud_layout(W, hud_h)["face"]
+        # With a HUD the webcam belongs in the artwork's own face recess,
+        # exactly where DOOM's portrait sits -- not in the bottom-right corner,
+        # which the bar now covers. Cropped to the recess's own aspect (a
+        # centre crop of a webcam pointed at the operator *is* a face
+        # portrait) rather than letterboxed, which would leave bars inside the
+        # frame.
+        if hud_face:
+            fx, fy, fw, fh = hud_face
             pip_x, pip_y = fx, H - hud_h + fy
             fit = f"crop=min(iw\\,ih*{fw}/{fh}):min(ih\\,iw*{fh}/{fw}),scale={fw}:{fh}"
         else:
@@ -3740,16 +3562,11 @@ def main() -> None:
         help="skip the HUD bar entirely (the pre-HUD look: overlays only)",
     )
     ap.add_argument(
-        "--hud-background",
-        metavar="ART.png",
-        help="finished HUD artwork (chrome only, no values) drawn under the "
-        "live readouts; without one a procedural placeholder is used",
-    )
-    ap.add_argument(
         "--hud-theme",
         metavar="DIR",
         default=HUD_THEME_DIR,
-        help=f"HUD theme directory (artwork.png + theme.json), default {HUD_THEME_DIR}",
+        help="HUD theme directory (artwork.png + theme.json), default the "
+        "hud-theme/ next to this script",
     )
     ap.add_argument(
         "--hud-theme-check",
@@ -3776,10 +3593,9 @@ def main() -> None:
             overlay.show()
         return
 
-    hud_bg = Image.open(args.hud_background) if args.hud_background else None
-
     if args.hud_demo:
-        draw_hud_frame(hud_demo_state(), background=hud_bg).save(args.hud_demo)
+        art = hud_art(load_hud_theme(args.hud_theme))
+        draw_hud_frame(hud_demo_state(), art).save(args.hud_demo)
         print(f"wrote {args.hud_demo} (dummy values)")
         return
 
@@ -4075,7 +3891,8 @@ def main() -> None:
             telemetry=telemetry,
         )
         state = timeline.at(args.hud_preview_t)
-        draw_hud_frame(state, background=hud_bg).save(args.hud_preview)
+        art = hud_art(load_hud_theme(args.hud_theme))
+        draw_hud_frame(state, art).save(args.hud_preview)
         print(f"wrote {args.hud_preview} at t={args.hud_preview_t:.1f}s: {state}")
         return
 
@@ -4102,9 +3919,10 @@ def main() -> None:
         render_cast_video(args.cast, cast_video, max_duration=cast_span)
 
     hud_video = None
+    hud_art_ = None
     if not args.no_hud:
         hud_video = stem + ".hud.mp4"
-        hud_h = hud_height(H)
+        hud_art_ = hud_art(load_hud_theme(args.hud_theme), W, hud_height(H))
         print("rendering HUD ...")
         timeline = build_hud_timeline(
             segs,
@@ -4117,9 +3935,7 @@ def main() -> None:
             long_cw_spans=long_cw_spans,
             telemetry=telemetry,
         )
-        drawn = render_hud_video(
-            timeline, hud_video, W, hud_h, total, background=hud_bg
-        )
+        drawn = render_hud_video(timeline, hud_video, hud_art_, total)
         frames = max(1, int(total * RENDER_FPS))
         print(
             f"  {drawn} frames drawn for {frames} ({frames / max(1, drawn):.0f}x reuse)"
@@ -4155,6 +3971,7 @@ def main() -> None:
         scope_start=scope_start or 0.0,
         scope_end=scope_end or 0.0,
         hud=hud_video,
+        hud_face=hud_art_.slots["face"] if hud_art_ else None,
     )
 
     if not args.keep_intermediates:

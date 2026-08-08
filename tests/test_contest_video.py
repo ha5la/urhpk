@@ -4,6 +4,7 @@ No ffmpeg is invoked; the decoder is exercised against a synthesized CW WAV so
 the test is fully reproducible (fixed WPM, pitch, sample rate)."""
 
 import json
+import math
 import re
 import struct
 import wave
@@ -2520,53 +2521,221 @@ class TestHudSources:
             assert cv.audio_time_for(cv.wall_time_at(t, segs), segs) == t
 
 
-class TestHudLayout:
-    def test_slots_stay_inside_the_bar_and_never_overlap(self):
-        # A plain left-to-right check is not enough any more: PWR/STATS sit
-        # above the CW ticker and so share their x range with it.
-        rects = list(cv.HUD_SLOTS.values())
-        for x, y, w, h in rects:
-            assert x >= 0 and y >= 0
-            assert x + w <= cv.HUD_W
-            assert y + h <= cv.HUD_H
-        for i, (ax, ay, aw, ah) in enumerate(rects):
-            for bx, by, bw, bh in rects[i + 1 :]:
-                apart = ax + aw <= bx or bx + bw <= ax or ay + ah <= by or by + bh <= ay
-                assert apart, f"{(ax, ay, aw, ah)} overlaps {(bx, by, bw, bh)}"
+_ART = None
 
-    def test_layout_scales_to_another_bar_size(self):
-        scaled = cv.hud_layout(cv.HUD_W // 2, cv.HUD_H // 2)
-        x, y, w, h = scaled["score"]
-        assert (x, y, w, h) == tuple(v // 2 for v in cv.HUD_SLOTS["score"])
+
+def _art():
+    """The repo's own theme, prepared once -- loading the artwork and cutting
+    its sprites for every test would dominate the suite's runtime."""
+    global _ART
+    if _ART is None:
+        _ART = cv.hud_art(cv.load_hud_theme())
+    return _ART
+
+
+def _drawn(**over):
+    state = cv.hud_demo_state()
+    for k, v in over.items():
+        setattr(state, k, v)
+    return np.asarray(cv.draw_hud_frame(state, _art())).astype(int)
+
+
+def _magenta(rgb):
+    """The sprite sheet's key colour, as _key_magenta itself measures it."""
+    rgb = np.asarray(rgb).astype(int)
+    return np.minimum(rgb[:, :, 0], rgb[:, :, 2]) - rgb[:, :, 1] > 60
+
+
+class TestHudTheme_Geometry:
+    def test_the_bar_is_drawn_at_the_artworks_own_aspect(self):
+        # Uniform scaling or none: squashing the artwork to another aspect
+        # turns its compass into an ellipse, which is the specific reason this
+        # artwork was chosen. Every supported resolution has to land on the
+        # artwork's ratio, not just the 1080p reference.
+        _, _, bw, bh = cv.load_hud_theme()["bar"]
+        art_aspect = bw / bh
+        assert abs(cv.HUD_W / cv.HUD_H - art_aspect) / art_aspect < 0.01
+        for W, H in cv.RESOLUTIONS.values():
+            assert abs(W / cv.hud_height(H) - art_aspect) / art_aspect < 0.01
+
+    def test_every_rect_stays_inside_the_bar_and_they_never_overlap(self):
+        # theme.json is hand-edited data, so this checks the data, not code.
+        theme = cv.load_hud_theme()
+        bx, by, bw, bh = theme["bar"]
+        rects = [(n, r) for n, _, r in cv.hud_theme_rects(theme)
+                 if not n.startswith("sprites.")]  # fmt: skip
+        for name, (x, y, w, h) in rects:
+            assert bx <= x and by <= y, name
+            assert x + w <= bx + bw and y + h <= by + bh, name
+        for i, (an, (ax, ay, aw, ah)) in enumerate(rects):
+            for bn, (b_x, b_y, b_w, b_h) in rects[i + 1 :]:
+                apart = (
+                    ax + aw <= b_x
+                    or b_x + b_w <= ax
+                    or ay + ah <= b_y
+                    or b_y + b_h <= ay
+                )
+                assert apart, f"{an} overlaps {bn}"
+
+    def test_rects_are_scaled_from_artwork_pixels_into_the_bar(self, tmp_path):
+        # A slot is positioned relative to the bar's own origin, not the
+        # sheet's: the sprite sheet below the bar is not part of what gets
+        # drawn, so the bar's top-left is the origin everything is measured
+        # from.
+        art = tmp_path / "artwork.png"
+        Image.new("RGB", (200, 200), (20, 20, 20)).save(art)
+        (tmp_path / "theme.json").write_text(
+            json.dumps(
+                {
+                    "bar": [10, 20, 100, 50],
+                    "slots": {
+                        "score": [30, 30, 20, 10],
+                        "lamp": [50, 30, 8, 12],
+                        "smeter": [50, 45, 20, 6],
+                        "compass": [80, 30, 20, 20],
+                    },
+                    "chips": {"band": [[60, 30, 10, 10]]},
+                    "stats": [[80, 30, 10, 10]],
+                    "sprites": {
+                        "rx": {"box": [0, 100, 8, 8]},
+                        "tx": {"box": [10, 100, 8, 8]},
+                        "meter": {"box": [20, 100, 20, 5]},
+                        "needle": {"box": [50, 100, 6, 20], "pivot": [53, 118]},
+                        "target": {"box": [60, 100, 6, 20], "pivot": [63, 118]},
+                    },
+                }
+            )
+        )
+        a = cv.hud_art(cv.load_hud_theme(str(tmp_path)), 200, 100)
+        assert a.bar.size == (200, 100)
+        assert a.slots["score"] == (40, 20, 40, 20)  # 2x scale, bar origin off
+        assert a.chips["band"] == [(100, 20, 20, 20)]
+        assert a.stats == [(140, 20, 20, 20)]
+
+    def test_sprites_are_cut_out_of_the_magenta_sheet(self):
+        theme = cv.load_hud_theme()
+        for name, sp in theme["sprites"].items():
+            x, y, w, h = sp["box"]
+            cut = np.asarray(cv._key_magenta(theme["image"].crop((x, y, x + w, y + h))))
+            alpha = cut[:, :, 3]
+            assert set(np.unique(alpha)) == {0, 255}, name  # a hard key
+            assert alpha.mean() > 20, name  # the sprite itself survived
+            assert not _magenta(cut[:, :, :3])[alpha > 0].any(), name
+
+    def test_no_pink_fringe_survives_onto_the_bar(self):
+        # The sheet is not flat #FF00FF in practice -- only 145 pixels of the
+        # whole artwork are exactly the key colour -- so a key that trusts the
+        # colour exactly, or a soft alpha ramp that keeps edge pixels
+        # semi-opaque, leaves a magenta halo around every sprite.
+        assert not _magenta(_drawn()).any()
 
 
 class TestHudDrawing:
-    def test_frame_has_the_requested_size(self):
-        assert cv.draw_hud_frame(cv.hud_demo_state(), 1280, 174).size == (1280, 174)
+    def test_frame_has_the_bar_size(self):
+        art = cv.hud_art(cv.load_hud_theme(), 1280, 226)
+        assert cv.draw_hud_frame(cv.hud_demo_state(), art).size == (1280, 226)
 
     def test_an_empty_state_renders_placeholders_rather_than_crashing(self):
         # Every recording made before the meter recorder existed looks like
         # this for the PWR panel, and a --duration cut before the first QSO
         # looks like it for the rest.
-        assert cv.draw_hud_frame(cv.HudState()).size == (cv.HUD_W, cv.HUD_H)
+        img = cv.draw_hud_frame(cv.HudState(), _art())
+        assert img.size == (cv.HUD_W, cv.HUD_H)
 
-    def test_face_slot_is_left_empty_for_the_webcam_composite(self):
-        img = cv.draw_hud_frame(cv.hud_demo_state())
-        x, y, w, h = cv.HUD_SLOTS["face"]
-        inner = img.crop((x + 16, y + 16, x + w - 16, y + h - 16))
-        assert len(inner.getcolors(maxcolors=4)) == 1  # one flat colour, nothing drawn
+    def test_no_readout_paints_outside_its_own_recess(self):
+        # The artwork carries every label and frame, so anything drawn outside
+        # a recess is drawn over artwork it must not touch -- a readout
+        # overflowing its panel would show up here as a changed pixel on a
+        # baked caption.
+        art = _art()
+        boxes = (
+            list(art.slots.values())
+            + [c for row in art.chips.values() for c in row]
+            + art.stats
+        )
+        allowed = np.zeros((cv.HUD_H, cv.HUD_W), bool)
+        for x, y, w, h in boxes:
+            allowed[y : y + h, x : x + w] = True
+        changed = (_drawn() != np.asarray(art.bar).astype(int)).any(axis=2)
+        assert not (changed & ~allowed).any()
 
-    def test_score_is_fitted_to_its_panel_instead_of_overflowing(self):
+    def test_the_face_recess_is_left_untouched_for_the_webcam(self):
+        art = _art()
+        x, y, w, h = art.slots["face"]
+        before = np.asarray(art.bar).astype(int)[y : y + h, x : x + w]
+        assert (_drawn()[y : y + h, x : x + w] == before).all()
+
+    def test_score_is_fitted_to_its_recess_instead_of_overflowing(self):
         # Regression: a fixed point size overflowed the SCORE panel the moment
         # the score reached five digits, spilling red digits across the gutter
-        # into the QSOS panel. Confirmed red by monkeypatching _fit_font back
-        # to a plain fixed-size lookup, which fails this assertion.
-        state = cv.hud_demo_state()
-        state.score = 123456
-        img = cv.draw_hud_frame(state)
-        sx, _, sw, _ = cv.HUD_SLOTS["score"]
-        gutter = img.crop((sx + sw, 0, cv.HUD_SLOTS["qsos"][0], cv.HUD_H))
-        assert np.asarray(gutter)[:, :, 0].max() < 60  # no lit digits here
+        # into the QSOS panel. _seven_seg's own shrink loop is what keeps it in.
+        # The gutter is artwork, not blank, so the assertion is that it comes
+        # out of the render untouched rather than that it is dark.
+        art = _art()
+        sx, _, sw, _ = art.slots["score"]
+        cols = slice(sx + sw, art.slots["qsos"][0])
+        assert (
+            _drawn(score=123456)[:, cols] == np.asarray(art.bar).astype(int)[:, cols]
+        ).all()
+
+    def test_the_lamp_shows_rx_on_receive_and_tx_on_transmit(self):
+        x, y, w, h = _art().slots["lamp"]
+
+        def lamp(ptt):
+            return _drawn(ptt=ptt)[y : y + h, x : x + w].reshape(-1, 3).mean(axis=0)
+
+        assert lamp(False)[1] > lamp(False)[0]  # RX: green ball
+        assert lamp(True)[0] > lamp(True)[1]  # TX: red ball
+        # With no rig state at all the artwork's empty socket is left alone.
+        assert (lamp(None) < lamp(False)).all()
+
+    def test_the_meter_lights_further_with_a_stronger_signal(self):
+        x, y, w, h = _art().slots["smeter"]
+
+        def lit(level):
+            band = _drawn(s_level=level)[y : y + h, x : x + w]
+            return (band.max(axis=2) > 120).sum()
+
+        assert lit(None) == 0
+        assert lit(0.2) < lit(0.6) < lit(1.0)
+
+    def test_only_the_selected_band_and_mode_chips_stay_lit(self):
+        art = _art()
+        img = _drawn(band="2M", mode="CW")
+
+        def brightness(rect):
+            x, y, w, h = rect
+            return img[y : y + h, x : x + w].mean()
+
+        for row, names, active in (
+            ("band", cv._HUD_BANDS, "2M"),
+            ("mode", cv._HUD_MODES, "CW"),
+        ):
+            lit = [brightness(r) for r, n in zip(art.chips[row], names) if n == active]
+            unlit = [
+                brightness(r) for r, n in zip(art.chips[row], names) if n != active
+            ]
+            assert min(lit) > 2 * max(unlit)
+
+    def test_a_needle_turns_about_its_pivot_not_its_bounding_box(self):
+        # These needles pivot on the ball at their base, so almost all of a
+        # needle lies *ahead* of the compass centre. Turned about the box
+        # centre instead, the same needle would swing around the compass with
+        # as much of it behind the centre as in front -- which is what this
+        # measures, rather than merely that it moved.
+        art = _art()
+        cx, cy, cw, ch = art.slots["compass"]
+        centre = (cx + cw / 2, cy + ch / 2)
+        for az in (0, 90, 180, 270):
+            img = _drawn(rot_az=az, target_az=None)[cy : cy + ch, cx : cx + cw]
+            red = (img[:, :, 0] - np.maximum(img[:, :, 1], img[:, :, 2])) > 100
+            ys, xs = np.nonzero(red)
+            ys, xs = ys + cy, xs + cx
+            assert len(xs), az
+            along = (xs - centre[0]) * math.sin(math.radians(az)) - (
+                ys - centre[1]
+            ) * math.cos(math.radians(az))
+            assert along.max() > 3 * max(1.0, -along.min()), az
 
 
 class TestHudMatrixFont:
@@ -2588,32 +2757,6 @@ class TestHudMatrixFont:
 
     def test_an_unknown_character_falls_back_to_a_question_mark(self):
         assert cv._matrix_rows("\u00e9") == cv._matrix_rows("?")
-
-
-class TestHudChromeSplit:
-    def test_static_labels_are_not_drawn_over_supplied_artwork(self):
-        # The artwork bakes every static label, so drawing them again would
-        # print each one twice. Regression: the stats captions (UTC / RATE /H
-        # / ODX KM) used to be drawn in the value path and would have doubled.
-        art = Image.new("RGB", (cv.HUD_W, cv.HUD_H), (0, 0, 0))
-        img = cv.draw_hud_frame(cv.hud_demo_state(), background=art)
-        x, y, w, h = cv.HUD_SLOTS["score"]
-        label_strip = img.crop((x, y + h - 60, x + w, y + h))
-        assert np.asarray(label_strip).max() < 40
-
-    def test_the_placeholder_does_draw_them(self):
-        # ... and without artwork the placeholder has to stand in for it,
-        # otherwise the preview would show unlabelled numbers.
-        img = cv.draw_hud_frame(cv.hud_demo_state())
-        x, y, w, h = cv.HUD_SLOTS["score"]
-        label_strip = img.crop((x, y + h - 60, x + w, y + h))
-        assert np.asarray(label_strip).max() > 100
-
-    def test_values_are_drawn_either_way(self):
-        art = Image.new("RGB", (cv.HUD_W, cv.HUD_H), (0, 0, 0))
-        img = cv.draw_hud_frame(cv.hud_demo_state(), background=art)
-        x, y, w, h = cv.HUD_SLOTS["score"]
-        assert np.asarray(img.crop((x, y, x + w, y + h - 60)))[:, :, 0].max() > 100
 
 
 class TestMeterCalibration:
@@ -2747,10 +2890,9 @@ class TestHudRender:
 
     def test_the_webcam_moves_into_the_face_recess_when_a_hud_is_present(self):
         # Bottom-right is under the bar now, so the corner PiP would be hidden.
-        face = cv.hud_layout(1920, cv.hud_height(1080))["face"]
-        graph = _render_cmd(hud="h.mp4", webcam="w.mp4")[
-            _render_cmd(hud="h.mp4", webcam="w.mp4").index("-filter_complex") + 1
-        ]
+        face = cv.hud_art(cv.load_hud_theme(), 1920, cv.hud_height(1080)).slots["face"]
+        cmd = _render_cmd(hud="h.mp4", webcam="w.mp4", hud_face=face)
+        graph = cmd[cmd.index("-filter_complex") + 1]
         assert f"scale={face[2]}:{face[3]}" in graph
         assert f"overlay=x={face[0]}:" in graph
 
@@ -2833,12 +2975,12 @@ class TestTickerModeGating:
 
     def test_shown_when_telemetry_says_cw(self):
         state = [(0.0, 5.0, SegState(False, 144174000, "CW", None))]
-        assert _ticker_at(1.0, self._segs(), state) == "HI"
+        assert _ticker_at(1.5, self._segs(), state) == "HI"
 
     def test_shown_when_mode_is_unknown(self):
         # No positive evidence it is *not* CW -- e.g. no --telemetry at all --
         # so keep the decode rather than suppressing it.
-        assert _ticker_at(1.0, self._segs(), None) == "HI"
+        assert _ticker_at(1.5, self._segs(), None) == "HI"
 
 
 class TestMatrixDisplay:
