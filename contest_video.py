@@ -3214,6 +3214,78 @@ def draw_hud_frame(
     return img
 
 
+# --- HUD theme -------------------------------------------------------------
+#
+# The artwork and every coordinate that belongs to it live together in a theme
+# directory: artwork.png plus theme.json, whose rects are in *artwork pixels*
+# and get scaled at render time. Coordinates as data rather than as source is
+# what makes the artwork replaceable -- a new image means a new theme.json, not
+# a code change.
+#
+# Auto-detection off the artwork's own pixels finds the high-contrast recesses
+# and the magenta-keyed sprites reliably, but recesses whose interior is close
+# in brightness to the panel around them cannot be separated from it, so those
+# are read by hand. Hence hud_theme_overlay: editing theme.json is expected,
+# and the only way to be sure of an edit is to see the rects drawn back onto
+# the artwork.
+HUD_THEME_DIR = "hud-theme"
+_THEME_OUTLINES = {  # group -> colour, matching what the overlay draws
+    "slots": (0, 255, 255),
+    "chips": (255, 140, 0),
+    "stats": (255, 255, 0),
+    "sprites": (0, 255, 0),
+}
+
+
+def load_hud_theme(path: str = HUD_THEME_DIR) -> dict:
+    """Read a theme directory into {..., 'image': PIL.Image}."""
+    with open(os.path.join(path, "theme.json")) as fh:
+        theme = json.load(fh)
+    theme["image"] = Image.open(
+        os.path.join(path, theme.get("artwork", "artwork.png"))
+    ).convert("RGB")
+    return theme
+
+
+def hud_theme_rects(theme: dict) -> list[tuple[str, tuple, tuple]]:
+    """(group, colour, rect) for everything theme.json positions, flattened."""
+    out = []
+    for name, rect in theme.get("slots", {}).items():
+        out.append((f"slots.{name}", _THEME_OUTLINES["slots"], tuple(rect)))
+    for row, rects in theme.get("chips", {}).items():
+        for i, rect in enumerate(rects):
+            out.append((f"chips.{row}[{i}]", _THEME_OUTLINES["chips"], tuple(rect)))
+    for i, rect in enumerate(theme.get("stats", [])):
+        out.append((f"stats[{i}]", _THEME_OUTLINES["stats"], tuple(rect)))
+    for name, sp in theme.get("sprites", {}).items():
+        out.append((f"sprites.{name}", _THEME_OUTLINES["sprites"], tuple(sp["box"])))
+    return out
+
+
+def hud_theme_overlay(theme: dict) -> Image.Image:
+    """The artwork with every rect in theme.json drawn onto it, and each
+    needle's pivot marked -- the check for a hand-edited theme."""
+    img = theme["image"].copy()
+    draw = ImageDraw.Draw(img)
+    bar = theme.get("bar")
+    if bar:
+        draw.rectangle(
+            [bar[0], bar[1], bar[0] + bar[2] - 1, bar[1] + bar[3] - 1],
+            outline=(255, 0, 255),
+            width=3,
+        )
+    for name, colour, (x, y, w, h) in hud_theme_rects(theme):
+        draw.rectangle([x, y, x + w, y + h], outline=colour, width=3)
+        draw.text((x + 3, y + 3), name.split(".")[-1], fill=colour)
+    for sp in theme.get("sprites", {}).values():
+        if "pivot" in sp:
+            px, py = sp["pivot"]
+            draw.ellipse([px - 8, py - 8, px + 8, py + 8], outline=(255, 0, 0), width=3)
+            draw.line([px - 12, py, px + 12, py], fill=(255, 0, 0), width=1)
+            draw.line([px, py - 12, px, py + 12], fill=(255, 0, 0), width=1)
+    return img
+
+
 def hud_demo_state() -> HudState:
     """The mockup's own dummy values -- for --hud-demo, so the layout can be
     checked against the artwork with no recording at hand."""
@@ -3673,7 +3745,36 @@ def main() -> None:
         help="finished HUD artwork (chrome only, no values) drawn under the "
         "live readouts; without one a procedural placeholder is used",
     )
+    ap.add_argument(
+        "--hud-theme",
+        metavar="DIR",
+        default=HUD_THEME_DIR,
+        help=f"HUD theme directory (artwork.png + theme.json), default {HUD_THEME_DIR}",
+    )
+    ap.add_argument(
+        "--hud-theme-check",
+        nargs="?",
+        const="",
+        metavar="OUT.png",
+        help="draw every rect in the theme's theme.json back onto its artwork "
+        "and exit -- the way to check a hand-edited theme. With no path it "
+        "writes <theme dir>/theme-check.png and opens it in the default image "
+        "viewer; give a path to only write the file",
+    )
     args = ap.parse_args()
+
+    if args.hud_theme_check is not None:
+        overlay = hud_theme_overlay(load_hud_theme(args.hud_theme))
+        # Always write the file -- it is the scriptable, diffable artifact --
+        # and additionally open a viewer when no path was asked for, since the
+        # editing loop this exists for is GIMP on one side and a look on the
+        # other, not a file to go hunting for.
+        out = args.hud_theme_check or os.path.join(args.hud_theme, "theme-check.png")
+        overlay.save(out)
+        print(f"wrote {out} from {args.hud_theme}/theme.json")
+        if not args.hud_theme_check:
+            overlay.show()
+        return
 
     hud_bg = Image.open(args.hud_background) if args.hud_background else None
 

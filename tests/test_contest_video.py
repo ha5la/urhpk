@@ -2992,3 +2992,50 @@ class TestHudLayering:
     def test_without_a_hud_the_cast_keeps_its_width_based_size(self):
         graph = self._graph(cast="c.mp4")
         assert f"scale={round(1920 * cv.CAST_PIP_WIDTH_FRAC)}:-2" in graph
+
+
+class TestHudTheme:
+    def _theme(self, tmp_path, **over):
+        art = tmp_path / "artwork.png"
+        Image.new("RGB", (200, 100), (20, 20, 20)).save(art)
+        theme = {
+            "artwork": "artwork.png",
+            "bar": [0, 0, 200, 60],
+            "slots": {"score": [5, 5, 40, 30]},
+            "chips": {"band": [[50, 5, 10, 10], [62, 5, 10, 10]]},
+            "stats": [[100, 5, 30, 10]],
+            "sprites": {"needle": {"box": [150, 60, 20, 30], "pivot": [160, 85]}},
+        }
+        theme.update(over)
+        (tmp_path / "theme.json").write_text(json.dumps(theme))
+        return str(tmp_path)
+
+    def test_load_reads_the_json_and_its_artwork(self, tmp_path):
+        theme = cv.load_hud_theme(self._theme(tmp_path))
+        assert theme["image"].size == (200, 100)
+        assert theme["slots"]["score"] == [5, 5, 40, 30]
+
+    def test_every_positioned_rect_is_flattened_for_the_overlay(self, tmp_path):
+        # One score slot, two chips, one stats row, one sprite.
+        names = [
+            n
+            for n, _, _ in cv.hud_theme_rects(cv.load_hud_theme(self._theme(tmp_path)))
+        ]
+        assert names == [
+            "slots.score", "chips.band[0]", "chips.band[1]",
+            "stats[0]", "sprites.needle",
+        ]  # fmt: skip
+
+    def test_overlay_marks_every_rect_and_the_needle_pivot(self, tmp_path):
+        theme = cv.load_hud_theme(self._theme(tmp_path))
+        a = np.asarray(cv.hud_theme_overlay(theme))
+        # cyan slot outline, orange chip, yellow stats row, green sprite, red pivot
+        for colour in ((0, 255, 255), (255, 140, 0), (255, 255, 0), (0, 255, 0)):
+            assert (a == np.array(colour)).all(axis=2).any(), colour
+        assert a[:, :, 0].max() == 255
+
+    def test_a_theme_without_sprites_or_chips_still_renders(self, tmp_path):
+        # A hand-edited theme mid-edit may be missing whole groups; the check
+        # tool has to survive that or it is useless exactly when needed.
+        path = self._theme(tmp_path, chips={}, stats=[], sprites={})
+        assert cv.hud_theme_overlay(cv.load_hud_theme(path)).size == (200, 100)

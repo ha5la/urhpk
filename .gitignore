@@ -24,3 +24,5 @@ htmlcov/
 
 # HUD theme is a committed asset, not scratch output
 !hud-theme/theme.json
+
+hud-theme/theme-check.png
