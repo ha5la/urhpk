@@ -2858,7 +2858,10 @@ def _inset(rect, frac: float = HUD_SLOT_PAD) -> tuple[int, int, int, int]:
 # low -- at 0.16 the ghost behind a '1' (which lights only its two right-hand
 # bars) read as a digit being clipped by the panel edge rather than as an
 # unlit cell.
-DSEG_FONT_PATH = "/usr/share/fonts/truetype/dseg/DSEG7Classic-Bold.ttf"
+# Vendored beside the artwork rather than taken from /usr/share/fonts: the HUD
+# is unrenderable without it, and a system font package is one more thing that
+# has to be installed on every machine that renders (CI included).
+DSEG_FONT_PATH = os.path.join(HUD_THEME_DIR, "DSEG7Classic-Bold.ttf")
 HUD_SEG_DIM = 0.12  # brightness of an unlit segment
 
 _DSEG_FONTS: dict[int, ImageFont.FreeTypeFont] = {}

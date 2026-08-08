@@ -434,7 +434,8 @@ The HUD's rule is that the more important a value, the bigger it is drawn.
   gutter into the QSOS panel. One test asserts the gutter comes out byte-identical
   to the artwork; another generalises it to the whole bar, so any readout painting
   over a baked label fails.
-- **Numerals are DSEG7** (Debian `fonts-dseg`, SIL OFL), with **unlit segments drawn
+- **Numerals are DSEG7**, vendored into `hud-theme/` beside the artwork (SIL OFL,
+  licence alongside) rather than taken from a system font package, with **unlit segments drawn
   very dim** (`HUD_SEG_DIM`, 0.12) — that is what makes an LED panel read as a panel
   rather than numerals floating on black. Keep the value low: at 0.16 the ghost
   behind a `1` read as a digit clipped by the panel edge. `_all_segments` doubles as
