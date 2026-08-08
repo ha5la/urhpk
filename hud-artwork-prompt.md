@@ -89,22 +89,28 @@ takes about half the width of a full digit.
 6. Panel with a circular compass rose showing only the letters N, E, S and W
    around its edge and NO needle or pointer of any kind. Below the circle,
    empty space, then the small label "ROT".
-7. Narrow panel with two empty value slots stacked vertically, each sized for
-   "88.8", each with a small label to its right — "V" for the upper, "A" for
-   the lower — and the label "PWR" at the bottom.
-8. Panel, only about half the height of the bar, sitting in the upper half,
-   containing three rows. Each row has a small grey caption on the left and an
-   empty dark value area on the right; size those for "88:88:88". The captions
-   are "UTC", "RATE /H" and "ODX KM".
-9. Directly below panel 8, filling the bar's lower half and the same combined
-   width as panels 7 and 8: a wide empty dark letterbox slot with the small
-   label "CW" beneath it. This slot is a dot-matrix display whose dots are
-   drawn by software, so leave its interior completely flat and empty — no dot
-   grid, no pixel matrix, no characters, no texture of any kind inside it.
-   Its interior must be wide enough for 20 characters side by side and, more
-   importantly, TALL enough for a 7-dot-high character to read clearly — the
-   height is what limits legibility here, and a shallow slot makes the text
-   unreadable no matter how wide it is.
+The last three panels form a two-row block occupying the bar's full height,
+so read all three before drawing any of them: panels 7 and 8 sit side by side
+across the UPPER HALF only, and panel 9 spans the full width of both of them
+across the LOWER HALF. None of the three is full height, and none overlaps
+another.
+
+7. Upper half only. Narrow panel with two empty value slots stacked
+   vertically, each sized for "88.8", each with a small label to its right —
+   "V" for the upper, "A" for the lower — and the label "PWR" at the bottom
+   of the panel.
+8. Upper half only, immediately to the right of panel 7 and about twice its
+   width. Three rows, each with a small grey caption on the left and an empty
+   dark value area on the right; size those for "88:88:88". The captions are
+   "UTC", "RATE /H" and "ODX KM".
+9. Lower half only, directly beneath panels 7 and 8 and spanning the combined
+   width of both. A wide, generously tall empty dark slot with the small label
+   "CW" beneath it. This is a dot-matrix display whose dots are drawn by
+   software, so leave its interior completely flat and empty — no dot grid, no
+   pixel matrix, no characters, no texture of any kind inside it. Make it as
+   tall as the lower half allows: at least 16 characters must fit side by side
+   while each stays clearly legible, and if those two pull against each other,
+   favour a taller slot with fewer characters over a shallow one with more.
 
 CRITICAL: no readout anywhere in the HUD bar may show a value. Every value
 area — score, QSO count, frequency, the two PWR slots, the compass reading,
@@ -177,7 +183,14 @@ accepting a generation:
   can only show a 1 and is drawn half a cell narrower than the others.
 - **A CW slot too shallow.** Its height, not its width, is what sets the dot
   pitch and therefore legibility — confirmed by rendering at 720p, where the
-  matrix came out at a 3-pixel pitch because the slot is short.
+  matrix came out at a 3-pixel pitch because the slot is short. The character
+  count is deliberately *not* specified as an exact number: `HUD_TICKER_CHARS`
+  is ours to set once the slot has been measured, so the artwork only has to
+  provide a well-proportioned space. This is the general rule — pin down what
+  cannot be changed afterwards, leave free whatever the code can adapt to.
+- **Panels 7, 8 or 9 running full height.** They are a two-row block: 7 and 8
+  side by side above, 9 spanning both below. A full-height PWR panel collides
+  with the CW slot.
 
 The v1 prompt asked for dummy values everywhere and got them rendered cleanly,
 so the generator has no trouble filling recesses — which is exactly why the
