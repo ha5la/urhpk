@@ -2618,9 +2618,19 @@ class TestHudTheme_Geometry:
             x, y, w, h = sp["box"]
             cut = np.asarray(cv._key_magenta(theme["image"].crop((x, y, x + w, y + h))))
             alpha = cut[:, :, 3]
-            assert set(np.unique(alpha)) == {0, 255}, name  # a hard key
+            assert set(np.unique(alpha)) <= {0, 255}, name  # a hard key
             assert alpha.mean() > 20, name  # the sprite itself survived
             assert not _magenta(cut[:, :, :3])[alpha > 0].any(), name
+
+    def test_the_meter_sprite_is_cropped_to_the_leds_alone(self):
+        # Which is why the meter's lit fraction is simply lit/segments of the
+        # sprite's width: there is no frame inside the box to offset past. An
+        # earlier crop included the frame around the LEDs, which then got
+        # dimmed along with them and left a sliver of it permanently lit at
+        # the left. A rectangle of pure LEDs is also the one sprite with no
+        # background to key out at all, hence the <= above.
+        bright = np.asarray(_art().sprites["meter"])[:, :, :3].max(axis=2) > 120
+        assert bright[:, :2].any() and bright[:, -2:].any()
 
     def test_no_pink_fringe_survives_onto_the_bar(self):
         # The sheet is not flat #FF00FF in practice -- only 145 pixels of the

@@ -2678,7 +2678,6 @@ _HUD_MODES = ("SSB", "CW", "FM")
 HUD_UNLIT_DIM = 0.15
 HUD_SLOT_PAD = 0.06  # margin inside a recess, as a fraction of its short side
 HUD_METER_SEGMENTS = 21  # LEDs in the meter sprite, counted off the artwork
-HUD_METER_X0, HUD_METER_X1 = 15 / 457, 441 / 457  # first/last LED, within it
 # How far a needle reaches, as a fraction of the compass slot's radius. The
 # sprites are not drawn to the rose's own scale (at 1:1 they overshoot the
 # compass card entirely), so this is a fit, not a measurement: it lands the tip
@@ -3052,15 +3051,18 @@ def draw_hud_frame(state: HudState, art: HudArt) -> Image.Image:
         img.paste(lamp, art.slots["lamp"][:2], lamp)
 
     # --- signal meter: the sprite is a fully lit LED bar, pasted over the
-    # whole recess and then dimmed back from the current level rightwards, so
-    # lit and unlit LEDs are the same artwork rather than two assets. The cut
-    # lands between LEDs -- a half-lit segment reads as a rendering fault.
+    # recess and then dimmed back from the current level rightwards, so lit and
+    # unlit LEDs are the same artwork rather than two assets. Both the sprite
+    # box and the slot hold the LED strip *itself*, with the frame around it
+    # left to the artwork -- so the cut is simply lit/segments of the width,
+    # and it lands in a gap rather than through an LED (a half-lit segment
+    # reads as a rendering fault rather than as a reading). An earlier crop
+    # took in the frame too, which then got dimmed along with the LEDs.
     x, y, w, h = art.slots["smeter"]
     img.paste(art.sprites["meter"], (x, y), art.sprites["meter"])
     lit = 0 if state.s_level is None else round(state.s_level * HUD_METER_SEGMENTS)
     if lit < HUD_METER_SEGMENTS:
-        edge = HUD_METER_X0 + (HUD_METER_X1 - HUD_METER_X0) * lit / HUD_METER_SEGMENTS
-        cut = x + round(w * edge)
+        cut = x + round(w * lit / HUD_METER_SEGMENTS)
         _dim_region(img, (cut, y, x + w - cut, h), HUD_UNLIT_DIM)
 
     # --- compass: solid needle = where the rotator points, hollow needle =
