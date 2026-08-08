@@ -13,16 +13,27 @@ Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
   push freq/mode updates instead of polling, plus real spectrum-scope sweep capture
 - `scope_preview.py` – standalone preview: renders a `.scope` recording into a waterfall video
 
+### The other documents
+| File | What belongs in it |
+|---|---|
+| **CLAUDE.md** (this file) | Rules, invariants and current architecture — what someone editing the code must not break |
+| **README.md** | The public face: components table and quick start |
+| **RECORDING.md** | How to actually record a round and produce a video; the video pipeline's behaviour and tuned constants, with real numbers |
+| **FINDINGS.md** | Measurements, protocol archaeology and dead ends — the evidence behind the rules here |
+| **hud-artwork-prompt.md** | The generation prompt and layout spec for the HUD artwork |
+
 ## Housekeeping reminders
 - When adding or removing components, update the components table in **README.md**
+- Keep the four documents above in their lanes. In particular: **research narrative
+  and rejected approaches go to FINDINGS.md, not here**, and history that only
+  explains how the code *used to* look goes nowhere — git keeps it. This file was
+  pruned from 2157 lines once already for exactly that reason.
 
 ## Development principles
 - **Succinct code comments**: prefer explaining identifiers over comments (Robert C.
   Martin) — a well-named variable/function usually makes a comment unnecessary. When
   the *why* genuinely needs explaining (a hidden constraint, a non-obvious tradeoff, a
-  bug's root cause), write a succinct comment, not an essay. Applies going forward;
-  this file's existing long-form comments predate the rule and document real debugging
-  history, so they're not being retroactively trimmed.
+  bug's root cause), write a succinct comment, not an essay.
 - **Kent Beck's simplicity rule**: always implement the simplest thing that works.
   Prefer decremental development — remove code that isn't needed rather than keeping
   it "just in case". Dead code is technical debt.
@@ -34,11 +45,9 @@ Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
   safety net for refactoring and simplification.
 - **Commit each finished topic before starting the next**: don't let unrelated changes
   from different features pile up in one working tree — it makes a clean commit split
-  expensive later. One session let three unrelated `contest_video.py` topics (webcam PiP,
-  CW decoder tuning, WAV-metadata rig-state redesign) plus a `puskas_logger.py` macro edit
-  accumulate uncommitted; splitting them afterward required reconstructing each topic's
-  slice by hand, function-by-function, against a full end-state backup, since there was no
-  intermediate git history left to split from.
+  expensive later. One session let four unrelated topics pile up, and splitting them
+  afterwards meant reconstructing each slice by hand against a full end-state backup,
+  with no intermediate history left to split from.
 - **Prove a regression test catches the bug — red before green**: write the test
   against the still-buggy code and watch it actually fail, *then* write the fix and
   watch the test pass. Don't just reason that a test "should" fail on the old code —
@@ -48,10 +57,7 @@ Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
   and its cause were understood in the same pass), the fallback is to temporarily
   revert the fix (or monkeypatch the specific buggy function back), confirm the test
   fails, then restore the fix and confirm it passes — strictly weaker than true
-  test-first, but better than trusting an unverified test. Example: `contest_video.py`'s
-  `_snap_to_cluster` regression test was confirmed via the fallback, by monkeypatching
-  the old nearest-cluster logic back in and observing the assertion fail with the old
-  (wrong) value.
+  test-first, but better than trusting an unverified test.
 - **Tests use pinned timestamps**: `datetime.now()` in tests undermines reproducibility.
   Time is an input — pin it like any other. Production code that needs the current time
   accepts an optional `now: datetime | None = None` parameter (defaulting to
@@ -69,16 +75,8 @@ Amateur radio contest (Puskás URH Kupa) toolset plus a general ON4KST bridge:
   always ends in numeric 366, so tests `recv_until("366")` instead of draining on a
   "quiet for N ms" heuristic — zero guessing at all, not just a tighter guess. Only
   genuine negative assertions ("nothing arrives") still need a real bounded sleep, since
-  there's no true condition to poll for proving an absence.
-  Cut the full test suite from ~29s to ~3.5s (pytest alone: ~26s → ~3.2s) — found while
-  investigating why `pre-commit` felt slow; `tests/test_integration.py` (~18s) and
-  `tests/test_irc_protocol.py` (~7s) were almost entirely blind `asyncio.sleep()` calls
-  synchronizing against the bridge's background tasks. Removing the guesswork also
-  surfaced one real, previously-masked race: `test_exclamation_not_forwarded_to_kst`
-  snapshotted `kst_server.received` right after connecting, racing the connect-triggered
-  `/SET HERE` send (a separate task) — the old 0.3s drain timeout had enough slack to
-  hide it by accident. Fixed by explicitly `wait_until`-ing for `/SET HERE` before taking
-  the baseline, rather than re-adding a sleep.
+  there's no true condition to poll for proving an absence. Adopting this cut the
+  suite from ~29s to ~3.5s and exposed one real race the old slack had been hiding.
 - **No visual glitches**: the logger UI must look professional at all times. Transient
   incorrect states (e.g. a dup highlight flashing for one frame during a state transition)
   are bugs. The root cause is usually a final prompt_toolkit render that fires between a
@@ -244,1426 +242,414 @@ uv run puskas_visualizer.py [CALLSIGN LOCATOR]
 
 ## hamlib_supervisor.py – rotctld USB-replug supervisor
 
-Problem this solves: `rigctld`/`rotctld` were started by hand, picking the device path
-(`/dev/ttyUSBn`) from shell history. If the USB connection drops (cable wiggle, radio
-power-cycle) and the kernel re-enumerates the device, the running daemon keeps the old,
-now-dead file descriptor open — it does not notice the device came back on a new number.
-The fix is not "give it a stable device name" alone (a udev `SYMLINK+=` rule or, as it
-turns out, the distro's own `/dev/serial/by-id/` — see below — both already solve that
-half); the daemon itself still needs to *restart* against the new device node, since it
-never re-`open()`s a path once it's already got a fd.
+Problem this solves: if the USB connection drops (cable wiggle, radio power-cycle)
+and the kernel re-enumerates the device, a running `rotctld` keeps the old, now-dead
+file descriptor open — it never re-`open()`s a path once it has a fd. A stable device
+name alone doesn't fix that; the daemon has to be *restarted* against the new node.
 
 ```
 uv run hamlib_supervisor.py
 ```
 Run permanently (tmux, or a `systemd --user` unit) alongside the contest tools.
 
-- **No custom udev rule needed.** `/dev/serial/by-id/` is populated automatically by the
-  distro's own stock udev package for both devices here — verified directly on the
-  actual hardware, not assumed:
-  - IC-9700: `/dev/serial/by-id/usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_IC-9700_13013358_A-if00-port0`.
-    The radio actually exposes **two** separate CI-V USB-serial ports (`_A`/`_B`, real
-    distinct USB devices under the hood, not two interfaces of one) — likely so a second
-    CAT-speaking program can run without contending with rigctld. Port A is the one in
-    use; confirmed live (`145.355 MHz FM`) with `rigctld -m 3081 -s 115200`.
-  - Rotator (custom Arduino, Yaesu GS-232-compatible firmware):
-    `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0` (CH340, `1a86:7523` — no serial
-    number, but there's only one such device on this machine so plain VID/PID-based
-    identity, which is all `/dev/serial/by-id` uses here, is already unambiguous).
-    Confirmed live (real azimuth reading) with `rotctld -m 603 -s 9600` — **not** GS-232A
-    (`-m 601`): that returned "Protocol error" on `get_pos` despite genuinely receiving
-    bytes back (wrong response framing, not a dead link or wrong baud) — 603/GS-232B is
-    the sketch's actual dialect.
-  - If a device's `/dev/serial/by-id/` entry ever goes missing on a future machine (e.g.
-    a USB-serial chip too generic for udev's built-in rules to name distinctly), fall
-    back to a custom udev `SYMLINK+=` rule matched on `idVendor`/`idProduct` — see git
-    history / prior discussion for the template; not needed for the current hardware.
-- **inotify, not polling**: watches the parent directory of each configured device path
-  (both land in `/dev/serial/by-id/` here, so one shared watch) for `IN_CREATE`/
-  `IN_DELETE`/`IN_MOVED_TO`/`IN_MOVED_FROM`, implemented via `ctypes` directly against
-  libc — no `inotify_simple`/`watchdog` dependency, matching `on4kst_irc_bridge.py`'s
-  "pure stdlib" style. `reconcile_initial_state` handles the device-already-present-at-
-  startup case explicitly, since inotify only reports *future* events.
-- **Async/event-driven rig or rotator state (no polling `rigctld`/`rotctld` themselves)
-  was investigated and is not available for this hardware on the installed Hamlib
-  (4.6.2, confirmed also still absent in the latest release, 4.7.2)**: Hamlib's
-  `async_data_supported` backend flag — the mechanism that lets rigctld consume Icom
-  CI-V Transceive frames without polling, and even multicast them to network clients —
-  is set for `ic7300.c`/`ic7610.c`/`ic785x.c`/etc. but not `ic9700.c` (checked directly
-  against the Hamlib source at both version tags). Hamlib's rotator API
-  (`include/hamlib/rotator.h`) has no equivalent concept at all, for any backend, at
-  either version — this isn't a per-rig gap, the rotator subsystem never defined the
-  hook. So `puskas_logger.py`'s rotator polling thread stays as it is (its rig polling
-  has since been replaced entirely by `icom_net` push updates — rigctld is now only
-  used by `on4kst_irc_bridge.py`); this script only removes polling from the
-  *device-presence* problem, not from azimuth queries themselves.
-- The IC-7300MK2 (an unrelated HF rig also on this machine) has no dedicated Hamlib
-  backend in the installed 4.6.2 — `RIG_MODEL_IC7300MK2` was added in the 4.7 release
-  series (confirmed: absent from `rigctl --list` here, present in Hamlib's 4.7.2 source
-  and release notes). The plain IC-7300 model (`-m 3073`) was confirmed working against
-  it live for basic CAT (freq/mode read) regardless — Puskás Kupa is VHF/UHF-only so
-  this rig isn't part of this project's workflow either way, noted here only because it
-  came up while investigating the IC-9700.
+- **inotify, not polling**: watches the parent directory of each configured device
+  path for `IN_CREATE`/`IN_DELETE`/`IN_MOVED_TO`/`IN_MOVED_FROM`, via `ctypes`
+  against libc — no `inotify_simple`/`watchdog` dependency, matching
+  `on4kst_irc_bridge.py`'s pure-stdlib style. `reconcile_initial_state` handles the
+  device-already-present-at-startup case, since inotify only reports *future* events.
+- **Device paths come from the distro's own `/dev/serial/by-id/`**, no custom udev
+  rule (verified on this hardware):
+  - IC-9700: `usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_IC-9700_13013358_A-if00-port0`
+  - Rotator (Arduino, Yaesu GS-232-compatible): `usb-1a86_USB_Serial-if00-port0`
+- **Rotator model is 603 (GS-232B)**, not 601. It only manages `rotctld` now — the
+  rig moved to `icom_net.py`, which also removed the reason to want async rig state
+  here. See FINDINGS.md for why async state isn't available from Hamlib at all.
 
 ## icom_net.py – Direct Icom Ethernet CI-V client
 
-Problem this solves: the IC-9700 is reachable over Ethernet (this network's radio is at
-a fixed LAN IP), but `rigctld` only speaks CI-V over a serial/USB link — there is no
-plain "CI-V over TCP" port on the radio itself. The only way to control it over Ethernet
-is Icom's own network-remote-control protocol (the one RS-BA1 and wfview speak), which is
-UDP-based, authenticated, and stateful. `icom_net.py` implements a minimal client for it
-directly, in pure stdlib Python (no external deps, matching `on4kst_irc_bridge.py`'s
-style). Originally a standalone first step; `puskas_logger.py` now uses it as its only
-rig interface — instant, event-driven state, no rigctld involved.
+The IC-9700 is reachable over Ethernet, but there is no plain "CI-V over TCP" port
+on the radio: the only way in is Icom's own network-remote-control protocol (what
+RS-BA1 and wfview speak) — UDP, authenticated, stateful. This is a minimal client
+for it in pure stdlib Python. `puskas_logger.py` uses it as its **only** rig
+interface; it is also usable standalone (`uv run icom_net.py <radio-ip>`).
 
-- **Why this is worth it over polling**: CI-V has a "Transceive" mode (`SET > CONNECTORS
-  > CI-V > CI-V Transceive: ON`) where the radio pushes frequency/mode changes
-  unsolicited the instant they happen (front-panel or otherwise), rather than waiting to
-  be asked. `rigctld`'s Hamlib backend for the IC-9700 doesn't take advantage of this
-  (see `hamlib_supervisor.py`'s notes above on `async_data_supported`), so
-  `puskas_logger.py` on rigctld only ever saw rig state up to its 1 s poll interval
-  stale. A direct client can just listen — no polling loop at all.
-- **Protocol reverse-engineered from two independent implementations**, not from any
-  official Icom spec (there isn't a public one): wfview (C++,
-  gitlab.com/eliggett/wfview) and kappanhang (Go, github.com/nonoo/kappanhang, credited
-  by wfview's own source as its basis). Every packet layout in this file is transcribed
-  byte-for-byte from `packettypes.h` and the actual field-assignment code in
-  `icomudphandler.cpp`, cross-checked between the two, not guessed from prose
-  descriptions — several real discrepancies between what secondhand descriptions imply
-  and what the code (and the radio) actually require turned up during implementation
-  (see below), so treat any *future* protocol change here the same way: verify against
-  source or a real packet capture, don't infer from memory.
-- **Credentials**: read from `~/.netrc` (`machine <radio-ip> login <user> password
-  <pass>`), same convention as `on4kst_irc_bridge.py`. Requires `SET > Network > Network
-  Control: ON` and a LAN username/password set in the radio's own `SET > Network` menu
-  first — this applies even for a same-subnet, non-relay connection; Icom's login step
-  isn't WAN-only.
-- **Username/password are obfuscated on the wire**, not sent plaintext: a fixed
-  substitution table keyed by `(character_value + position_index)`, byte-identical
-  between wfview and kappanhang (`passcode()`, credited by kappanhang to W6EL). Not a
-  real cipher, just enough that credentials aren't sitting in cleartext UDP frames.
-- **BCD frequency encoding**: standard Icom 5-byte little-endian BCD
-  (`bcd_encode_freq`/`bcd_decode_freq`), verified against the worked example in Icom's
-  own CI-V documentation (144.300.000 Hz → `00 00 30 44 01`) before ever touching real
-  hardware — this caught a base-16-vs-base-10 typo (`int(x, 16-6)` instead of `int(x,
-  16)`) and a nibble-order bug in the decoder, both via a red-before-green unit test
-  against that known example, per this project's testing philosophy.
-- **Three real bugs found only by testing against the actual radio** — the protocol
-  research (byte layouts, packet field meanings) was solid, but none of these were
-  discoverable from source reading or the fake-radio integration test alone, since a
-  mock server just mirrors back whatever assumptions were baked into it:
-  1. **Outer transport `seq` numbering**: the are-you-there(seq=0)/are-you-ready(seq=1)
-     handshake is *not* part of the same counter as subsequent tracked packets
-     (login/token/conninfo) — the first tracked packet also starts at seq=1, not 2 as a
-     naive "keep incrementing" reading would suggest. Confirmed directly: sending login
-     at seq=2 got a real retransmit-request packet back (type=0x01, "resend seq=1") from
-     the radio, and switching to seq=1 got an immediate, correct login response. The
-     radio validates this strictly — it is not a "nice to have, ignorable on a clean
-     LAN" part of the protocol the way general retransmit-*request compliance* is (see
-     next point).
-  2. **`threading.Lock` self-deadlock**: `IcomNetRig._apply_update` held `self._lock`
-     while also reading `self.band`, whose own property getter re-acquires the same
-     lock — silently wedges the one background thread that processes all incoming CI-V
-     data, forever, on the very first update. Symptom was confusing: `freq_hz` updated
-     once and then froze, `mode` never updated at all, no exception, no crash — the
-     thread was just gone. Root-caused with a small standalone debug script logging
-     `freq_hz`/`mode`/`band` every 100ms after connect(), which showed exactly one
-     update then silence. Fixed by switching to `threading.RLock()`.
-  3. **The control socket must be kept alive with idle packets *during* the CI-V-socket
-     open handshake, not just after everything is fully connected**: the original
-     structure did login→token→conninfo→(then, still synchronously) CI-V rendezvous→CI-V
-     open-retry-loop, with the control socket's keepalive thread only starting at the
-     very end. On real hardware this left the control socket silent for several seconds
-     while the CI-V open was being retried, and the radio silently dropped the
-     just-registered conninfo session — CI-V data never arrived, even though the
-     low-level are-you-there/ready responder (session-independent) kept answering the
-     whole time, which made this look like a CI-V-specific problem rather than a control
-     socket one. Fixed by starting `_ctrl_loop` (idle every ~100ms, reauth every 60s)
-     immediately after conninfo succeeds, before doing any CI-V-socket work at all.
-- **The CI-V "open" retry cadence is deliberately much slower than wfview's own
-  documented behavior, and for a specific, tested reason**: wfview's watchdog resends
-  the open request every 100ms once no CI-V data has been seen for 2s. Implementing that
-  literally — a new tracked `seq` on every 100ms retry, since this client doesn't
-  implement retransmit-*request* compliance (resending a specific requested packet on
-  demand) — made the radio's own receive-sequence tracker lose sync entirely: it started
-  sending retransmit requests for a huge, nonsensical `seq` range (`0xff82`–`0xffff`)
-  that grew with every retry, and CI-V data never flowed. Spacing retries at `CIV_STALE_S`
-  (2s) instead — giving each attempt time to land before the next is sent — fixed it.
-  Diagnosed by tracing raw packet hex from the client's own retry loop, not by capturing
-  wfview traffic (that capture only became necessary for the next bug).
-- **The real deadlock, found only by comparing a live wfview packet capture against our
-  own traffic**: this client wasn't sending anything past the "open" request until it
-  had first *received* real CI-V data, on the theory that receiving data was the signal
-  the stream was live. But the radio never sends CI-V data unprompted just because the
-  stream is open — confirmed from a clean wfview session capture (`dumpcap`, no sudo
-  needed since the invoking user is in the `wireshark` group — `dumpcap` has
-  `cap_net_raw`/`cap_net_admin` via file capabilities, unlike plain `tcpdump` which
-  needed `sudo`) against this same radio: wfview's own first real CI-V traffic is a
-  *client-initiated* query (`FE FE 00 E1 19 00 FD`, a broadcast "read transceiver
-  address"), not anything radio-initiated. Two sides both waiting to hear from the other
-  first is a deadlock. Fixed by sending a real CI-V query (`cmd 0x03`, read frequency)
-  alongside every open attempt, rather than gating that first query on already having
-  received data — matches wfview's actual behavior of speaking first.
-- **wfview's own outer-`seq` sequence has no second `token(0x05)` renewal between
-  register and conninfo**, contrary to an earlier assumption in this file's own history:
-  captured directly from the wfview trace, outer `seq` goes login=1, token(register)=2,
-  conninfo=3, with nothing in between. This client originally sent an extra
-  token(`0x05`) request there (seq=3) before conninfo (pushing conninfo to seq=4) — removed
-  to match the real, working sequence exactly, on the theory (consistent with bug #1
-  above) that this radio's session state machine cares about more than raw seq
-  continuity: an extra tracked packet a real client never sends is exactly the kind of
-  thing that could desync it, even if the seq numbers themselves stay technically
-  sequential.
-- **A capture-driven debugging session needs a cooldown between real-hardware
-  attempts**: repeated rapid reconnect attempts against the same radio during this
-  debugging session caused failures to shift to different, earlier steps across
-  successive runs (login one time, conninfo the next) with no code change in between —
-  strong evidence of session-slot exhaustion from prior attempts that were never cleanly
-  logged out (the process just exited on error, abandoning the UDP session from the
-  radio's perspective). Two fixes: `IcomNetRig.connect()` now sends a best-effort
-  token-deregister (`requesttype=0x01`) and closes sockets on any failure partway
-  through, so a failed attempt doesn't linger; and empirically, a real fresh attempt
-  needs on the order of tens of seconds of quiet since the last one before the radio's
-  own session state reliably resets.
-- **Closing a session takes a real goodbye — the deregister alone is not one.** `close()`
-  used to send the CI-V stream-close plus the token deregister and stop there. Captured
-  from a live wfview shutdown (same `dumpcap` technique as the scope research; wfview was
-  closed via a WM_DELETE_WINDOW so its normal destructors actually ran, unlike a SIGTERM,
-  which skips them), a real client also sends a **disconnect control packet — `type=0x05`,
-  16 bytes, `seq=0` — on every socket it opened**, CI-V first and the control socket after
-  the deregister is acknowledged. Without it the radio keeps the session on its books:
-  measured against the real IC-9700, it went on pinging the dead sockets at ~50
-  packets/s for over a minute while refusing new sessions the whole time (wfview's own log
-  says `Busy: 1`; our client's are-you-there simply goes unanswered). With it, traffic
-  stops within the same second and a fresh `connect()` succeeds at +0.0 s, measured
-  back-to-back. `close()` is idempotent and safe on a half-connected session, so
-  `connect()`'s failure path just calls it rather than a separate partial teardown.
-- **Scope data output is *not* session-scoped, contrary to what this file said**: a fresh
-  session gets `27 00` waveform frames immediately, before it enables anything — the
-  radio remembers `27 11 01` across sessions. Harmless (the logger re-enables anyway), but
-  it means a leftover session's flood is the radio streaming a *real* scope, not an
-  artifact of the abandoned handshake.
-- **Test coverage**: `tests/test_icom_net.py` covers the pure, hardware-independent
-  functions (passcode scrambling, BCD codec, CI-V frame parsing) with no mocking needed.
-  `tests/test_icom_net_integration.py` runs the full `connect()` handshake against an
-  in-process fake UDP radio (`FakeIcomRadio`) implementing just enough of the real
-  protocol to exercise every branch, then injects an unsolicited CI-V Transceive frame
-  and asserts `IcomNetRig.freq_hz`/`.mode`/`.band` update with no polling — this is what
-  caught the `RLock` deadlock (bug #2 above) in CI, well before real-hardware testing.
-  Note what this test suite *can't* catch: the sequencing/timing bugs (#1, #3, and the
-  retry-cadence and deadlock findings above) are all about how a real radio's own
-  session/sequence tracking behaves, which a fake server that just mirrors back
-  whatever the client sends can't reproduce — those needed the real IC-9700.
-- **The radio holds only ONE live network session — a second connect is not refused, it
-  silently kills the first**: verified live with two concurrent `IcomNetRig` sessions —
-  the second came up fine while the first's CI-V data stream died the moment the second
-  started connecting, and did not recover even after the second closed (its own reopen
-  retries notwithstanding). Consequences: every consumer of radio state must go through
-  the one session owner (`puskas_logger.py` during contests — it serves other local
-  consumers, see its rig-server notes), and the `icom_net.py` CLI harness must never be
-  run while the logger is up — the two would fight over the session in a reconnect loop.
-- **rigctld-parity commands** — the full rigctld surface `puskas_logger.py` uses beyond
-  freq/mode reads, as plain CI-V writes on the existing CI-V socket: `send_cw()` (0x17 +
-  ASCII, 30-char limit), `stop_cw()` (0x17 + 0xFF), `set_clock()` (0x1A 0x05, IC-9700
-  parameters 0184 UTC-offset / 0180 time / 0179 date, packed BCD) — byte layouts
-  transcribed from Hamlib's `icom_send_morse`/`icom_stop_morse`/`icom_set_clock`
-  (`rigs/icom/icom.c`) and `ic9700_clock_cmds` (`rigs/icom/ic7300.c`), the exact code
-  paths rigctld's `b`/`0xBB`/`\set_clock` take. `set_clock` verified against the real
-  radio: all three set commands ACKed (FB) and the time/date read back over CI-V matched
-  the set value exactly. `on_civ_frame()` exposes every raw inbound CI-V frame — this is
-  how a caller observes ACKs (FB ok / FA rejected), which the logger's clock-sync
-  success/failure notice will need. Note: the radio echoes the client's own outbound
-  frames back on the CI-V stream, so a raw-frame listener sees both directions —
-  distinguish by the to/from address bytes (`E0 A2` = radio→controller).
-- **Not yet implemented / explicitly out of scope for this first pass**: audio
-  streaming (conninfo currently requests `rxenable=0`/`txenable=0` — CI-V status only),
-  PTT/transmit control, and general-purpose retransmit-*request* compliance (resending a
-  specific buffered packet on demand — the project's research concluded, and
-  real-hardware testing confirmed for steady-state traffic, that this is skippable on a
-  clean LAN; what *isn't* skippable, per the bugs above, is getting the initial seq
-  numbering and handshake ordering exactly right). Wired into `puskas_logger.py` as its
-  only rig interface (see that section's radio notes); also still usable standalone via
-  the CLI test harness (`uv run icom_net.py <radio-ip>`).
+**Why it beats polling**: with `SET > CONNECTORS > CI-V > CI-V Transceive: ON` the
+radio pushes frequency/mode changes the instant they happen, front-panel included.
+Hamlib's IC-9700 backend doesn't use that, so the logger on rigctld only ever saw
+state up to its poll interval stale. A direct client just listens.
+
+- **Credentials** come from `~/.netrc` (`machine <radio-ip> login <user> password
+  <pass>`), same convention as the bridge. Requires `SET > Network > Network
+  Control: ON` and a LAN username/password set in the radio's own menu — this
+  applies even on the same subnet; Icom's login step is not WAN-only.
+- Username/password are **obfuscated on the wire** by a fixed substitution table
+  keyed by `(character_value + position_index)` — not a cipher, just not cleartext.
+- **BCD frequencies**: standard Icom 5-byte little-endian BCD, verified against the
+  worked example in Icom's own CI-V documentation (144.300.000 Hz → `00 00 30 44
+  01`) before touching hardware, which caught a base-16-vs-base-10 typo and a
+  nibble-order bug via a red-before-green unit test.
+
+**Invariants — do not "simplify" any of these.** Each was a real failure against the
+real radio; the evidence is in FINDINGS.md.
+- The first *tracked* packet starts at `seq=1`, not 2 — the are-you-there/ready
+  handshake is a separate counter.
+- `_ctrl_loop` (control-socket idle/reauth) must start **immediately after conninfo
+  succeeds**, before any CI-V-socket work, or the radio drops the session mid-open.
+- `IcomNetRig` uses `threading.RLock`, not `Lock` — the CI-V thread re-enters it.
+- CI-V "open" retries are spaced at `CIV_STALE_S`, deliberately far slower than
+  wfview's 100 ms, or the radio's receive-sequence tracker desyncs.
+- Every open attempt sends a real CI-V query alongside it: the radio never speaks
+  first, so waiting for data before sending is a deadlock.
+- No extra token renewal between register and conninfo — a real client sends none.
+- `close()` sends a disconnect control packet (`type=0x05`, `seq=0`) on **every**
+  socket it opened, not just the token deregister; without it the radio keeps the
+  session and refuses new ones for over a minute. It is idempotent and safe on a
+  half-connected session, so `connect()`'s failure path just calls it.
+- **The radio holds exactly one session.** A second connect silently kills the
+  first. So every consumer goes through the one session owner (`puskas_logger.py`
+  during a contest — see its rig server), and the CLI harness must never run while
+  the logger is up.
+
+**rigctld-parity commands**, as plain CI-V writes: `send_cw()` (0x17 + ASCII, 30-char
+limit), `stop_cw()` (0x17 + 0xFF), `set_clock()` (0x1A 0x05, IC-9700 parameters 0184
+UTC-offset / 0180 time / 0179 date, packed BCD) — byte layouts transcribed from
+Hamlib's own `icom_send_morse`/`icom_stop_morse`/`icom_set_clock`. `set_clock` was
+verified against the radio: all three commands ACKed and the read-back matched.
+`on_civ_frame()` exposes every raw inbound CI-V frame, which is how a caller sees
+ACKs (FB ok / FA rejected); note the radio echoes the client's own frames back, so
+distinguish direction by the address bytes.
+
+**Test coverage**: `tests/test_icom_net.py` covers the pure functions (passcode, BCD,
+frame parsing) with no mocking; `tests/test_icom_net_integration.py` runs the full
+`connect()` handshake against an in-process fake radio and injects an unsolicited
+Transceive frame to assert push updates with no polling — that is what caught the
+`RLock` deadlock in CI. What it *cannot* catch: anything about the real radio's own
+session/sequence tracking, since a fake that mirrors the client's assumptions back
+can't contradict them.
+
+**Not implemented, deliberately**: audio streaming (conninfo requests
+`rxenable=0`/`txenable=0`), PTT/transmit control, and general retransmit-*request*
+compliance (resending a specific buffered packet on demand) — skippable on a clean
+LAN, confirmed in steady-state traffic. What is *not* skippable is the initial seq
+numbering and handshake ordering above.
 
 ### Scope (spectrum waterfall) data
 
-Goal: match the exact waterfall the radio's own front-panel display shows in
-`contest_video.py`'s rendered background, instead of a waterfall reconstructed from the
-recorded audio (`showspectrum` — see that section above) — the audio-based waterfall can
-only ever show what the receiver actually demodulated, not the true RF passband the
-operator was watching, including signals never within earshot.
+Goal: match the exact waterfall the radio's own display shows, rather than one
+reconstructed from the recorded audio — audio can only ever show what the receiver
+demodulated, not the RF passband the operator was watching.
 
-- **The obvious assumption — a separate "scope port" (`ScopeLANPort`, default 50004,
-  present as a real key in wfview's own config) — is wrong for Icom radios, confirmed
-  two independent ways before writing any code**: first empirically, by running a real
-  wfview session against this radio with `dumpcap` capturing 100% of UDP traffic to/from
-  it (not filtered to one port) while wfview's window visibly showed a live spectrum
-  matching the radio's own screen — zero packets ever appeared on port 50004, and the
-  user independently reproduced the same result with Wireshark, additionally noting the
-  radio's own `SET > Network` menu only exposes three configurable LAN ports (Control/
-  CI-V/Audio), no fourth scope port at all. Second, from wfview's own source: `conninfo_
-  packet` (the packet that negotiates ports with the radio at login) has exactly two
-  port fields, `civport` and `audioport` — there is no third port field anywhere in that
-  struct, so the radio is structurally never told about a separate scope socket.
-  `ScopeLANPort`/50004 in wfview's config turned out to be a vestige of its *Yaesu*
-  support (`src/radio/yaesuudpcontrol.cpp`/`yaesucommander.cpp` are its only consumers)
-  — dead weight for any Icom session, misleading precisely because it's a real,
-  populated config key that looks Icom-relevant.
-- **Real mechanism: scope sweeps are ordinary CI-V command `0x27` frames on the same
-  CI-V socket already used for freq/mode** (port 50002) — not a separate stream, not
-  separately negotiated. Turned on with two plain CI-V "set" commands sent after the
-  CI-V socket is open, exactly like any other CI-V write: `27 10 01` (scope on), `27 11
-  01` (scope data output on) — `IcomNetRig.enable_scope()`. Off by default (`connect()`
-  never calls it) since it's a much heavier stream than freq/mode transceive frames —
-  opt in explicitly, matching `--scope` on the CLI harness.
-- **Frame layout — confirmed by decoding a real captured sweep byte-for-byte, not just
-  from source reading**, which caught a real ordering mistake: after the `27 00 00`
-  scope-wave-data marker, `sequence`/`sequence_max` (single BCD bytes — the IC-9700 over
-  LAN always sends `sequence == sequence_max == 1`, the whole 475-pixel sweep in one UDP
-  datagram, unlike the old multi-packet serial-CI-V framing), then for `sequence == 1`:
-  `mode`(1 byte, `0x00`=Center) → `start_freq`(5-byte BCD) → `end_freq`(5-byte BCD) →
-  `out_of_range`(1 byte) → pixel bytes. An initial reading with `out_of_range` placed
-  *before* the two frequency fields instead of after decoded a real captured frame to a
-  nonsensical ~1.45 MHz "center frequency"; swapping to oor-after-frequencies decoded
-  the same bytes to 145.11–146.11 MHz — sane 2M-band, 1 MHz-span, matching what the
-  radio was actually showing. In Center mode the transmitted fields are center-frequency
-  and half-span, not edges — `start_hz = raw_start - raw_end; end_hz = start_hz + 2 *
-  raw_end` recovers the true sweep edges. Pixel bytes are each a raw `0`–`160` linear
-  scope unit (`SpectrumAmpMax`), not dBm — no rescaling needed, already a
-  ready-to-colormap waterfall row, one byte per bin, 475 bins for the IC-9700.
-- **Reassembly is defensive, not just a pass-through**: `IcomNetRig._apply_scope_frame`
-  buffers pixels across `sequence` 1..`sequence_max` and only fires `on_scope()` /
-  updates `scope_pixels` once a sweep is complete, even though the IC-9700's own LAN
-  behavior makes this a same-frame no-op in practice (sequence_max is always 1) — this
-  is what a hypothetical multi-packet sweep (older serial-CI-V-style framing, or a
-  different rig model) would need, and it's essentially free to support since the state
-  machine is trivial; `tests/test_icom_net.py`'s
-  `test_parse_scope_frame_multi_sequence_reassembly` exercises that path with a
-  synthetic two-packet sweep since real hardware here never takes it.
-- **Test fixture is a real captured frame, not hand-built**: `tests/test_icom_net.py`'s
-  `_REAL_SCOPE_SWEEP_HEX` is the literal bytes of one CI-V scope-wave datagram, extracted
-  from a `dumpcap` capture with a ~30-line pure-stdlib pcap parser (Ethernet+IP+UDP
-  header math, no `dpkt`/`scapy` — neither was installed and the format is simple enough
-  not to need them) rather than transcribed by hand from a hex dump — manual hex
-  transcription of a 497-byte payload turned out to be genuinely error-prone in practice
-  (a mis-typed nibble slipped into an early draft of this exact fixture and was only
-  caught by re-deriving the hex programmatically and diffing) and a real captured frame
-  exercises the actual byte layout, not just whatever assumptions were baked into a
-  synthetic one.
-- **Recording format for `contest_video.py`'s eventual use**: `write_scope_record`
-  appends one binary record per sweep — `<f8 timestamp><u4 start_hz><u4 end_hz><u2
-  npixels><npixels raw bytes>` — to a plain file, no JSON. Deliberately not JSONL like
-  the telemetry/input-log recorders: those are ~1 record/second and human-debuggability
-  matters more than size; scope sweeps arrive several times a second, each already
-  byte-quantized (0-160 per pixel, nothing to gain from text encoding), so JSON overhead
-  would balloon a multi-hour recording for no benefit — same reasoning as the WAV
-  recorder storing raw samples rather than one JSON number per sample. Verified against
-  real hardware: `uv run icom_net.py <radio-ip> --scope out.scope` produces a file whose
-  records read back byte-exact (timestamp/frequency-range/pixel-count/pixel-values all
-  round-tripped correctly) against ~33 real sweeps over a 15 s session.
-- **Consumed by `contest_video.py`'s `--scope`** (see that section below) and previewable
-  standalone via `scope_preview.py` (`uv run scope_preview.py RECORDING.scope -o out.mp4`
-  — a quick non-integrated look at a recording's waterfall, useful before committing to a
-  full contest_video.py render). Both read the format via `icom_net.read_scope_records`,
-  the format's single owner — `contest_video.py` doesn't reimplement the parser.
+- Sweeps are ordinary CI-V `0x27` frames on the **existing** CI-V socket (port
+  50002) — not a separate stream and not separately negotiated. (There is no scope
+  port; see FINDINGS.md, which is where that dead end is recorded.) Enabled with two
+  plain CI-V writes, `27 10 01` (scope on) and `27 11 01` (data output on) —
+  `enable_scope()`. Off by default since it is a much heavier stream than Transceive
+  frames; opt in explicitly, as `--scope` does on the CLI.
+- Pixel bytes are raw `0`–`160` linear scope units, 475 bins per sweep on this
+  radio, whole sweep in one datagram. Frame layout and the Centre-mode
+  centre/half-span arithmetic are in FINDINGS.md.
+- **Reassembly is defensive**: `_apply_scope_frame` buffers pixels across
+  `sequence` 1..`sequence_max` and only fires `on_scope()` on a complete sweep, even
+  though this radio always sends `sequence_max == 1` over LAN. Essentially free, and
+  it is what a multi-packet sweep would need;
+  `test_parse_scope_frame_multi_sequence_reassembly` exercises the path with a
+  synthetic two-packet sweep.
+- **Recording format**: `write_scope_record` appends one binary record per sweep —
+  `<f8 timestamp><u4 start_hz><u4 end_hz><u2 npixels><npixels raw bytes>`.
+  Deliberately not JSONL like the telemetry/input logs: those are ~1 record/second
+  and human-debuggability matters more than size, while sweeps arrive several times
+  a second already byte-quantised. Verified byte-exact round-trip against real
+  hardware. `icom_net.read_scope_records` is the format's single owner —
+  `contest_video.py` and `scope_preview.py` both read it through that, neither
+  reimplements the parser.
 
-### Meters and the rest of the CI-V surface
+### Meters
 
-`enable_meters()` polls Po/SWR/Vd/Id (`CIV_METERS`) at `METER_POLL_S` (0.5 s) and reports
-one snapshot per cycle via `on_meters`, rather than firing per reply — that keeps the four
-values in a record genuinely simultaneous and lets a recorder write one line per cycle
-instead of four. Off unless asked for, like `enable_scope`, and re-armed on every reconnect
-since the poll thread belongs to its session. The **S-meter (`15 02`) is deliberately not
-polled**: `contest_video.py` derives signal level from the scope recording's own centre
-bins, which costs no extra traffic and is already captured.
+`enable_meters()` polls Po/SWR/Vd/Id (`CIV_METERS`) at `METER_POLL_S` (0.5 s) and
+reports one snapshot per cycle via `on_meters`, rather than firing per reply — that
+keeps the four values in a record genuinely simultaneous and lets a recorder write
+one line per cycle instead of four. Off unless asked for, like `enable_scope`, and
+re-armed on every reconnect since the poll thread belongs to its session.
 
-`puskas_logger.py` writes raw readings into the event telemetry on change
-(`_telemetry_meter_record`). Unlike the old 1 Hz rig sampler this genuinely has to be
-sampled — the radio only reports meters when asked — so there is no lag-free source being
-needlessly re-sampled. While receiving, Po/SWR/Id sit at a flat zero and Vd barely moves,
-so change-only keeps an idle hour nearly silent.
+Polling is unavoidable here: the radio only reports meters when asked. **The
+S-meter (`15 02`) is deliberately not polled** — `contest_video.py` derives signal
+level from the scope recording's own centre bins, which costs no extra traffic and
+is already captured.
 
-The findings behind all of it, from three `dumpcap` captures of a live **wfview** session against this radio
-(same technique as the scope research above — wfview is a known-good client, so capturing
-it answers "how does a working implementation do this" without needing our own session,
-and crucially without taking the radio's single session slot away from it). Nothing here
-is wired into any tool yet; recorded so the measurements don't have to be repeated.
-
-- **Only two things are ever pushed unsolicited: freq/mode Transceive frames and scope
-  sweeps (`27 00`, ~29/s). Everything else is polled** — wfview queries the S-meter
-  (`15 02`) at **~19 Hz**, plus PTT (`1c 00`), OVF (`15 07`), VFO frequency/mode
-  (`25`/`26`) and assorted settings at 1–3 Hz. So a live S-meter needs a poller; there is
-  no push option to find. Affordability is settled by the same capture: the radio sustains
-  ~30 queries/s alongside 29 scope sweeps/s and an audio stream without trouble.
-- **Every outbound frame appears twice in a capture** — the radio echoes the client's own
-  frames back on the CI-V stream (see the raw-frame note above), so a naive frame counter
-  reads exactly 2x. Every query/reply pair in these captures came out at precisely 2:1,
-  which is what confirmed the echo rather than some retransmit behaviour.
-- **Meter calibration, measured against real instruments** (raw values are 0–255, sent as
-  4-digit BCD across two bytes):
-  | Meter | RX | TX | Verdict |
-  |---|---|---|---|
-  | `15 02` S | 0–6 quiet, 150 on a strong signal | not polled | S9 = raw 120 |
-  | `15 11` Po | not polled | 213–214 | 100% — matches the 0/143/213 curve |
-  | `15 12` SWR | 0 | 27–29 | ≈1.3 via 0/48/80/120 → 1.0/1.5/2.0/3.0 |
-  | `15 15` Vd | **152** | — | **13.66 V** vs 13.78 V on a multimeter (0.9% — curve transfers) |
-  | `15 16` Id | 0 | 169–172 | **the 7300 curve does not transfer** (see below) |
-- **Vd reads on receive**, which is the case that matters for portable battery ops —
-  watching a pack sag across a round beats a momentary key-down dip. Id is PA drain only
-  and reads a literal 0 on RX.
-- **Id's scale, measured: a straight line through the origin at 0.0741 A per raw unit**
-  (~17.9 A full scale, against Icom's 25 A). Taken with a multimeter in series with the
-  supply, PA drain = total current less the measured 1.18 A receive baseline. The low
-  cluster (raw 55-64, 3.9-4.7 A) alone gives 0.0726 and adding a 100%-power anchor at
-  raw 171 gives 0.0741 — two nearly independent estimates a factor of three apart in
-  current, agreeing to 2%, which is what makes "linear through zero" believable rather
-  than merely fitted. The low cluster cannot determine a slope alone: it spans nine raw
-  units, so a free (non-origin) fit through it returns a physically absurd −1.5 A
-  intercept purely from the short lever arm. Residuals within ±5.3%, worst at the lowest
-  point.
-- **A cheap multimeter's burden voltage is enough to brown the radio out, and the radio
-  itself measures it.** With the meter in series the session's own `vd` readings fell to
-  raw 22-41 — 10.2-10.7 V at the radio against 13.7 V at the supply, i.e. ~0.55 Ω of
-  shunt plus lead resistance — and at 25% power the radio hit undervoltage and switched
-  off, twice, reproducibly. The current readings are *still valid* for calibration
-  regardless: Id measures drain current, and a (raw, amps) pair describes one instant
-  however degraded the supply was at that instant — which is why a run that looked like
-  a failure produced the fit above. What the brownout does cost is the assumption that
-  the receive baseline stays constant while it is being subtracted, which is part of why
-  the lowest reading is the worst-fitting one.
-- **Vd's own curve is confirmed by the same session.** Across 10-100% power the gap
-  between supply voltage and converted Vd grows 0.37 → 0.81 V, and that gap is *linear
-  in current*: 54 mΩ of series resistance with a 0.10 V intercept. A wrong Vd curve would
-  have shown curvature or a nonsense intercept, so Icom's points stand. The 54 mΩ is
-  itself worth knowing — 0.69 V lost between supply and PA at full power, which for
-  portable battery operation is the difference between holding up and browning out on
-  key-down. The bench supply itself barely sags (13.78 → 13.70 V), so that loss is cable,
-  connector and internal, not the source.
-- **Superseded — Id's scale was previously unresolved:** The IC-7300 curve (0/97/146/241 →
-  0/10/15/25 A) gives 17.6 A for raw 171, but the PSU's own current meter read 14 A total
-  during that same transmission, of which ~2 A is the radio's RX baseline — so PA drain
-  was ~12 A. One TX point can anchor a linear scale near the operating point but can't
-  resolve the curve's shape. **Consequence for the recorder: store raw meter values and
-  convert at render time**, so a better calibration is a one-line change rather than a
-  ruined recording.
-- **The S-meter slot switches to Po on transmit, in the protocol and not just the
-  display**: `15 02` stops being queried entirely during TX and `15 11` starts. A consumer
-  therefore needs PTT to label the reading — which `contest_video.py` already has losslessly
-  from the WAV metadata.
-- **`25 00`/`25 01` is VFO A/B of the selected receiver, not main/sub.** A capture showed
-  144.800 FM and 144.1735 USB simultaneously, which looks like dual receive but isn't —
-  confirmed from the radio itself, where A and B move together when the band changes.
-  Reading the *other band's* receiver (the IC-9700's real dual-watch, e.g. monitoring 70cm
-  while working 2m) needs a command we haven't identified; `07 D0`/`07 D1` switches the
-  selection, but that is intrusive for a passive monitor. wfview has a sub-band display
-  (`SubPlotCeiling`/`SubWFLength` in its config), so one capture with dual watch actually
-  enabled would reveal it.
-- **Scope commands carry a main/sub selector, and `parse_scope_frame` would drop the sub
-  band's sweeps.** wfview sends every scope *settings* command twice, once ending `00` and
-  once `01` (`27 14 00`/`27 14 01`, and likewise `27 15`, `27 19`, `27 1a`). By the same
-  pattern `frame[4]` of a `27 00` waveform frame is that selector — but `parse_scope_frame`
-  asserts it is `0x00`, so sub-band sweeps would be silently discarded. Not a live problem
-  (all 439 waveform frames captured were main, and the sub scope's data output was never
-  enabled), just a limit to know about before anyone tries.
+**Store raw meter values and convert at render time**, so a better calibration is a
+one-line change rather than a ruined recording. Curves and the measurements behind
+them are in FINDINGS.md.
 
 ## contest_video.py – Annotated CW contest video
 
-Turns a CW contest recording plus its EDI log into a YouTube-ready MP4 with a
-scrolling audio waterfall, a live CW-decode ticker, an RX/TX + rig badge, and
-optionally a picture-in-picture of the logger's own terminal session (see
-`--cast` below) and/or a webcam. Built for reuse across future contests
-recorded the same way.
+Turns a contest recording plus its EDI log into a YouTube-ready MP4: a scrolling
+waterfall background, a DOOM-style HUD status bar, and picture-in-picture of the
+logger's own terminal session and the operator's webcam.
 
 ```
 uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
 ```
-- Dependencies: `numpy`, `pyte`, `pillow` (uv script header) + `ffmpeg`/`ffprobe` on PATH
-- **Input**: a directory of WAV segments named `YYYYMMDD_HHMMSS...wav` (local
-  time), split on RX/TX switches, plus the EDI log for the same round. The
-  recorder splits continuously, so segments are contiguous — the audio timeline
-  is the sum of segment durations; filename wall-clock is used only to line QSOs
-  against the audio. Segments must share one sample rate/format (concatenated
-  with `ffmpeg -f concat -c copy`).
-- **Multiple EDI files merge into one timeline**: a session worked across
-  several bands (e.g. 2M + 70CM) writes one EDI per band, but it's still a
-  single physical recording. `edi` takes `nargs='+'`; `merge_edi` parses each
-  file and concatenates+sorts by `dt` into one chronological QSO list. `Qso`
-  itself carries no band field — the pipeline never needed one, since a QSO's
-  band only mattered for logging, not for rendering.
-- **CW decode is per-segment**: each WAV is one over at one speed, so a
-  complex-demodulate envelope decoder with per-segment adaptive dit estimation
-  is robust and yields absolute per-character timestamps for sync.
-  `decode_segment` skips segments longer than `MAX_OVER_S` before doing any
-  signal processing, since `gate_events` would reject them on duration alone
-  regardless — this alone roughly halved total decode time on real recordings.
-- **The demodulation pitch is auto-detected per segment** (`_detect_pitch`),
-  not assumed to be a single `--pitch` (default 600 Hz) for the whole
-  session — that argument is now only a fallback for the rare case nothing
-  is found at all (e.g. true silence). Found from real received-signal
-  segments: one RX segment's true tone was ~1296 Hz against the 600 Hz
-  default, a 695 Hz gap entirely outside the envelope lowpass's passband
-  (`LOWPASS_CUTOFF_HZ=120`) — not a decode-quality problem but a near-total
-  loss of the actual signal before decoding even started (measured SNR
-  near 0). The operator's own TX sidetone auto-detects to within ~1 Hz of
-  600 Hz regardless (verified across several real TX segments from two
-  different QSOs), so always auto-detecting is strictly better than only
-  doing it conditionally.
-- **Envelope filter/threshold constants** (`LOWPASS_CUTOFF_HZ`, `LOWPASS_NTAPS`,
-  `THR_HI_FRAC`/`THR_LO_FRAC`): a windowed-sinc lowpass (`_lowpass_kernel`) plus
-  hysteresis thresholding (`_hysteresis_on`), verified against real recordings to
-  raise SNR for moderate-offset interference (~150 Hz+) with no effect on
-  genuine nearby QSOs. See RECORDING.md's "CW decoder behaviour" section for
-  the full before/after numbers and the hard limit on closer-in interference.
-- **RX (received signal) decodes far worse than TX (the operator's own
-  sidetone) at the same SNR, and needed its own fix.** Diagnosed against a
-  real RX segment with known ground truth (`20260706_160342A.wav`, the
-  user transcribed it by ear as `TU CFM 5NN TT3 TT3 JN86SR K`): despite a
-  33 dB SNR (well above `MIN_SNR_DB`), the raw decode was gibberish. SNR
-  measures average loudness, not the cleanliness of individual element
-  edges — dumping the exact hysteresis run durations showed many on/off
-  runs a fraction of a dit long (10-40 ms against a ~55 ms dit), fragmenting
-  single dits/dahs into several pieces. The operator's own TX sidetone is
-  a clean, locally-generated tone with none of this; a real received signal
-  picks up QSB/AGC/near-threshold noise the sidetone never has to deal
-  with. `_debounce_on` merges any on/off run shorter than
-  `DEBOUNCE_DIT_FRAC` (0.5) of the segment's own *preliminary* dit estimate
-  into its neighbour, run in `decode_segment` between hysteresis and the
-  final (real) dit estimate — two passes, since the debounce threshold
-  itself needs a dit estimate to scale against. Deliberately relative to
-  the segment's own dit, not a fixed time: a fixed 30 ms threshold (tuned
-  against this one file) silently ate *all* decode at 45 WPM in the
-  existing synthesized-WPM regression test, where a dit is only ~27 ms —
-  caught by that test, not by the real-data check, which is exactly why
-  both exist. `THR_HI_FRAC`/`THR_LO_FRAC` were also lowered (0.5/0.3 →
-  0.35/0.15) as part of the same tuning pass, both found via a grid search
-  scored by edit distance to the known ground truth text. Net effect on
-  the real July recording's first 20 minutes: 187 characters from 13
-  trusted overs → 500 characters from 30, with no regressions in the
-  existing decoder test suite (12-60 WPM) or on previously-good TX segments.
-- **Trust gate** (`gate_events`): the long "listening / calling CQ" stretches
-  between QSOs carry overlapping signals and noise at the CW pitch that decode to
-  gibberish. A segment's decode is shown only if it is short (`< MAX_OVER_S`),
-  loud enough (`>= MIN_SNR_DB`), word-shaped (`_quality >= MIN_QUALITY`), and not
-  a chopped steady carrier (`_dominance <= MAX_DOMINANCE`, only checked at all
-  once there's `>= MIN_CHARS_FOR_DOMINANCE` characters — see below). This keeps
-  every real over and rejects the noise. Tune these constants, not the decoder,
-  if a future recording gates too aggressively/loosely.
-  - `MAX_OVER_S` is 35s (was 30s): raised after a real, correctly
-    transcribable 32.5-second exchange (a full report + locator handoff)
-    was being skipped before decoding even started. No clean statistical
-    gap here the way there is for `FREQ_MATCH_TOLERANCE_HZ` — real segment
-    durations form a continuum from 30s past 100s — so this is a modest,
-    evidence-backed nudge for one confirmed case, not a broad guess; the
-    other three gates still guard genuinely long listening periods that
-    happen to land in the 30-35s range.
-  - `MIN_CHARS_FOR_DOMINANCE` (5): any 2-character decode has dominance
-    `>= 0.5` by construction (the two characters either match, giving 1.0,
-    or don't, giving exactly 1/2 — never less), so `MAX_DOMINANCE=0.4` was
-    structurally impossible to pass for *any* two-letter contest word
-    ("TU", "R", "K"...), independent of content. Found from real,
-    correctly-decoded "TU" and "73 EE" being silently dropped from the
-    ticker. Below this length, `_dominance` just returns `0.0` — the
-    "chopped carrier" pattern it guards against only shows up over many
-    characters in practice anyway.
-- **Long segments can still hide a real CW exchange between *other*
-  stations**: our own recorder only splits a new WAV file on our own PTT,
-  so a segment where we just listened to someone else's whole exchange --
-  e.g. two stations negotiating a CW frequency over voice, working each
-  other in CW, then moving on -- stays one long file, and `decode_segment`
-  never even attempts it once it exceeds `MAX_OVER_S`. `decode_long_segment`
-  recovers this: it finds telemetry-confirmed CW-mode sub-ranges within the
-  segment (`cw_subranges`, from `build_state_events` -- exactly the same
-  sub-division already used for the rig/rotator badge), extracts just that
-  audio (`_read_wav_range`), and decodes it with `_decode_samples` (the
-  actual pipeline, factored out of `decode_segment` so both can share it).
-  The sub-range's own duration is deliberately *not* checked against
-  `MAX_OVER_S` (`gate_events(..., check_duration=False)`) -- a real two-way
-  exchange between other stations can easily run longer than one of our own
-  overs, and the duration gate's only purpose was rejecting segments whose
-  *unexplained* length made them suspicious; telemetry mode confirmation is
-  already stronger evidence than length that this specific span is genuine
-  CW, not noise. SNR/quality/dominance still apply. Verified against a real
-  reported case (`20260706_163045A.wav`, 305s: FM voice → CW → SSB → FM →
-  CW, the two stations negotiating a frequency and working each other) --
-  recovered readable text from both CW windows, where before there was
-  nothing at all. One known limitation: the two stations may key at
-  noticeably different speeds, but dit-length is estimated once across the
-  whole sub-range, which can degrade accuracy for whichever side differs
-  most from that single estimate. `main()` loads WAV metadata and telemetry
-  *before* decoding now (previously after), since finding these sub-ranges
-  needs `state_events` up front. A second, easy-to-miss bug this exposed:
-  `remap_audio_t`'s `--skip-gaps` trimming decides whether to shrink a
-  segment to `GAP_KEEP_S` based on whether it has any `s.events` -- but a
-  long segment's recovered content is deliberately kept *out* of `s.events`
-  (to keep per-span burst-flushing correct in the ticker, see below), so
-  without an explicit exemption `--skip-gaps` would trim exactly the
-  segment whose audio was just recovered, and `concat_audio`'s `outpoint`
-  would cut that audio out of the rendered file entirely. `remap_audio_t`
-  now takes a `long_cw_segs` set (`id(seg)` for segments decode_long_segment
-  found content in) to exempt them.
-- **The ticker merges normal per-segment decodes with recovered long-segment
-  spans into one chronological list before building the transcript**,
-  flushing wherever the real gap since the previous chunk exceeds
-  `MAX_OVER_S` -- the same threshold used everywhere else to tell a genuine
-  over from a genuine gap -- rather than the old per-segment bookkeeping.
-  This matters because a single long segment can contain *two* unrelated
-  recovered exchanges (e.g. we followed one QSO, then later another, without
-  ever transmitting in between): dumping both into that segment's own event
-  list the way normal segments work would show them as one continuous,
-  un-flushed burst, which is why they're kept separate from `s.events` and
-  passed to `build_ass` as `long_cw_spans` instead.
-  This same change independently fixed a second real bug, found watching
-  an actual rendered video: a fresh CW QSO's ticker still showed a CW QSO
-  decoded over four minutes earlier. Between the two, the operator worked
-  several SSB/FM contacts, each individually short (`dur <= MAX_OVER_S`) --
-  so no *single* segment in between ever looked like a "genuine gap" to
-  the old per-segment `prev_was_gap` bookkeeping, which only checked
-  whether the one immediately-preceding segment was long, regardless of
-  how much real time had actually passed across several short ones
-  combined. Keying the flush decision on the real time gap since the last
-  *included* chunk fixes this the same way, with no special-casing needed.
-- **UTC offset is derived**, not hardcoded: EDI times are UTC, WAV filenames are
-  local; `derive_utc_offset` rounds the span-midpoint difference to whole hours,
-  so DST is handled automatically.
-- **Rendering is one ffmpeg pass**: the RX/TX badge and CW ticker (the only two
-  overlays `build_ass` still produces — see "Terminal-session PiP" below for why
-  the rest were removed) are one ASS subtitle file burned over an `showspectrum`
-  waterfall (dimmed to ~0.42 luma so text stays readable). No frame-by-frame
-  rendering. The waterfall fills the frame within the first ~80 s, then stays
-  full. The terminal-session and webcam PiPs (also below) are composited in the
-  same `filter_complex` graph, in the same ffmpeg invocation.
-- The video keeps the recording's full length.
-- **`--duration SECONDS` for a chronological preview cut**: trims to the first
-  `SECONDS` of real session time — a straight, uncut trim (not a curated
-  highlight reel; that was considered and rejected as much more machinery for
-  a first cut). `trim_to_duration` runs *before* the CW-decode loop, not
-  after, and drops segments past the cutoff outright rather than decoding the
-  full session and discarding most of the result — the main cost of this
-  pipeline is CW decoding, so a 10-minute preview of a 2-hour session decodes
-  roughly 12x less audio. QSOs past the cutoff are filtered out of the merged
-  list before chapters/SRT are built so nothing gets a chapter/caption with no
-  time left in the clip to show it in.
-- **`--webcam PATH` for a picture-in-picture selfie/webcam overlay**, bottom-
-  right corner, muted (radio audio is the only soundtrack — the cam mic would
-  just add room noise/echo of the operator's own on-air voice), mirrored with
-  `hflip` since a phone's front camera records un-mirrored relative to what
-  the operator saw in the viewfinder while recording. Sync is the interesting
-  part: the webcam is a *different device* with its own clock convention, not
-  necessarily the WAV recorder's — in the first real use of this feature the
-  WAV recorder happened to stamp filenames in plain UTC while the phone
-  stamped its own in local wall time, two different offsets for the same
-  session. So the webcam's start position in the output timeline is derived,
-  not assumed: `sync_webcam_start` wraps the whole clip as a synthetic
-  one-segment "recording" and reuses `derive_utc_offset`'s own span-midpoint
-  match against the *full* QSO list (never a `--duration`-trimmed subset —
-  a short preview's QSO span is too narrow an anchor for reliable hour
-  rounding) to find the webcam's own offset, then maps its true start onto
-  the main timeline via `audio_time_for`. In `render()`, `-itsoffset` delays
-  the whole cam stream's presentation timestamps so its own frame 0 lands
-  exactly at that computed start — no input seeking needed, since the cam's
-  own t=0 already *is* the first frame we want. `tpad=stop_mode=clone`
-  clones the cam's last frame indefinitely so a clip a little shorter than
-  the session (as in that first real case) can never end the shared
-  ffmpeg filtergraph early and silently truncate the main waterfall/audio —
-  a real risk class with multi-input filtergraphs, not a hypothetical.
-  **The PiP's own video is explicitly resampled to `RENDER_FPS` before
-  scaling** (`fps={RENDER_FPS}` in the `[1:v]` filter chain) — for a real
-  reported bug: sync was correct at the start of a video but the audio
-  read as over a second late by the end. A phone recording's video stream
-  can claim a constant frame rate (`ffprobe`: `r_frame_rate` 30/1) while
-  its own per-frame timestamps are genuinely variable — confirmed directly
-  against the real webcam file by reading every packet's own `pts_time`:
-  not one big pause but 3,444 scattered micro frame-drops across the ~2h
-  recording (typical thermal/buffer pressure on a long phone capture),
-  summing to exactly 0.753s of real elapsed time its raw frame count alone
-  doesn't account for (218,052 frames at a flat 30fps only spans 7268.4s;
-  the container's real, PTS-accurate duration is 7269.12s). Without an
-  explicit `fps=` filter, the PiP branch was effectively laid out by frame
-  count rather than by each frame's own true timestamp, so it silently ran
-  very slightly fast relative to the audio-driven main timeline the whole
-  way through. `fps=` resamples using the decoder's true per-frame PTS as
-  its reference, duplicating frames onto a clean, constant `RENDER_FPS`
-  grid that absorbs every one of those scattered drops — eliminating the
-  drift instead of just reducing it.
-  **This alone did not fix a second, separate reported drift** ("video
-  ahead of audio" by 1:48 into a ~2h session, confirmed by ear and
-  independently by uploading to YouTube): the phone and the radio recorder
-  are two *independent* devices, and their clocks simply don't tick at
-  exactly the same *rate* — a small, real crystal-oscillator mismatch,
-  unrelated to the frame-drop issue above (that one was already verified
-  fixed via a labeled-frame re-composite test showing sub-3ms accuracy a
-  full hour in). `sync_webcam_start`/`derive_utc_offset` only ever correct
-  a whole-hour *offset* (timezone/DST, by design — see below); any
-  sub-hour clock *rate* skew between the two devices was passing straight
-  through uncorrected the whole time, invisible to every test that only
-  checked "does the render faithfully apply whatever webcam_start it was
-  given" rather than "is webcam_start itself correct". Diagnosed by ear:
-  the webcam has its own audio track (unused in the final output — see
-  below — but still on disk), and the operator's own voice reaches both
-  the phone's mic and the radio's mic at the same real-world instant.
-  Extracting the speech onset from both (a simple RMS envelope threshold)
-  and comparing against the assumed `webcam_start` showed a **growing**
-  gap: sampling confident anchors across the real session found the needed
-  correction climbing smoothly from ~0s near the start to ~+3.2s near the
-  end — a linear drift, not a constant one, and not something a single
-  offset (however well chosen) can correct for the whole video at once.
-  `refine_webcam_start` fits this directly: for several of the operator's
-  own TX segments (`s.ptt`, at least 1.5s, sampled evenly across the
-  *whole* session so the fit has real time range to constrain the rate —
-  an earlier version that only took the first few anchors clustered them
-  in the first few minutes and got a near-meaningless rate estimate) it
-  reads that segment's own radio audio straight from its WAV file, and
-  cross-correlates it (`_find_offset_correction`, via `_rms_envelope` — a
-  coarse amplitude-rhythm signature, robust to the very different
-  frequency/timbre of two different microphones/paths capturing the same
-  speech, unlike correlating raw waveform samples directly) against a
-  padded window of the webcam's own audio extracted around where the
-  coarse sync predicts it should be. Only anchors above `min_confidence`
-  (0.3 — real data showed a clean gap between spurious matches at
-  0.08-0.29 and genuine ones at 0.34-0.77) are kept, and a degree-1
-  least-squares fit (`np.polyfit`) across their `(audio_t, correction)`
-  pairs gives both the corrected intercept (folded into `webcam_start`,
-  same meaning as before) and the rate. Applying a linear rate needs more
-  than `-itsoffset` (a constant shift): `render()` applies
-  `setpts=PTS/(1-webcam_rate)` on the PiP branch, *before* the `fps=`
-  resampling above (so the resampling itself operates on the
-  already-corrected timeline) — stretching or compressing the PiP's own
-  presentation timestamps just enough to compensate. Verified against the
-  real recording: at the exact reported drift point, the coarse-only
-  mapping was off by 2.73s; the rate-corrected mapping was off by 0.07s.
-  **`--webcam-offset SECONDS` is a manual fallback**, added in the same
-  pass: a fixed correction added to the coarse `webcam_start`, bypassing
-  cross-correlation entirely (no rate compensation) — for a webcam clip
-  with no audio track, or wherever cross-correlation can't find a
-  confident match.
-  **For a logger-recorded webcam (Alt+V, same machine — see
-  puskas_logger.py's own Webcam capture notes), none of the above
-  cross-correlation/rate-fitting machinery is needed at all**: since Alt+V's
-  stop handler now renames the file with a µs-precise timestamp,
-  `parse_webcam_precise_filename` reads it straight from the filename —
-  preferred over `webcam_start_from_log` (the `*-webcam.log` sidecar, same
-  precision but depends on that file surviving alongside the video) and
-  `webcam_start_wall` (the logged `webcam_start` event, ~1s early), in that
-  order, both kept as fallbacks for recordings made before the rename
-  existed. The independent-device cross-correlation/drift-rate path above is
-  only ever reached for the phone-clip case, where there genuinely are two
-  unrelated clocks to reconcile.
-- **`--cast PATH` for a terminal-session picture-in-picture**, replacing what
-  used to be separate QSO panels, a running-score header, a UTC clock, and a
-  typewriter overlay of what was typed. `PATH` is an asciinema (cast v2)
-  recording of the tmux session running irssi + `puskas_logger.py` during the
-  contest (see "Recording the logger session" below for how to make one) — the
-  logger's own screen already shows the callsign/band/mode/QSO list/timestamp
-  live, so reconstructing any of that as a separate overlay was pure
-  duplication once this became possible. The only thing the terminal session
-  *can't* show is RX/TX: `puskas_logger` has no way to know the rig's real PTT
-  state until the WAV recordings are downloaded from the SD card after the
-  contest and their IC-9700 metadata is read back — that's what the badge
-  (above) is still for.
-  - **Rendering the cast is its own pipeline stage** (`render_cast_video`),
-    producing a standalone intermediate mp4 before the main `render()` call,
-    in the same spirit as `concat_audio`'s intermediate wav — not rendered
-    frame-by-frame inline with the main waterfall/ASS pass, since replaying
-    terminal escape codes into pixels is a different kind of work entirely.
-    It uses `pyte.Screen`/`pyte.ByteStream` to replay the cast's terminal
-    escape codes into a `pyte` screen buffer, and Pillow (`ImageFont`/
-    `ImageDraw`) to draw each character cell onto a canvas which is piped
-    straight into `ffmpeg` as raw video frames (`-f rawvideo -pix_fmt rgb24`)
-    — no intermediate PNG files per frame.
-  - **Only redraw rows pyte marks dirty, not the whole canvas every
-    frame**: a first implementation redrew every row on every tick and took
-    123.8s to render a 76.9s clip (0.62x realtime — impractical for a full
-    contest-length session, which would have taken hours). `pyte.Screen`
-    already tracks exactly which rows changed since the last time it was
-    read (`screen.dirty`); redrawing only those onto a canvas that persists
-    across frames (rather than rebuilding from scratch) cut this to 25.6s
-    for the same clip (~3x realtime, ~40min for a full 2h session) — a 5x
-    speedup, verified on the same input before/after the change.
-  - **Line height must come from the font's own metrics, not a rule of
-    thumb**: `lh = int(CAST_FONT_SIZE * 1.2)` (a common monospace
-    line-height approximation) undershot DejaVu Sans Mono 13pt's real
-    `ascent + descent` (17px vs. the approximation's 15px) by enough that
-    descenders (e.g. underscores) got clipped by the *next* row's own
-    background-clearing rectangle on redraw — found from the user directly
-    reporting "some characters are off, seems to be some buffer garbage" in
-    a rendered preview. Root-caused by comparing the direct pre-encode
-    canvas against the same frame decoded back out of the rendered mp4
-    (ruling out video compression as the cause), then checking
-    `font.getmetrics()` against the row height actually in use. Fixed with
-    `lh = ascent + descent`; verified via a before/after pixel-diff of the
-    exact same frame (39 differing pixels with the old formula, 0 with the
-    fixed one) before writing the permanent regression test
-    (`test_draw_cast_row_descender_survives_the_row_belows_own_redraw`).
-  - **A second, separate "buffer garbage" artifact the user spotted (stale
-    startup-screen text still showing behind the contest screen) is a real
-    renderer bug, fixed by `_CastScreen`/`_CastStream`** — subclasses of
-    `pyte.Screen`/`ByteStream` that implement three CSI sequences stock pyte
-    silently drops. The cast is recorded with the logger running inside
-    **tmux** (two panes: irssi + logger), and tmux clears/scrolls a *single*
-    pane by setting left/right margins (DECSLRM, `CSI Pl;Pr s`) and then
-    scrolling within them (SU `CSI Ps S` / SD `CSI Ps T`). pyte implements
-    none of the three (verified: no `S`/`T`/`s` in its CSI dispatch table, and
-    `?69h`/DECLRMM is ignored), so the pane was never actually cleared — when
-    the logger cleared its screen (`\x1b[2J\x1b[H`, which tmux translates into
-    a per-pane `\x1b[97;191s\x1b[51S`) and redrew shorter content, the old
-    tail stayed on screen. `_CastScreen.scroll_up`/`scroll_down` mirror pyte's
-    own `index`/`reverse_index` but operate cell-by-cell within *both* the
-    top/bottom margins (pyte's `self.margins`) and the left/right margins
-    (`self.margins_lr`, new), so only the pane's own columns shift; the other
-    pane and the `│` separator are untouched. `set_left_right_margins`
-    distinguishes DECSLRM (2 params) from a bare `CSI s` = SCOSC save-cursor
-    (<2 params). `_CastStream.csi` adds the three missing final bytes to the
-    dispatch table. **This corrects an earlier diagnosis** that called the
-    same garbage a genuine *source* artifact ("the logger omits
-    erase-to-end-of-line; any correct terminal would show it too") and left it
-    as-is — wrong on both counts: `asciinema play` (a correct emulator that
-    *does* honour SU+DECSLRM) always showed the cast clean, and the erase is
-    tmux's, not something the logger owes. Verified end-to-end on the real
-    July cast: the transition frame that showed `no QSOs yet5LA-2M.edi (34
-    QSOs)…` and `JN97TFS]:` now renders `no QSOs yet` and `JN97TF` cleanly
-    (regression tests `test_stock_pyte_leaves_stale_pane_content` /
-    `test_cast_screen_clears_only_the_pane_columns`). The dirty-row redraw
-    optimization is unaffected — `_scroll` adds the rows it shifts to
-    `screen.dirty`, so the incremental canvas still picks them up.
-    (A recording made *outside* tmux, or of a single pane, never emits these
-    sequences — the logger's own `\x1b[2J\x1b[H` is handled by stock pyte
-    fine — so this only bites tmux-captured casts, which is the documented
-    recording method.)
-  - **Layout**: `CAST_PIP_WIDTH_FRAC`/`CAST_PIP_X_FRAC`/`CAST_PIP_Y_FRAC`
-    position the cast as a large PiP — the dominant visual element, not a
-    small inset, since the terminal session is most of what there is to
-    watch — occupying most of the frame below the RX/TX badge (top-left)
-    and above the CW ticker (bottom-center), with the small webcam PiP (if
-    used) in the bottom-right corner, clear of the cast box horizontally
-    regardless of its vertical extent. The fractions are sized against
-    `render_cast_video`'s *real* output aspect ratio (~1.69 for a 191x52
-    DejaVu Sans Mono 13pt terminal — a first mockup used ~1.91, since it
-    was rendered before the descender-clipping line-height fix above
-    shortened rows; using the stale aspect left too little room below the
-    box and would have visually covered the ticker text). Verified
-    end-to-end (not just the two unit-tested bugs above) with a full
-    synthetic render — a silent WAV session plus `hello.cast` — checking an
-    actual decoded frame from the output mp4 to confirm the PiP box clears
-    both the badge above and the ticker's reserved space below at both
-    1080p and 720p.
-  - **Sync is exact, unlike the webcam**: an asciinema cast file's header
-    `timestamp` field is a Unix epoch — real, absolute UTC with no
-    filename-parsing or whole-hour-rounding ambiguity the way
-    `parse_webcam_wall` has for a phone clip (see `sync_webcam_start`
-    above). `parse_cast_header` reads it directly; `main()` computes the
-    cast's start position in the output timeline with a single
-    `audio_time_for(cast_wall + timedelta(hours=offset_h), segs)` call — no
-    `stream_start(cast_wall + timedelta(hours=offset_h), segs)` call — no
-    `refine_webcam_start`-style cross-correlation needed, since there's no
-    second physical clock to drift against.
-  - **A stream that began before the audio must be entered partway in, not
-    clamped to t=0.** `stream_start` is `audio_time_for` except for exactly
-    this case: `audio_time_for` clamps any wall time before the first WAV
-    segment to `segs[0].audio_t`, which pins the cast's own frame 0 to video
-    t=0 and makes everything in the PiP read late by the whole cast-to-WAV
-    gap — observed as the cast PiP's clock lagging the session by 25 s.
-    This is the **normal** case, not an edge case:
-    `run-recorded-contest-session.sh` starts asciinema before the radio
-    recorder is switched on, so every cast made through the documented
-    entrypoint begins ahead of the audio; the logger's `.scope` recorder
-    (starting when the radio connects) is in the same position, which is why
-    `--scope` goes through `stream_start` too. `render()` turns the negative
-    value into an `-ss` seek *into* that input
-    (`_stream_input_args`) rather than a negative `-itsoffset`, which ffmpeg
-    has no meaningful interpretation for — the frames before t=0 are simply
-    ones the output never shows. Verified against real ffmpeg rather than
-    just asserted on the command string: overlaying a timer-labelled clip
-    with `-ss 25` puts that clip's own t=25 at output t=0 and advances 1:1
-    from there (t=3 → 28, t=7 → 32), confirmed by pixel-matching the
-    composited PiP region back against the source clip's frames. The
-    `enable=` gates clamp to `max(start, 0.0)`, since a negative threshold
-    is trivially always true. One knowingly-accepted imprecision: with `-ss`,
-    the cast branch's `setpts` drift correction measures from the seek point
-    rather than the cast's true frame 0, losing `seek × cast_rate` of
-    correction — ~11 ms for a 25 s seek at the real measured drift rate, a
-    third of a frame at `RENDER_FPS`. For the same reason,
-    `render()`'s cast branch has no `setpts` rate-correction term: the cast
-    mp4 is `render_cast_video`'s own synthetic, constant-framerate output,
-    not an independent recording device, so only a plain `fps=RENDER_FPS`
-    resample onto the shared clock is needed (the `-itsoffset` position is
-    already exact). `tpad=stop_mode=clone` still applies, for the same
-    reason as the webcam branch: a cast shorter than the full session can't
-    be allowed to end the shared filtergraph early.
-- **Ticker clears in gaps, doesn't linger**: a ticker event's display end is capped
-  to `TICKER_HOLD_S` (3 s) after its last character, even if the next real
-  character is minutes away across a listening gap. Without this cap the last
-  decoded text stayed on screen for the entire gap, showing stale info.
-- **Ticker/panel/chapter/caption timing all come from real audio structure, not
-  the EDI clock**: the EDI contest format only stores QSO time to the *minute*
-  (no seconds field exists in the format at all), so `parse_edi`'s `qso.dt` is
-  always truncated toward zero seconds — using it directly to decide when to
-  flush the ticker or switch panels could land seconds *into* the next real
-  over, appending that over's opening characters onto the previous QSO's
-  leftover ticker transcript instead of starting fresh (this happened; the
-  regression test is `test_ticker_does_not_leak_across_a_genuine_gap`).
-  `cluster_starts(segs)` instead finds, purely from the decoded WAV segments,
-  every real over that immediately follows a genuine listening gap (a segment
-  with no trusted events and `dur > MAX_OVER_S`) — that is the true start of a
-  fresh burst of on-air activity, sub-second precise, independent of any
-  clock. The ticker flushes exactly there (see the `build_ass` ticker loop).
-  `qso_windows()` snaps each QSO's approximate EDI-derived position onto a
-  cluster start via `_snap_to_cluster` — the *latest* cluster at or before
-  that approximate time, **not the nearest one**. A QSO's own over always
-  starts before it gets logged, so "nearest" can jump ahead to the *next*
-  contact's burst if the current QSO took a while (calling, retries) to
-  complete — this was a second real bug the user caught by spotting that a
-  QSO's panel showed the *following* contact's actual start time (regression
-  test: `test_qso_window_snaps_to_own_burst_not_the_next_ones`). Since
-  `build_chapters`/`build_srt` are built from `qso_windows()`'s windows too,
-  chapters and captions inherit both fixes.
-  A third real bug: when a QSO's approximate time is *before every* detected
-  cluster (e.g. an early QSO, or any QSO on a mostly-voice recording where
-  little or no CW ever gets decoded), `_snap_to_cluster` used to fall back to
-  the *first* cluster in the whole recording — pulling an early QSO's panel
-  minutes into the future (regression test:
-  `test_qso_window_before_any_cluster_uses_approx_time`). It now falls back
-  to the raw approximate time itself in that case.
-  A fourth: `cluster_starts` originally required `s.events` (successful CW
-  decode) to mark a burst start, so it was blind to every voice-mode over —
-  there's no CW there to decode no matter how good the decoder is. On a
-  mostly-voice recording this left almost no burst to snap to at all
-  (regression test: `test_cluster_starts_counts_voice_segments_too`). It now
-  keys on segment duration alone (`dur <= MAX_OVER_S`), since a WAV segment
-  boundary is a precise real-world RX/TX transition regardless of content —
-  voice and CW alike. Verified against the real "mix" recording: clusters
-  went from 5 to 27 across the 51-minute session.
-  **A tempting further step, rejected after testing**: making *every*
-  real-over segment a candidate (not just the first one per coalesced
-  burst) looked appealing for pinpointing exactly which segment within a
-  burst a voice QSO started on, but it regressed the CW round's
-  independently-verified precision — a single QSO's own multi-over exchange
-  spans several segments, and "latest candidate at or before the logged
-  time" then lands on a *later point within that same QSO's own exchange*
-  rather than its true start (confirmed: QSO 2's panel shifted from the
-  verified-correct 520.03s to a wrong 579.14s). Coalescing to one candidate
-  per burst is what makes "latest cluster" mean "start of *this* exchange"
-  rather than "some segment inside it" — don't remove it.
-  **Resolved with a heuristic, not telemetry**: a burst can begin with the
-  operator listening (RX) before their own initiating transmission, so the
-  burst's first segment isn't always where a QSO really starts (e.g. the
-  recording starting mid-listen, before any TX). `_tx_start` finds the real
-  start within a burst without needing PTT data at all: RX and TX strictly
-  alternate (the recorder splits on every switch), and a TX segment — a
-  brief call or report — is consistently shorter than the RX segment either
-  side of it. So whichever alternating phase (even/odd position in the
-  burst) has the shorter median duration is TX, and its first occurrence is
-  the real start (regression test:
-  `test_cluster_starts_skips_leading_rx_to_find_the_tx_start`, built from
-  the exact real durations the user identified by ear: RX 26.11s, TX 2.13s,
-  RX 5.54s, TX 5.41s). Verified to leave the CW round byte-for-byte
-  unchanged — every one of its bursts already happened to start on TX, so
-  there was nothing to correct there; the heuristic only ever moves a snap
-  point *later* within its own burst, never earlier or into a different one.
-  **Known unsolved case, from the user directly**: this breaks down while
-  calling CQ — a stretch of many brief TX calls with only short listening
-  gaps in between has no single "real" start, and an earlier fruitless call
-  looks identical to the one that finally got answered. No fix attempted;
-  falls back to the burst's first segment when the two phases aren't
-  distinguishable (equal medians, or fewer than one of each).
-  There is deliberately no more `LEAD` pre-show constant: once panel timing is
-  snapped to the real over, showing it exactly when the over starts *is* the
-  natural lead (the over itself takes several seconds), so an artificial
-  pre-show margin is no longer needed and was removed.
-- **Rig/rotator overlay: WAV metadata is ground truth, telemetry is a
-  refinement.** Shows a top-left `● TX`/`● RX` badge plus a QRG/mode/bearing
-  line (`144.174 MHz  CW  ROT 135°`) underneath. This went through two
-  designs before landing here, both driven by real bugs spotted from
-  watching an actual rendered preview:
-  - **Design 1 (telemetry-only)**: one `SegState` per `Segment`,
-    majority-voted from whichever 1 Hz `puskas_logger` telemetry samples
-    fell inside the segment's span. Wrong in two ways: freq_hz/mode
-    genuinely can change *within* one long idle/listening segment (nothing
-    to split the WAV on there), so a majority vote could let an early
-    stable reading outvote a later stretch of continuously-tuned,
-    individually-unique readings for minutes; and even ptt itself could lag
-    the true transition by up to a second, since a 1 Hz poll isn't
-    synced to the WAV split at all.
-  - **Design 2 (telemetry, split into runs)**: fixed both problems from
-    within telemetry alone -- sub-dividing freq_hz/mode into runs *within*
-    a segment, and taking ptt from the segment's *last* known telemetry
-    reading (most likely to have caught up) rather than the first or a
-    vote. Both real, working fixes -- but then the user discovered
-    something better while inspecting a WAV file directly.
-  - **Design 3 (current): the WAV files themselves carry this ground
-    truth.** IC-9700 "Voice Recorder" mode embeds a `title` metadata tag in
-    every WAV file it writes, e.g. `IC-9700 Voice Recorder Data
-    144.299.84 USB    ----.---.-- ------ -- TX 2026-07-06 16:00:37` --
-    frequency, mode, and RX/TX, straight from the rig at the exact instant
-    it started recording that file, with *no polling lag at all* (unlike
-    telemetry, which is a separate, unsynced 1 Hz poll). `parse_wav_title`
-    parses this (mode aliases USB/LSB/AM/DSB/SAM normalized to `SSB`,
-    matching `puskas_logger._mode_str`); `read_wav_metadata` populates
-    `Segment.freq_hz`/`.mode`/`.ptt` from it. `_read_wav_title` reads the
-    RIFF `LIST/INFO/INAM` chunk directly rather than shelling out to
-    `ffprobe` per file -- measured 707 files at ~112s via `ffprobe` vs.
-    ~0.02s reading raw chunk headers (~6500x), since ffprobe's per-process
-    spawn cost dominates at this file count even though the work itself is
-    trivial.
-  - **ptt no longer needs telemetry at all**: unlike freq/mode it cannot
-    legitimately change mid-segment (a real transition is exactly what
-    causes the recorder to cut a new WAV file), so `s.ptt` alone is
-    authoritative for a segment's whole span -- Design 2's "last sample"
-    fix is now dead code, deleted rather than kept as a fallback.
-    `puskas_logger.py` no longer queries or records ptt in telemetry at
-    all (see below) -- it would just be reconstructing, with more latency,
-    something the WAV file already has losslessly.
-  - **freq_hz/mode still benefit from telemetry**, though, for exactly
-    Design 1's original reason: the WAV metadata is fixed at
-    file-creation time, so on a long segment with no PTT activity at all,
-    it only captures the *starting* frequency/mode. `build_state_events`
-    seeds each segment's first run from the WAV value and lets telemetry
-    sub-divide it further wherever a later sample shows a genuine change.
-  - **The WAV value and telemetry's own reading don't agree to the exact
-    Hz even when nothing changed** -- a second real bug, found immediately
-    after switching to Design 3, from comparing the two sources directly.
-    Checked against the real July round: a systematic disagreement of
-    160/250/300/310 Hz (depending on band) appears on nearly every
-    segment's very first telemetry sample, which without a tolerance
-    looked like a spurious retune at the start of almost every segment.
-    Genuine retunes in the same data are >=1000 Hz (mostly round kHz
-    steps, as a human tuning by hand would produce) -- a clean gap, zero
-    occurrences between 310 Hz and 1000 Hz -- so
-    `FREQ_MATCH_TOLERANCE_HZ = 500` safely separates the two. Mode has no
-    such problem (exact string match; "SSB" vs "CW" isn't a rounding
-    question).
-    **The cause was later identified, and it was not the two sources
-    disagreeing at all**: the 1 Hz sampler built its `freq_hz` by re-parsing
-    the logger's own toolbar string (`f"{freq_hz / 1e6:.3f}"`), quantizing to
-    the nearest kHz — 144299840 → `"144.300"` → 144300000, exactly the
-    reported 160 Hz, and a bound of 500 Hz explains the observed clean gap
-    below 1000 Hz precisely. Telemetry now records the radio's own exact Hz
-    (see puskas_logger's Telemetry recorder section), so new recordings don't
-    have the disagreement; `FREQ_MATCH_TOLERANCE_HZ` stays for the older ones,
-    which do.
-  - A segment with no WAV metadata at all (freq_hz/mode/ptt all `None` --
-    not an IC-9700 recording, or a parse failure) is skipped rather than
-    guessed at from telemetry alone.
-  - **Azimuth is deliberately not a `SegState` field**, though it used to be
-    (as the median of whichever samples fell in a run, carried forward from
-    before the run when it held none of its own). A run is however long
-    freq/mode hold for, which is often minutes, so one number for all of it
-    meant the compass needle stood still through a real slew and jumped at the
-    run boundary — reported from the real August round, where the operator
-    turned 250° → 31° over 27 s and saw a single jump. It is its own time
-    series now (`hud_az_marks`, read straight from telemetry and interpolated
-    — see the HUD section), and the median, the per-run carry-forward and
-    `_median` went with it.
-    What survived the move is the *event* semantics, because they are
-    properties of the recording, not of the old consumer: az is a step
-    function that holds until the next event, with no staleness *time* horizon
-    (deliberately: a horizon would be a tunable constant with no data behind
-    it). What ends it is an explicit event — **the rotator going offline
-    writes one `{"az": null}` line, and that null is a real mark carrying
-    `None`, not a record to skip.** `TelemetrySample` therefore carries
-    `az_offline` alongside `az`, since an *absent* `az` key (a rig event —
-    silence about the rotator) and an explicit `"az": null` (the rotator died)
-    both load as `az=None` while meaning opposite things. Filtering on
-    `az is not None` alone was a real bug caught in review — it discarded the
-    offline marker and showed the last known bearing for the rest of the video
-    (regression tests: `test_an_explicit_offline_mark_ends_the_needle` and
-    `test_az_marks_read_every_rotator_event_and_nothing_else` for the mirror
-    case). This also matters for the *old* dense recordings, which wrote
-    `"az": null` on every line while rotctld was offline — the whole July
-    round is 9313 such lines, so treating them as marks is what keeps it
-    correctly showing no bearing throughout.
-  - **`load_telemetry` accepts both stamp precisions** — whole seconds (the
-    original 1 Hz sampler) and microseconds (the current change-driven
-    writer). Note the failure mode if it didn't: `load_telemetry` swallows a
-    bad line via `except ValueError: continue`, so a strict whole-second
-    format would *silently* drop every line of a new recording rather than
-    erroring.
-  - `--telemetry PATH` is therefore now *optional* for the whole badge --
-    it only adds `az`/bearing and the within-segment freq/mode refinement.
-    The RX/TX + starting QRG/mode badge works from the WAV files alone.
-- **YouTube chapters + SRT for seeking without scrubbing**: alongside the mp4,
-  `main()` writes `<out>.chapters.txt` (paste into the YouTube description) and
-  `<out>.srt` (upload as a captions track) — both built from `qso_windows()`, the
-  same start/end used for the on-screen QSO panels. YouTube requires the first
-  chapter at `0:00` and each chapter at least `MIN_CHAPTER_GAP_S` (10 s) apart, so
-  `build_chapters` always emits a leading `0:00 Start` and drops any QSO whose
-  chapter would land closer than that to the previous one — those QSOs still get
-  an SRT cue, just no separate chapter marker. SRT cues are capped to
-  `CAPTION_DUR_S` (8 s) each so they read as short captions rather than
-  persisting on screen until the next QSO.
-- **`--input-log PATH` for exact chapter/caption timing**, when available.
-  `PATH` is a `puskas_logger *-input.jsonl` file (see below) — optional, so
-  older recordings without one still render normally, falling back to the
-  EDI-minute + cluster-snap timing described above. `load_input_log` parses
-  two event kinds sharing the file, into one `InputLogEvent` list (`kind` is
-  `'text'` or `'qso'`); only `'qso'` events are used by `contest_video.py`
-  itself now — the `'text'` keystroke stream used to drive an on-screen
-  typewriter overlay, but that overlay was removed once the terminal-session
-  PIP (see below) started showing the actual logger UI live, keystrokes and
-  all, making a reconstructed text overlay redundant. `load_input_log` still
-  parses both kinds (rather than dropping `'text'` events at load time)
-  because the file format is shared with nothing else that would need
-  changing, and a future overlay could still want them.
-  - **`'qso'` events → exact QSO/chapter/caption timing.** `match_qso_times` pairs
-    each `Qso` (from the EDI, minute-precision) to its `'qso'` event by
-    **call, in chronological order within that call** — not by exact
-    minute, even though `puskas_logger` derives both `q.dt` and the event's
-    `t` from the same captured `now` and so *could* match exactly by
-    `(call, minute-truncated time)`. That was the first implementation, and
-    it was wrong: it silently breaks the moment a hand-crafted log (seeded
-    from the EDI via `--seed-input-log`, then hand-tuned against the audio —
-    see below) has an edited timestamp cross a minute boundary from what the
-    EDI happened to record, which is exactly the kind of edit the feature
-    exists to make possible. Call+order has no such trap — a `--duration`
-    cut only ever removes a *suffix* in time, so the surviving occurrences
-    of any call are still a prefix of the full sequence, and "next unused"
-    stays correct regardless of what the edited timestamps say.
-    `qso_windows` then feeds that exact time into `_snap_to_cluster` in
-    place of the EDI's coarse `q.dt` wherever a match exists. The snap
-    itself is still necessary even with an exact timestamp — the moment the
-    operator hits Enter is the *end* of data entry, at or after the real
-    over, not its start — but an exact anchor removes the EDI's
-    minute-level slop that could otherwise point the snap at the wrong
-    neighbouring burst, which is what caused visibly wrong QSO timing in
-    the first video generated with this feature. Falls back to the plain
-    EDI `q.dt` per-QSO wherever unmatched (no input log, an older
-    recording, or a `--duration` cut that excludes the matching event).
-  - **Only a QSO's *start* is ever a heuristic — its end doesn't need to
-    be.** `qso_windows` used to close a QSO's window exactly when the
-    *next* QSO's window opened (or at `total` for the last QSO) — but
-    `qso_times` gives an exact, real end for a QSO wherever known: the
-    moment the operator hit Enter. `windows[i][1]` is `qso_times[i]`
-    (mapped to video time) wherever available, so the chapter/caption
-    boundary lands the moment the QSO is actually finished, rather than
-    running until the next QSO's own over starts. Falls back to the old
-    "next QSO's start" (or `total` for the last QSO) wherever
-    `qso_times[i]` is `None` for that particular QSO — no better
-    information exists then. (This used to also gate a QSO panel's on-screen
-    lifetime and a running score in the header — see git history before the
-    terminal-session PIP replaced both; `qso_windows`' timing itself is
-    unchanged, only what consumes it.)
-  - **Two (or more) QSOs sharing one burst is a second, separate timing bug
-    `qso_times` exposed**: the same station worked on multiple modes
-    back-to-back with no real listening gap between them (e.g. SSB, then
-    FM, then CW with the same callsign, all within a couple of minutes) is
-    *one* burst as far as `cluster_starts` is concerned — there's no audio
-    structure to tell the individual overs apart at all. Snapping every one
-    of those QSOs' anchors onto that single shared cluster start collapsed
-    all their windows onto the same instant, which showed up as overlapping
-    chapters/captions. `qso_windows` now tracks the previously resolved
-    cluster: when a QSO's anchor resolves (via `_snap_to_cluster`) to the
-    *same* cluster as the previous QSO **and** an exact `qso_times` entry is
-    available, it starts exactly where the *previous* QSO's own window ended
-    (its real, known finish) instead of the shared cluster start — not
-    audio-structure-precise either, but real, and leaves no overlap and no
-    gap between the two. Without `qso_times` for that QSO, falls back to the
-    original squeeze behaviour.
-  - **`--seed-input-log OUT.jsonl`**: writes one `'qso'` event per QSO from
-    the EDI(s) (`t` is just `q.dt` with seconds zeroed) and exits without
-    rendering — for a recording made before this feature existed, so there's
-    no automatically-generated `*-input.jsonl` to fall back on. Edit each
-    `t` against the audio, then pass the result back in as `--input-log` for
-    exact chapter/caption timing with no cluster-snapping guesswork involved
-    for those QSOs. This is what `match_qso_times`'s call+order (not
-    call+minute) matching exists for — a seed's timestamps are expected to
-    move freely across minute boundaries once hand-edited.
-- **`--scope PATH` for a real-spectrum waterfall background**, replacing (wherever the
-  recording covers) the audio-derived `showspectrum` reconstruction with the radio's own
-  actual scope sweeps — see icom_net.py's own "Scope (spectrum waterfall) data" section
-  above for where `PATH` (a `.scope` recording) comes from and the wire format.
-  - **Sync is exact, the same way `--cast` is**: each sweep's timestamp in the recording
-    is real `time.time()`, so `render()` positions the rendered scope clip with a plain
-    `-itsoffset`, no drift-rate correction needed (unlike the webcam's independent,
-    drifting camera clock).
-  - **Drawn as a full-frame layer *under* the subtitles pass**, not as a PiP on top of it
-    like `--cast`/`--webcam` — it needs to actually replace the background, and the
-    ticker/badge text still needs to render on top of it. `render_scope_video` first
-    renders the `.scope` file into its own standalone clip (same
-    `render_cast_video`-style separate-stage-then-composite pattern used throughout this
-    file), scrolling one row per *real* sweep — held static between sweeps to fill real
-    elapsed time at `RENDER_FPS`, not resampled to a constant per-sweep rate — so the
-    clip's own duration equals the recording's real elapsed capture time. `render()` then
-    overlays that clip onto the existing `showspectrum` layer with
-    `enable='between(t,scope_start,scope_end)'` — the same gating idiom already proven
-    for `--cast`/`--webcam`'s own start gate, reused here for the *end* gate too, rather
-    than introducing a second mechanism (`eof_action=pass`) for what's really the same
-    class of problem. Falling back to the audio-based waterfall for any stretch the
-    recording doesn't cover (not started yet, stopped early, or outside a `--duration`
-    cut) comes for free from this: the old layer is simply never covered there.
-  - **Input-index bookkeeping generalized, not special-cased**: `render()` used to assume
-    cast was always input 1 (if present) and webcam was 2-if-cast-else-1. Adding a third
-    optional video input made that assumption break, so all three (scope, cast, webcam)
-    now get their input index computed up front from which ones are actually present,
-    in a fixed order (scope, cast, webcam), and each branch references its own
-    precomputed index rather than guessing it from what came before.
-  - **The on-screen frequency-range label** (top-right, e.g. `144.100-146.100 MHz`) is a
-    separate ASS overlay (`build_ass`'s `scope_periods` parameter, new `ScopeFreq`
-    style), not baked into the rendered waterfall image — added because the operator can
-    QSY or change span mid-recording, which the label needs to track.
-    `scope_freq_periods` walks the recording's own sweeps and emits one period per
-    stretch the frequency range stayed constant. **A real bug here was only caught by
-    rendering an actual small end-to-end video and inspecting real frames, not by either
-    layer's own unit tests**: an early version extended the *last* period's end to the
-    video's full duration, reasoning that the label "shouldn't vanish" if the recording
-    stopped before the session did — but the scope *background* itself doesn't persist
-    past its own last sweep either (same `between(scope_start,scope_end)` gate above), so
-    that extension left the label showing a stale frequency range over what had already
-    fallen back to the audio-spectrum background. `scope_freq_periods`'s own unit tests
-    (checking the function in isolation) and `render()`'s filter_complex string-matching
-    tests (checking the overlay chain in isolation) both looked correct on their own —
-    the bug only existed in how the two independently-correct pieces combined, which
-    string/unit assertions can't see and only an actual rendered frame exposed. Fixed by
-    simply not extending past the last real sweep at all — matches `scope_end` exactly,
-    since both are derived from the same underlying last-sweep timestamp.
-  - **The real end-to-end smoke test** that caught the above bug used fully synthetic
-    fixtures (a short synthesized WAV, a one-QSO EDI, and a hand-built `.scope` file with
-    a deliberately fast, visually-distinctive drifting "signal" — not a real radio
-    capture), specifically so it could be constructed with exact, known-in-advance timing
-    (session start, QSY point, scope start/end) to check against, and run in seconds
-    rather than needing a real multi-minute recording. This is a one-off manual
-    verification technique worth reusing for future contest_video.py changes that are
-    hard to unit-test in isolation (anything about how the ffmpeg filter graph's pieces
-    actually combine visually) — not (yet) a permanent addition to `tests/`, since it
-    shells out to real ffmpeg and takes real wall-clock time, unlike the rest of the
-    suite.
+Dependencies: `numpy`, `pyte`, `pillow` (uv script header) + `ffmpeg`/`ffprobe`.
+
+**RECORDING.md is the companion document** — the full option list, the CW decoder's
+tuned constants and the reasoning behind the QSO-timing heuristics live there, with
+real numbers from real sessions. Keep it current; this section is only what someone
+*editing the code* has to know.
+
+### Inputs
+
+- A directory of WAV segments named `YYYYMMDD_HHMMSS...wav` (local time), split by
+  the radio on every RX/TX switch. They are contiguous, so **the audio timeline is
+  the sum of segment durations**; filename wall-clock is used only to line QSOs up
+  against the audio. All segments must share one sample rate/format (they are
+  concatenated with `ffmpeg -f concat -c copy`).
+- **Multiple EDI files merge into one timeline** — a session worked across bands
+  writes one EDI per band but is still one physical recording. `merge_edi`
+  concatenates and sorts by `dt`. `Qso` carries no band field; band only ever
+  mattered for logging, not rendering.
+- **UTC offset is derived, not hardcoded**: EDI times are UTC, WAV filenames local;
+  `derive_utc_offset` rounds the span-midpoint difference to whole hours, so DST
+  handles itself.
+- **WAV metadata is ground truth for RX/TX and the starting QRG/mode.** The IC-9700
+  writes a `title` tag into every file with frequency, mode and RX/TX as of the
+  instant it started recording — no polling lag at all. `_read_wav_title` parses the
+  RIFF `LIST/INFO/INAM` chunk directly rather than shelling out to `ffprobe` per
+  file (6500× faster; see FINDINGS.md). `ptt` therefore needs no telemetry: it
+  cannot legitimately change mid-segment, since a real transition is exactly what
+  cuts a new file. freq/mode *can* change inside a long listening segment, which is
+  what telemetry sub-divides (`build_state_events`), seeded from the WAV value.
+- **Telemetry (`--telemetry`) is optional and partial by source.** Records mention
+  only what changed — `{"t", "freq_hz", "mode"}` from the rig, `{"t", "az"}` from
+  the rotator — so every field carries forward across the records that don't
+  mention it. Three rules that each cost a bug:
+  - **`load_telemetry` must accept both stamp precisions**, whole seconds (the
+    original 1 Hz sampler) and microseconds (the current writer). Note the failure
+    mode if it stops: it swallows a bad line via `except ValueError: continue`, so a
+    stricter format would *silently* drop every line of a new recording.
+  - **An absent `az` key and an explicit `"az": null` mean opposite things** while
+    both loading as `az=None`: silence is a rig record saying nothing about the
+    rotator and must not end the carry-forward, whereas a null is the rotator going
+    offline and must. Hence `TelemetrySample.az_offline`; filtering on
+    `az is not None` alone was a real bug caught in review, which showed the last
+    known bearing for the rest of the video. Same pattern for the meters
+    (`meters_offline`).
+  - **Frequencies are compared with `FREQ_MATCH_TOLERANCE_HZ` (500), never exactly**
+    — old recordings carry a systematic sub-kHz disagreement against the WAV value
+    that would otherwise look like a retune at the start of almost every segment.
+    New recordings don't (the cause was our own rounding — see FINDINGS.md), but the
+    tolerance stays for the old ones. Mode has no such problem; it is an exact
+    string match.
+
+### Pipeline
+
+Decode → intermediate clips → one ffmpeg pass. Each side stream is rendered to its
+own clip first (`render_cast_video`, `render_scope_video`, `render_hud_video`) and
+composited in a single `filter_complex`, in the same spirit as `concat_audio`'s
+intermediate wav.
+
+- **CW decode is per-segment** (each WAV is one over at one speed, so adaptive
+  per-segment dit estimation is robust and yields absolute per-character timestamps
+  for sync). `decode_segment` returns immediately for anything over `MAX_OVER_S`,
+  since `gate_events` would reject it on duration alone — that alone roughly halved
+  decode time. The pitch is auto-detected per segment; `--pitch` is only a fallback
+  for when nothing is found at all.
+- **`decode_long_segment` recovers CW hidden inside a long segment** — our recorder
+  only splits on *our* PTT, so listening to two other stations work each other stays
+  one long file. It decodes the telemetry-confirmed CW sub-ranges within it, with
+  the duration gate disabled (`check_duration=False`): mode confirmation is stronger
+  evidence than length, and a two-way exchange between others can legitimately run
+  longer than one of our overs. Its output is kept **out** of `s.events`, so
+  `--skip-gaps` needs an explicit `long_cw_segs` exemption or `remap_audio_t` would
+  trim away the very audio just recovered.
+- **`--duration SECONDS` trims before the decode loop**, not after — decoding is the
+  dominant cost, so a 10-minute preview of a 2-hour session decodes ~12× less audio.
+  QSOs past the cutoff are dropped before chapters/SRT are built.
+- Also writes `<out>.chapters.txt` (paste into the YouTube description; first
+  chapter must be `0:00`, and anything within `MIN_CHAPTER_GAP_S` of the previous
+  one is dropped) and `<out>.srt` (upload as captions, each cue capped to
+  `CAPTION_DUR_S`). Both come from `qso_windows()`, so they agree with each other by
+  construction.
+
+### QSO timing
+
+The EDI format stores time only to the minute, so it can never say when an over
+actually began. `qso_windows()` snaps each QSO onto real audio structure —
+`cluster_starts` finds every burst of activity, `_tx_start` finds the operator's own
+first transmission within it, `_snap_to_cluster` takes the *latest* burst at or
+before the anchor. `--input-log` supplies an exact anchor where available
+(`match_qso_times` pairs EDI QSOs to logged `'qso'` events **by call in
+chronological order**, never by minute — a hand-edited seed log is expected to move
+timestamps across minute boundaries). `--seed-input-log` writes that hand-editable
+skeleton from the EDI for a recording made before input logs existed. Each rule here
+fixed a specific reported bug; RECORDING.md has the cases, and the regression tests
+name them.
+
+### ffmpeg composition — where the real bugs live
+
+- **An input's index is taken at the moment it is appended** (`add_input`), never
+  from a separately maintained list. Those two drifted apart the moment a branch was
+  inserted ahead of another, and every stream then read another stream's clip — the
+  HUD drawn at the cast's position, the terminal squeezed into the face recess, the
+  webcam stretched along the bottom. Every filter-graph string assertion still
+  passed, because each branch was individually well-formed.
+- **Composite order is background → scope → cast → HUD → webcam.** The HUD is a
+  status bar: nothing may overlap it. The webcam goes on top of it, inside the face
+  recess.
+- **Every side stream needs `tpad=stop_mode=clone`** so a clip shorter than the
+  session cannot end the shared filtergraph early and silently truncate the main
+  video and audio. This is a real risk class with multi-input filtergraphs.
+- **Sync differs per stream, and the difference is the point:**
+  - cast and scope carry real absolute timestamps (asciinema's Unix epoch header;
+    `time.time()` per sweep), so a plain `-itsoffset` places them exactly.
+  - the HUD needs **no offset at all** — it is generated *from* the output timeline
+    rather than captured against an independent clock, so its t=0 already is the
+    output's.
+  - only an independently recorded webcam has a second physical clock to reconcile,
+    needing `setpts=PTS/(1-rate)` before an `fps=` resample as well as the offset
+    (see FINDINGS.md). The logger's own Alt+V capture shares this machine's clock:
+    `parse_webcam_precise_filename` reads the exact start off the filename.
+  - the same laptop-clock drift measured from the webcam is applied to the cast,
+    since asciinema stamped its header from that same clock.
+- **A stream that began before the audio must be *entered partway in*, not clamped
+  to t=0.** `stream_start` differs from `audio_time_for` for exactly this case, and
+  `_stream_input_args` turns a negative start into an `-ss` seek into that input
+  (ffmpeg has no meaning for a negative `-itsoffset`). This is the **normal** case:
+  `run-recorded-contest-session.sh` starts asciinema before the radio recorder, and
+  the `.scope` recorder starts when the radio connects. Clamping instead showed up
+  as the cast PiP's clock lagging the session by 25 s.
+- **Filter-graph string assertions cannot catch how branches combine.** Three real
+  bugs got through them. Verify a change by rendering an actual clip and decoding a
+  frame back out.
 
 ### HUD (DOOM-style status bar)
 
 A full-width opaque status bar modelled on DOOM's, replacing readouts that are
-technically visible in the terminal PiP but too small to read: the logger's own screen
-renders at ~13px in the cast, so *importance* has no visual weight there. The HUD's rule
-is that the more important a value, the bigger it is drawn.
+technically visible in the terminal PiP but far too small to read there — the
+logger's screen renders at ~13px in the cast, so *importance* has no visual weight.
+The HUD's rule is that the more important a value, the bigger it is drawn.
 
-- **The DOOM mapping is the design**, not decoration: SCORE takes the health slot (the
-  biggest number, flashing and counting up as it lands), QSOS takes ammo, the **webcam
-  takes the face slot** (a square centre-crop of the operator, exactly where DOOMguy's
-  portrait sits), Vd/Id take armor, and band/mode chips take the weapon-slot strip.
-  Everything else — QRG, RX/TX lamp, S-meter bar, compass, UTC/rate/best-DX, CW ticker —
-  fills the remaining panels.
-- **The bar *is* the artwork, and nothing static is drawn any more.** The finished art
-  (`hud-theme/artwork.png`) carries every panel, recess, static label and the compass
-  rose; `hud-theme/theme.json` says where each value goes, in artwork pixels. So the
-  drawing code paints only what changes — readouts, five sprites, and the dimming of
-  whatever is not currently selected. This replaced a procedural placeholder
-  (`draw_hud_chrome`, `HUD_SLOTS`, `hud_layout`, `_bevel`/`_panel`/`_chips`/`_label`/
-  `_fit_font`/`_hud_font`, `_needle`, `_draw_meter`, `--hud-background`, ~250 lines),
-  deleted outright rather than kept as a no-artwork fallback: the artwork now lives in
-  the repo and is the default, so the placeholder was a second, unused way to draw the
-  same bar, and `--hud-demo` renders the real thing instead. The chrome/values split it
-  existed to enforce is now structural — there is no code path that can print a baked
-  label twice. One consequence to know: a baked label can't change, which is why the
-  meter's caption is a fixed "S" rather than switching to "PO" on transmit (the RX/TX
-  lamp beside it already says which is being shown), and why the compass has no numeric
-  azimuth readout — the artwork has no recess for one, and the needle is the reading.
-- **`hud_art(theme, W, H)` prepares the artwork once per render**, not per frame: it
-  crops the bar out of the sheet, scales it and every rect into the output size, and cuts,
-  keys and pre-scales the sprites. A frame is then a copy of that bar plus the values,
-  which matters at ~24,000 frames for a 2 h session.
-- **`HUD_THEME_DIR` is script-relative** (`os.path.dirname(__file__)`), not CWD-relative:
-  renders are run from a contest directory (`cd 26augusztus && uv run ../contest_video.py`),
-  where a relative `hud-theme` does not exist.
-- **Band/mode chips and the S-meter are baked lit and dimmed back** (`_dim_region`,
-  `HUD_UNLIT_DIM`) rather than existing as a lit/unlit pair of assets that would have to
-  be kept stylistically in sync. The meter is a sprite of a fully lit LED bar pasted over
-  the whole recess and dimmed from the current level rightwards — the cut lands *between*
-  LEDs (`HUD_METER_SEGMENTS`, `HUD_METER_X0`/`X1`, measured off the sprite), since a
-  half-lit segment reads as a rendering fault rather than as a reading.
-- **Sprites are keyed off the sheet's magenta with a hard threshold on `min(R,B) - G`**,
-  which is large only for the background and at most zero for anything the sprites are
-  made of (red, orange, green, white highlights, the grey pivot ball). Not an exact-colour
-  match and not a soft alpha ramp: the sheet is *not* flat `#FF00FF` in practice — only
-  145 pixels of the whole artwork are exactly the key colour, the rest carrying
-  generation/compression noise — so an exact match keys almost nothing and a ramp leaves
-  every edge pixel semi-opaque and magenta-tinted, i.e. a pink halo. Keyed pixels are
-  blacked as well as cleared, so resampling blends edges toward black; the sprites already
-  have black outlines, so the fringe that leaves is the outline itself. A test asserts no
-  magenta survives onto the rendered bar at all.
-- **Split into a data layer and a drawing layer, deliberately.** Everything up to
-  `draw_hud_frame` is pure functions over the recording's own sources, so it needs no
-  art, no fonts and no ffmpeg and is fully unit-tested; `HudTimeline.at(t)` returns a
-  `HudState` for any video time. Geometry is entirely data (`theme.json`), so re-fitting
-  the bar to new artwork is an edit to coordinates, not to drawing code.
-- **`HudTimeline` looks everything up by bisect, never by scanning.** A two-hour render
-  queries it ~216,000 times; a linear scan per frame over hundreds of segments or
-  thousands of decoded characters would dominate the entire pass.
-- **The compass carries two needles**: solid = where the rotator actually points
-  (telemetry `az`), hollow = bearing to the station being worked (computed from their
-  EDI locator). The swing of one onto the other is a QSO's whole story in one glyph.
-  Validated on the real August round — at a sampled instant the rotator read 310.0° and
-  the target bearing computed to 310.38°, i.e. two independent sources agreeing.
-  Both are artwork sprites, and **they pivot on the ball at their base, not on their
-  bounding box's centre** — the pivot is stored per sprite in `theme.json`, and
-  `_paste_needle` pads the sprite into a square canvas centred on it, which turns "rotate
-  about an arbitrary point" into PIL's own "rotate about the centre". Getting this wrong
-  does not merely look off: about half the needle would sit *behind* the compass centre,
-  so the whole needle would orbit rather than point. That is what the regression test
-  measures (extent ahead of the centre vs. behind it), confirmed red by pivoting on the
-  box centre. `HUD_NEEDLE_FRAC` is a fit, not a measurement — the sprites are not drawn
-  to the rose's own scale, and at 1:1 they overshoot the compass card entirely.
-  The **hollow needle is drawn on top of the solid one**: the two coinciding is the normal
-  case, and underneath, its outline is simply invisible, so "on target" would look
-  identical to "no target known".
-- **The needle sweeps between samples rather than stepping to them** (`hud_az_marks`,
-  `HudTimeline._az_at`, `_az_between`). The rotator poller reports whole degrees about
-  once a second, so a real slew arrives as a run of closely-spaced samples that
-  interpolate into one continuous turn; a gap longer than `HUD_AZ_INTERP_S` is not slow
-  movement but a stationary rotator (change-only telemetry writes nothing then), so the
-  bearing holds there instead. Interpolation takes the short way round the circle —
-  250° → 31° is 141° clockwise through north, not 219° the other way. This replaced
-  reading `SegState.az` (see the rig/rotator overlay notes above for why that was wrong)
-  and was checked against the round it was reported from: 250, 266, 292, 315, 340, 358,
-  10, 21, 31 across the 27 s the operator was actually turning.
-- **The S-meter comes from the `.scope` recording's own centre bins**, not from CI-V's
-  `15 02` (which is polled-only — see icom_net's meter notes). The IC-9700's scope runs in
-  Centre mode and 475 bins across a 1 MHz span makes one bin ~2.1 kHz, close enough to an
-  SSB passband that this is a real reading rather than a proxy; `hud_s_marks` takes a
-  *max* over the centre bins, not a mean, so a signal in one bin isn't diluted by the
-  quiet ones beside it. **This is not retroactive in practice**: no contest round recorded
-  so far has a `.scope` file at all (the only one in the tree is a 65 s bench capture from
-  a different day), so the meter reads empty until the next round.
-- **The PWR panel renders placeholders rather than hiding itself** when Vd/Id are absent,
-  which is every recording to date — a panel that appears and disappears between
-  recordings would shift the whole layout.
-- **Every readout is fitted to its own recess** (`_seven_seg`'s own shrink loop), because
-  nothing on this bar has a fixed width: the score gains a digit partway through a
-  contest. Found by rendering the demo frame and looking at it — a fixed point size
-  spilled five-digit scores clean across the gutter into the QSOS panel. With artwork
-  underneath, the regression test can't assert the gutter is *dark* (it is a metal frame);
-  it asserts the gutter comes out of the render byte-identical to the artwork, and a
-  companion test generalises that to the whole bar — every pixel the drawing changes must
-  fall inside some recess, which is what keeps a readout from painting over a baked label.
-- **Numerals are real segment glyphs from DSEG7 (Debian `fonts-dseg`, SIL OFL)** — every
-  value on the bar is numeric, so the alphabetic DSEG14 the stats rows briefly used is
-  gone: once their captions became chrome (see the chrome/values split above) there was
-  nothing left to render that needed letters. An earlier version
-  drew all seven segments as polygons by hand to avoid depending on a font at all; the
-  package turned out to be packaged for Debian and already installed, the glyphs are better
-  than hand-rolled ones, and it deleted ~120 lines of geometry. There is precedent for the
-  hardcoded path — `CAST_FONT_PATH` already points at DejaVu the same way.
-- **Unlit segments are drawn too, very dim (`HUD_SEG_DIM`, 0.12)** — that is what makes an
-  LED panel read as a panel rather than as numerals floating on black. Keep the value low:
-  at 0.16 the ghost behind a `1` (which lights only its two right-hand bars) read as a
-  digit being *clipped by the panel edge* rather than as an unlit cell, which is why an
-  intermediate version dropped the layer entirely before it was tuned and restored.
-  `_all_segments` doubles as the positioning reference, a subtler need: a value containing
-  `-` (the `--.-` placeholder) has a glyph box only as tall as the middle segment, so
-  anchoring on the value's own box floats the dashes well above where the digits they
-  replace sit.
-- **The artwork's generation prompt lives in `hud-artwork-prompt.md`**, along with what the
-  software draws (and therefore what the artwork must leave empty), why the sprite sheet
-  sits on flat magenta, and why a coordinate table baked into the image was rejected — an
+- **The DOOM mapping is the design**, not decoration: SCORE takes the health slot
+  (biggest number, flashing and counting up as it lands), QSOS takes ammo, the
+  **webcam takes the face slot** (a centre crop of the operator, exactly where
+  DOOMguy's portrait sits), Vd/Id take armor, band/mode chips take the weapon-slot
+  strip. QRG, RX/TX lamp, S-meter, compass, UTC/rate/ODX and the CW ticker fill the
+  rest. Best DX is labelled **ODX**, the contest term.
+- **The bar *is* the artwork** (`hud-theme/artwork.png`), which carries every panel,
+  recess, static label and the compass rose; `hud-theme/theme.json` says where each
+  value goes, in artwork pixels. The code draws only what changes: readouts, five
+  sprites, and dimming. Nothing static is drawn, so a baked label cannot be printed
+  twice. Two consequences to know: a baked label can't change (the meter's caption
+  is a fixed "S" rather than switching to "PO" on transmit — the lamp beside it
+  already says which), and the compass has no numeric azimuth (no recess for one;
+  the needle is the reading).
+- **Coordinates are data, so re-fitting to new artwork is an edit to `theme.json`,
+  not to code.** `--hud-theme-check` draws every rect back onto the artwork, which
+  is the only way to check a hand-edited theme; several recesses can't be
+  auto-detected because their interiors are too close in brightness to the panel.
+  `HUD_THEME_DIR` is script-relative — renders run from a contest directory.
+- **`hud_art(theme, W, H)` prepares everything once per render** (crop and scale the
+  bar, scale every rect, cut/key/pre-scale the sprites); a frame is then a copy plus
+  values. `draw_hud_frame` is called ~24,000 times for a 2 h session.
+- **`HUD_W`/`HUD_H` (1920x340) come from the artwork's own 5.65:1 aspect**, and the
+  bar is scaled uniformly or not at all — squashing it turns the compass into an
+  ellipse, which is the specific reason this artwork was chosen. A test asserts
+  every supported resolution lands within 1% of that ratio. `hud_height()` forces an
+  even pixel height (libx264 refuses odd; 720p rounds to an odd number) and is the
+  single owner of that rounding, which `main()` and `render()` must agree on exactly.
+- **Sprites are keyed off flat magenta with a hard threshold on `min(R,B) - G`**,
+  which is large only for the background and at most zero for anything the sprites
+  are made of. Not an exact-colour match and not a soft alpha ramp: the sheet is not
+  flat `#FF00FF` in practice (only 145 pixels of the artwork are exactly the key
+  colour), so an exact match keys almost nothing and a ramp leaves a pink halo.
+  Keyed pixels are blacked as well as cleared, so resampling blends edges toward
+  black — and the sprites already have black outlines.
+- **Chips and the S-meter are baked lit and dimmed back** (`HUD_UNLIT_DIM`) rather
+  than being a second unlit asset that would have to stay stylistically in sync. The
+  meter sprite box holds the LED strip *itself*, with its frame left to the artwork,
+  so the lit fraction is simply `lit/segments` of the width and the cut lands
+  between LEDs.
+- **Both compass needles pivot on the ball at their base, not their bounding box's
+  centre** — the pivot is stored per sprite in `theme.json`, and `_paste_needle`
+  pads the sprite into a square canvas centred on it. Getting this wrong makes the
+  needle orbit rather than point. The hollow needle (bearing to the station being
+  worked, from its EDI locator) is drawn **on top of** the solid one (where the
+  rotator actually points), because the two coinciding is the normal case and
+  underneath its outline would be invisible — "on target" would look identical to
+  "no target known". Validated on the real August round: rotator 310.0° against a
+  computed target bearing of 310.38°, two independent sources agreeing.
+- **The needle sweeps between samples rather than stepping to them.** The poller
+  reports whole degrees about once a second, so a slew arrives as closely-spaced
+  samples that interpolate into one continuous turn; a gap longer than
+  `HUD_AZ_INTERP_S` is a stationary rotator, not slow movement, so the bearing holds
+  there. Interpolation takes the short way round the circle. Azimuth is deliberately
+  its own time series (`hud_az_marks`) rather than a field of the per-run rig state:
+  a run is however long freq/mode hold for, so one median for all of it made a real
+  27-second 250°→31° slew render as a single jump at the run boundary.
+- **The S-meter comes from the `.scope` recording's own centre bins**, not from
+  CI-V's polled `15 02`. 475 bins across a 1 MHz span makes one bin ~2.1 kHz, close
+  enough to an SSB passband to be a real reading rather than a proxy; `hud_s_marks`
+  takes a *max* over the centre bins so a signal in one bin isn't diluted. Not
+  retroactive: no contest round recorded so far has a `.scope` file, so the meter
+  reads empty until the next one.
+- **PWR renders placeholders rather than hiding** when Vd/Id are absent, which is
+  every recording to date — panels appearing and disappearing between recordings
+  would leave the bar looking broken.
+- **Every readout is fitted to its own recess** (`_seven_seg`'s shrink loop), since
+  nothing here has a fixed width — a five-digit score used to spill clean across the
+  gutter into the QSOS panel. One test asserts the gutter comes out byte-identical
+  to the artwork; another generalises it to the whole bar, so any readout painting
+  over a baked label fails.
+- **Numerals are DSEG7** (Debian `fonts-dseg`, SIL OFL), with **unlit segments drawn
+  very dim** (`HUD_SEG_DIM`, 0.12) — that is what makes an LED panel read as a panel
+  rather than numerals floating on black. Keep the value low: at 0.16 the ghost
+  behind a `1` read as a digit clipped by the panel edge. `_all_segments` doubles as
+  the positioning reference, since a value containing `-` has a glyph box only as
+  tall as the middle segment.
+- **The CW ticker is a 5x7 dot-matrix display** (`_FONT_5X7`, `_draw_matrix_text`),
+  the glyph table written out in source because the set is tiny and *fully
+  determined* — `MORSE` can only decode to 44 characters plus space, which a test
+  asserts. A generated character sheet was rejected: rendering long specific
+  character sequences is what image generators are worst at, and one wrong glyph
+  would mean regenerating everything.
+- **The ticker scrolls on a clock, which is why it needs no clearing rule at all.**
+  A character enters at the right edge and leaves `HUD_TICKER_SPAN_S` later;
+  staleness is structurally impossible rather than guarded against. It scrolls a
+  whole dot column at a time (a physical panel has no sub-dot positions), so
+  `HudTimeline.at` returns (column offset, character) pairs.
+- **Spacing is the display's, timing is the scroll's.** Characters sit exactly one
+  cell apart within an over; what varies with the keying is how fast the strip moves
+  (`_ticker_scroll`) — each character is a pin that was in the right-hand cell when
+  it was keyed. Placing characters *at* their keying time spaced them raggedly by
+  fractions of a cell, because Morse characters differ wildly in air time (a `T` is
+  one dit, a `0` nineteen). Word gaps need no room of their own, since the decoder
+  emits them as real `' '`. Past `HUD_TICKER_BURST_S` real elapsed time takes over
+  again, which is what drains the display between overs.
+- **`HUD_TICKER_CHARS` (15) is measured, not eyeballed**: at 1080p the slot is
+  446x35, so seven dot rows cap the pitch at 5px and 15 cells fill 445 of those 446
+  pixels; 16 would drop the pitch to 4.
+- **`HudTimeline` looks everything up by bisect, never by scanning** — a two-hour
+  render queries it ~216,000 times.
+- **Frames are reused whenever nothing visible changed** (`hud_frame_key`):
+  everything the drawing depends on except `t`, with continuously-varying values
+  quantised to the resolution they are actually *drawn* at (18 meter segments,
+  needles to the nearest degree). Without that quantisation the scope-derived signal
+  level alone forces a fresh draw ~30 times a second.
+- **The data layer is pure and fully unit-tested** — everything up to
+  `draw_hud_frame` is functions over the recording's own sources, needing no art, no
+  fonts and no ffmpeg. `HudTimeline.at(t)` returns a `HudState` for any video time.
+- **Two single-frame preview modes**, because iterating layout against a full render
+  is absurd: `--hud-demo OUT.png` needs no recording at all (this is what to check
+  artwork against), `--hud-preview OUT.png --hud-preview-t SECONDS` builds real
+  state from a real recording. `recdir`/`edi` are optional in argparse purely so
+  `--hud-demo` can run standalone. `--no-hud` keeps the pre-HUD look, corner webcam
+  PiP included.
+- **The artwork's generation prompt is `hud-artwork-prompt.md`** — what the software
+  draws (and therefore what the artwork must leave empty), why the sprite sheet sits
+  on flat magenta, and why a coordinate table baked into the image was rejected (an
   image generator cannot measure its own output raster, so such a table would be
-  confabulated while looking authoritative. Sprite extraction is instead automatic:
-  non-magenta is sprite, magenta is not, so bounding boxes come from connected-component
-  detection and identity from left-to-right order.
-- **The artwork has no font to match — its "text" is drawn, not typeset** (confirmed with
-  the generator directly). That stopped mattering once the chosen artwork's labels turned
-  out to be good enough to keep: every label on the bar is now *painted into the image*,
-  so the HUD has no label face at all and `HUD_FONT_PATH`/`HUD_FONT_BOLD`/`_hud_font`/
-  `_fit_font` are gone. The only typography left is DSEG7 (the numerals) and the 5x7
-  matrix table (the ticker), neither of which the artwork could supply. If a future
-  artwork arrives *without* baked labels, they come back — Debian's `fonts-dotgothic16`
-  (OFL, TrueType, 16x16-bitmap-derived) was the candidate; the authentic recommendations —
-  DooM Font, Small Fonts, Px437 IBM VGA8 — are dafont or font-pack downloads whose
-  licences would need checking before living in this repo.
-- **The ticker scrolls on a clock, and that replaced the whole flush mechanism.** A
-  character's position comes from *when it was keyed*: it enters at the right edge when
-  the scroll reaches its own column and leaves on the left `HUD_TICKER_SPAN_S` (8 s)
-  later. Nothing clears it, because staleness is structurally impossible rather than
-  guarded against — which retired `TICKER_HOLD_S`, `ticker_texts`, the flush flag in
-  `ticker_stream` and the inter-over separator, all of which existed only to stop a
-  static transcript going stale. The regression tests for text leaking across a genuine
-  gap and across many short non-CW segments went with them: those bugs cannot recur, and
-  one test asserting a later burst never shares the display with an earlier one covers
-  the property that remains.
-  It scrolls a whole **dot column** at a time, not a fraction of one — a physical matrix
-  panel has no sub-dot positions — so `HudTimeline.at` returns (column offset, character)
-  pairs rather than a string.
-- **Spacing is the display's, timing is the scroll's.** Characters sit exactly one cell
-  apart within an over; what varies with the keying is how fast the strip moves
-  (`HudTimeline._ticker_scroll`): each character is a pin that was at the right-hand cell
-  when it was keyed, and between two pins the strip covers exactly one cell in whatever
-  real time separates them. Placing characters *at* their keying time (the first design)
-  spaced them raggedly by fractions of a cell — reported from a real video — because
-  Morse characters differ wildly in air time: a `T` is one dit and a `0` is nineteen.
-  Word gaps need no room of their own here, since the decoder emits them as real `' '`
-  characters. Past `HUD_TICKER_BURST_S` (3 s — longer than any single character, so it
-  means the operator stopped rather than paused) real elapsed time takes over again,
-  which is what still drains the display between overs and keeps staleness structurally
-  impossible.
-- **The CW ticker is a 5x7 dot-matrix display** (`_FONT_5X7`, `_draw_matrix_text`), every
-  dot drawn with the same lit/`HUD_SEG_DIM` treatment as the segment panels, so an idle
-  ticker still reads as a display. The glyph table is written out in the source rather than
-  taken from a font file because the set is tiny and *fully determined* — `MORSE` can only
-  decode to 44 characters plus space, which a test asserts — and at 5x7 each row is
-  directly readable where it is typed. A generated character sheet was considered and
-  rejected: rendering long specific character sequences is what image generators are worst
-  at, so 36 glyphs would be 36 chances to be wrong with no way to fix one without
-  regenerating everything. Glyphs were verified by rendering the whole set as a sheet and
-  reading it, since a mistyped row is a plausible-looking letter rather than an error.
-- **The ticker is `HUD_TICKER_CHARS` (15) cells wide**, measured off the artwork's own CW
-  slot rather than eyeballed: at 1080p the slot is 446x35, so seven dot rows cap the pitch
-  at 5px and 15 cells (89 columns) fill 445 of those 446 pixels; 16 would need 95 columns
-  and drop the pitch to 4. The display scrolls, so a short window loses nothing: the value
-  of a ticker is "something is arriving right now", not a readable backlog. It is also the one readout drawn to its
-  slot's full extent rather than inset, because the slot is only seven dots tall to begin
-  with and a margin there costs a whole dot of pitch (4px instead of 5 at 1080p).
-  `ticker_chunks` / `ticker_stream` / `ticker_texts` are the single source of the
-  transcript.
-- **Best DX is labelled ODX**, the contest term, not "BEST".
-- **Two preview modes, both single-frame PNG**, because iterating layout against a full
-  render is absurd: `--hud-demo OUT.png` needs no recording at all and draws dummy values
-  (this is what to check the artwork against); `--hud-preview OUT.png --hud-preview-t
-  SECONDS` builds real state from an actual recording. `recdir`/`edi` are
-  `nargs="?"`/`nargs="*"` purely so `--hud-demo` can run standalone; every other mode
-  still errors without them. A third, `--hud-theme-check`, draws every rect in
-  `theme.json` back onto the artwork — the way to check a hand-edited theme, since
-  theme.json's coordinates are read by hand off the image.
-- **`HUD_W`/`HUD_H` (1920x340) come from the artwork's own aspect**, 1982x351 = 5.65:1,
-  and the bar is scaled uniformly or not at all: squashing it to another aspect turns the
-  compass into an ellipse, which is the specific reason this artwork was chosen. A test
-  asserts every supported resolution lands within 1% of the artwork's ratio, so new
-  artwork with a different aspect fails loudly rather than being silently stretched.
-  340px is 31% of a 1080p frame; the cast PiP absorbs it by shrinking, since it is
-  height-constrained whenever a HUD is present. (The pre-artwork placeholder was 260px at
-  7.4:1, chosen as a vertical budget before there was any art to measure.)
-- **`render_hud_video` renders the bar to its own clip**, same separate-stage-then-
-  composite pattern as `render_cast_video`/`render_scope_video`. It needs no `-itsoffset`
-  at all, unlike every other side stream: the clip is generated *from* the output timeline
-  rather than captured against an independent clock, so its t=0 already is the output's.
-- **Frames are reused whenever nothing visible changed** (`hud_frame_key`): everything the
-  drawing depends on except `t`, with the continuously-varying values quantised to the
-  resolution they are actually drawn at — 18 meter segments, needles to the nearest degree.
-  Without that quantisation the scope-derived signal level alone forces a fresh draw ~30
-  times a second for sub-pixel differences. On a short synthetic clip this drew 22 frames
-  out of 120; over a real session the clock's once-a-second tick is the dominant driver.
-- **The webcam moves into the artwork's own face recess when a HUD is present**,
-  centre-cropped to the recess's aspect rather than letterboxed (a centre crop of a webcam
-  pointed at the operator *is* a face portrait). Bottom-right is under the bar now, so the
-  old corner PiP would simply be hidden. `render()` takes the recess as a plain
-  `hud_face` rect rather than looking it up itself, so the geometry has exactly one owner
-  (`hud_art`). `--no-hud` keeps the pre-HUD look, corner PiP included.
-- **`hud_height()` forces an even pixel height**, because libx264 refuses an odd dimension
-  and 720p rounds to 173. Found by rendering an actual 720p clip and reading the ffmpeg
-  error — every string-level test used the 1080p reference height, which is already even.
-  One function rather than the same rounding in `main()` and `render()`, which must agree
-  exactly or the bar gets scaled to a height it wasn't drawn at.
-- **The ASS subtitle stage is gone entirely.** The HUD subsumed all three overlays it
-  still produced: the RX/TX badge became the lamp, the CW ticker became the dot-matrix
-  display, and the scope frequency-range label was dropped outright — the HUD's own QRG
-  readout says what the waterfall is centred on, which is enough. That removed
-  `build_ass`, `_ass_time`, `_wrap`, `_esc`, `VIS_CHARS`/`CPL`, the three style
-  definitions, `scope_freq_periods`, the `subtitles=` filter, the intermediate `.ass`
-  file and `render()`'s `ass` parameter — one whole pipeline stage and one fewer ffmpeg
-  filter. `--keep-ass` became `--keep-intermediates`.
-- **The ticker's own behaviour survived the deletion**, because `ticker_chunks` /
-  `ticker_stream` / `ticker_texts` had already been extracted from `build_ass` for the
-  HUD to share. The regression tests that used to assert flush behaviour by
-  string-matching Dialogue lines were rewritten against those functions rather than
-  deleted — they cover real bugs (a ticker leaking across a genuine gap, and across many
-  short non-CW segments) that no longer have anything to do with subtitles. They keep 999
-  characters of transcript rather than the HUD's 15, deliberately: with a 15-cell window
-  stale characters would scroll off by themselves and the assertions would pass for the
-  wrong reason.
+  confabulated while looking authoritative). The artwork's "text" is drawn, not
+  typeset, and its labels were good enough to keep — so the HUD has no label face of
+  its own at all.
 
 ## Uploading a rendered video to YouTube
 `contest_video.py` only renders the mp4 + `.chapters.txt` + `.srt` — it does not upload.
@@ -2006,20 +992,13 @@ actual change**, microsecond stamps): records are *partial* by source --
 `{"t", "az"}` written by the rotctld poller. A field a line doesn't mention
 simply didn't change; `contest_video.py`'s `build_state_events` carries each
 one forward across the events that don't mention it.
-- **Was a 1 Hz sampler of `current_rig()`/`current_rot()`**, which made sense
-  while the rig sat behind rigctld and had to be polled anyway. Since the
-  switch to `icom_net`, freq/mode arrive as CI-V Transceive pushes and
-  `IcomNetRig._apply_update` already returns early on a no-op update — so the
-  callback *is* the change stream, and re-sampling it on a timer put back onto
-  a lag-free source exactly the latency `icom_net` exists to remove, blurred
-  any retune shorter than the poll interval, and wrote overwhelmingly
-  duplicate lines: on the real July round only **616 of 9313** lines carried
-  anything new.
-- **`freq_hz` is now the radio's own exact value**, not the toolbar's
-  kHz-rounded `qrg` string the sampler re-parsed. That rounding is the entire
-  source of `contest_video.py`'s long-documented 160/250/300/310 Hz "WAV vs
-  telemetry disagreement" — this logger was quantizing, not two sources
-  reading the rig differently.
+- **Change-driven, not sampled**: the `icom_net` push callback *is* the change
+  stream (`_apply_update` already returns early on a no-op), so re-sampling it
+  on a timer would put back exactly the latency `icom_net` exists to remove,
+  blur any retune shorter than the interval, and write overwhelmingly duplicate
+  lines. **`freq_hz` is the radio's own exact value**, never a re-parse of the
+  toolbar's kHz-rounded string — that rounding was the whole of the old "WAV vs
+  telemetry" frequency disagreement (see FINDINGS.md).
 - **`az` stays polled, but change-gated**: it has no push source at all, since
   Hamlib's rotator API never defined the async hook for any backend (see
   `hamlib_supervisor.py`'s notes). Plain inequality, **no deadband** — the
@@ -2048,9 +1027,10 @@ one forward across the events that don't mention it.
   keystroke. A 1 Hz poll like the telemetry recorder would blur or entirely
   miss fast typing, and the buffer only changes on a keypress in the first
   place, so there's nothing to poll.
-- Microsecond precision (unlike telemetry's whole-second stamps) matters here:
-  the video overlay built from this file is a "typewriter" effect keyed to
-  exactly when each character was typed.
+- Microsecond precision matters here: it timestamps individual keystrokes.
+  (`contest_video.py` parses the `'text'` events but no longer draws anything
+  from them — the terminal PiP shows the real typing — so they exist for a
+  future consumer, not a current one.)
 - **A second event kind, `"event": "qso"`, is written from the "New QSO"
   block** in `run()` — one line per QSO actually appended to the log:
   `{"t": ..., "event": "qso", "call", "band", "mode", "nr_s", "dup"}`. This is
@@ -2063,22 +1043,16 @@ one forward across the events that don't mention it.
   (second=0, microsecond=0)` and this event's `t` — not two separate
   `datetime.now()` calls — so the two are *always* related by exact minute
   truncation with no possible race at a minute boundary. This is what lets
-  `contest_video.py`'s `match_qso_times` match them up exactly (see below);
-  it's the fix for "weird QSO timing" in a preview, where the EDI's
-  minute-only precision let `_snap_to_cluster` occasionally pick the wrong
-  neighbouring burst.
+  `contest_video.py`'s `match_qso_times` line them up exactly; it is the fix for
+  "weird QSO timing" in a preview, where the EDI's minute-only precision let
+  `_snap_to_cluster` occasionally pick the wrong neighbouring burst.
 
 **Webcam capture** (`YYMMDD-CALL-webcam.mp4` while recording, renamed on stop — see
 below — Alt+V to start/stop, off by default):
-- Replaces an earlier approach that recorded the operator with a phone propped up
-  separately, requiring `contest_video.py` to sync two *independent* device clocks
-  after the fact (see its own webcam-sync notes) -- error-prone even with audio
-  cross-correlation, since a phone's own clock has no relationship to the radio
-  recorder's. Capturing on the *same machine* that runs the logger removes that
-  problem at the source: start/stop goes through the same `_log_input_event`/
-  `datetime.now(timezone.utc)` already used for QSOs and keystrokes, so the
-  recording's real start time is known exactly, with no separate clock to
-  reconcile at all.
+- Capturing on the *same machine* that runs the logger is the whole point: a
+  phone propped up separately has its own clock, which `contest_video.py` then
+  has to reconcile by audio cross-correlation (see FINDINGS.md). Here the start
+  time is simply known.
 - `_webcam_capture_cmd` builds the `ffmpeg -f v4l2 ... -f pulse ...` command (Linux
   video4linux2 + PulseAudio); `WEBCAM_DEVICE`/`WEBCAM_AUDIO_SOURCE` constants at the
   top of the file are the only things that need adjusting for a given machine (find
@@ -2091,22 +1065,14 @@ below — Alt+V to start/stop, off by default):
   Ctrl-D path and the crash-handler path in `main()`) so a still-running capture
   is never left orphaned or its output file unfinalized.
 - **Renamed on stop with a µs-precise timestamp** (`_webcam_precise_start` +
-  `_webcam_precise_name`), e.g. `260706-HA5LA-webcam.mp4` ->
-  `260706-HA5LA-webcam-20260706T160037.123456Z.mp4`. Investigated and rejected two
-  alternatives first, both for real, measured reasons: `-metadata creation_time=...`
-  can't be passed to ffmpeg up front, since the true frame-0 wallclock isn't known
-  until the camera has actually opened (~1s, variable, after the process spawns) --
-  and tagging it in *after* capture (`ffmpeg -c copy -metadata ...`) was tested
-  against a real ~2h/3GB capture and does work (15s, stream-copy, no re-encode), but
-  needs a full second copy of the file on disk simultaneously -- too risky right at
-  the point in a session (end of a multi-hour recording) where free disk space is
-  most likely to be tight. A rename needs none of that: verified on a real 3GB file
-  at 0.006s, a directory-entry update on the same filesystem, independent of file
-  size. `contest_video.py`'s `parse_webcam_precise_filename` now prefers this over
-  parsing the `*-webcam.log` sidecar (`webcam_start_from_log`, kept as a fallback for
-  recordings made before this existed, or if the rename didn't happen for some
-  reason) -- same precision either way, but self-contained in the filename, no
-  dependency on the `.log` file surviving alongside the video.
+  `_webcam_precise_name`), e.g. `260706-HA5LA-webcam-20260706T160037.123456Z.mp4`.
+  The true frame-0 wallclock isn't known until the camera has actually opened
+  (~1 s after spawn, variable), so it cannot be passed to ffmpeg up front; tagging
+  it into the container afterwards works but needs a second copy of a multi-GB file
+  on disk exactly when space is tightest (see FINDINGS.md). A rename is a
+  directory-entry update, independent of size. `contest_video.py`'s
+  `parse_webcam_precise_filename` prefers this over the `*-webcam.log` sidecar
+  (same precision, but depends on that file surviving alongside the video).
 - Logs `"event": "webcam_start"` / `"webcam_stop"` to the same `*-input.jsonl` as
   everything else (see **Input-box logging** above) rather than a separate file —
   one more consumer of the same already-precise event log, not a new format.
