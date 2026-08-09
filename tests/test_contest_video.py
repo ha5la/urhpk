@@ -28,17 +28,11 @@ from cast_render import (
     _draw_cast_row,
     parse_cast_header,
 )
+from chapters import CAPTION_DUR_S, _srt_time, _yt_time, build_chapters, build_srt
 from contest_video import (
-    CAPTION_DUR_S,
     SCOPE_AMP_MAX,
     _resize_scope_row,
     _scope_colormap,
-    _srt_time,
-    _yt_time,
-    build_chapters,
-    build_srt,
-    cluster_starts,
-    qso_windows,
     render_scope_video,
 )
 from cw_decode import (
@@ -52,6 +46,7 @@ from cw_decode import (
     gate_events,
 )
 from icom_net import write_scope_record
+from qso_windows import cluster_starts, qso_windows
 from rig_state import (
     InputLogEvent,
     SegState,
