@@ -1,6 +1,6 @@
 # 01 — Drop scope_preview.py
 
-Status: ready-for-agent
+Status: resolved
 
 `scope_preview.py` (188 lines) renders a `.scope` recording into a standalone
 waterfall video. It was a one-time tool for looking at scope captures before
