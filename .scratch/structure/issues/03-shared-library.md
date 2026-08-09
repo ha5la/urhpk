@@ -1,6 +1,6 @@
 # 03 — The shared library
 
-Status: needs-triage
+Status: resolved
 
 Blocked by: 02
 
@@ -40,3 +40,24 @@ different questions and need their own thinking, not a mechanical merge.
 
 Each fact has one definition, the suite passes, and `CONTEXT.md` names anything
 the unification gave a name to.
+
+## Answer
+
+Three modules, not one, because these are three different kinds of fact:
+
+- `geo.py` — the formulas, plus a pair-level layer (`distance_between`,
+  `bearing_between`) matching CONTEXT.md's definition of both as properties of
+  a station *pair*. Strict variant won; six blanket `except Exception:` blocks
+  went with it. Proved equivalent to all three originals on 300 locators and
+  400 pairs before anything moved.
+- `wiring.py` — the contracts between components. The real finding was not the
+  duplicated `PUSKAS_DIR` but the same value under different names at each end:
+  `SEEN_STATIONS`/`OUTPUT`, `ON4KST_SEEN`/`ON4KST_SEEN_PATH`,
+  `RIG_SERVER_PORT`/`RIGCTLD_PORT`.
+- `edi.py` — the format, reading only. Writing stayed in the logger, since
+  emitting a log needs the logbook and the scoring; it borrows the tables.
+
+Verified against the real August round, not just the suite: both readers and
+the writer produce identical output on the two `260803-HA5LA-*.edi` logs.
+
+Band identity stayed out of scope as planned.
