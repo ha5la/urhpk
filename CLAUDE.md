@@ -13,6 +13,7 @@ questions about "why does this exist" are answered by where a thing sits in it.
 | File | What belongs in it |
 |---|---|
 | **CLAUDE.md** (this file) | How to work here: development principles, conventions, house rules |
+| **CONTEXT.md** | What each word means, and nothing else — the project's glossary |
 | **PIPELINE.md** | The end-to-end story: harvest → run the round → render → publish |
 | **ARCHITECTURE.md** | Component by component: what each does and the constraints an edit must not break |
 | **RECORDING.md** | Practical how-to for recording a round and producing a video, with real numbers |
@@ -28,6 +29,11 @@ questions about "why does this exist" are answered by where a thing sits in it.
   ARCHITECTURE.md, research narrative and rejected approaches to FINDINGS.md, and
   history that only explains how the code *used to* look goes nowhere — git keeps
   it. CLAUDE.md was 2157 lines once, for exactly those reasons.
+- **A term defined in CONTEXT.md is used, not redefined.** The other documents and
+  the code spell it that way and move on; if a definition needs changing, it changes
+  in CONTEXT.md. Synonyms are pollution here, not style — three words for one
+  concept (azimuth = bearing = rotator angle) cost more than the repetition they
+  avoid.
 
 ## Development principles
 
