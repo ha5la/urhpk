@@ -325,3 +325,91 @@ a directory-entry update, independent of size.
   down during a stretch of many brief CQ calls with short listening gaps: there is
   no single "real" start, and an earlier fruitless call looks identical to the one
   that finally got answered. Falls back to the burst's first segment.
+
+## Concurrency: how tangled the threads are (August 2026)
+
+A one-time audit, prompted by the question of how easily this could deadlock by
+accident. Snapshot of one point in time — recorded as evidence for the
+"concurrency is asyncio, not threads" principle in CLAUDE.md, not as a table to
+keep current.
+
+Only `puskas_logger.py` is threaded. `contest_video.py` and its modules have no
+threads at all (they wait on ffmpeg subprocesses); `on4kst_irc_bridge.py` is
+pure asyncio; `hamlib_supervisor.py` runs two, in its own process.
+
+**Eight threads in the logger's process during a round**, plus transients:
+
+| Thread | What it is waiting for |
+|---|---|
+| main | the keyboard, via prompt_toolkit |
+| `_radio_thread` | the radio session to go stale, then reconnect |
+| `icom_net._ctrl_loop` | UDP on the control socket |
+| `icom_net._civ_loop` | UDP on the CI-V socket |
+| `icom_net._meter_loop` | a 0.5 s timer |
+| `rotator.poll_thread` | rotctld, then a 1 s timer |
+| `rig_server.serve` | a TCP accept |
+| `_toolbar_watcher` | a 0.1 s timer |
+
+Transient: one thread per rig-server client, one per `Alt+R` rotator command,
+one for the startup clock sync.
+
+**Seven locks**: `_rig_lock`, `_rot_lock`, `_scope_rec_lock`, `_telem_lock`,
+`_clock_sync_lock`, and `icom_net`'s `_lock` (an RLock) and `_send_lock`.
+
+### The structure is better than the count suggests
+
+An AST scan for lock nesting found **none**: no thread anywhere holds one lock
+while acquiring another. A cycle between two threads therefore cannot form, and
+the classic lock-ordering deadlock is structurally impossible. Every `join()`
+and `Event.wait()` also carries a timeout, so no thread waits on another
+indefinitely.
+
+That leaves exactly one shape of deadlock available: a thread re-entering a
+lock it already holds. Both instances found were real.
+
+- `icom_net._lock` is an **RLock** because `_apply_update` holds it while
+  reading `self.band`, whose getter takes it again. Already known, already
+  fixed, and the comment says so.
+- **The signal handler was the other, and it was live.** A Python signal
+  handler runs on the main thread wherever that thread is; the main thread is
+  the UI, which is constantly inside `current_rig()`'s critical section; the
+  handler's teardown took the same plain lock. SIGTERM is how a round *normally*
+  ends, so this ran every round. Reproduced by firing 20,000 signals at a main
+  thread spinning in `current_rig()`: the process hangs and cannot be killed by
+  a further SIGTERM, because that signal's handler is the thing stuck. Fixed by
+  taking the lock off `_radio`, which never needed it.
+
+One near-miss that is *not* a deadlock, checked rather than assumed: the same
+handler writes to the input log, which the UI thread also writes. CPython's
+`BufferedWriter` raises `RuntimeError: reentrant call` instead of blocking, and
+`log_input_event` swallows it — so the cost is one missing log line, not a hang.
+
+### Whether the threads are needed at all
+
+They are not. Every one of the eight is waiting on I/O or on a timer; **nothing
+in the logger is CPU-bound**. Three facts settle it:
+
+- **prompt_toolkit is asyncio-native and the logger already runs an event
+  loop.** `Application.run()` documents itself as running the application "in a
+  fresh asyncio event loop" and ends in `asyncio.run(coro)`. `prompt_async()`
+  exists. So this is not a question of adopting new machinery — the loop is
+  already there, and the threads run *alongside* it.
+- **The pattern is already proven in this codebase.** `on4kst_irc_bridge.py` is
+  32 coroutines, zero threads, with an integration-test harness that drives it.
+- **Each thread has a direct asyncio equivalent**, and two get simpler rather
+  than merely different: `rig_server`'s accept loop plus its thread-per-client
+  become one `asyncio.start_server`, and the two UDP receive loops become
+  `create_datagram_endpoint`, which is the case asyncio exists for.
+
+`_toolbar_watcher` is the argument in miniature. It exists only because
+prompt_toolkit's own `refresh_interval` redraws unconditionally, and it already
+carries a scar from being a thread: `get_app()` returns a `DummyApplication`
+inside it, because a thread gets a fresh contextvars Context, so `invalidate()`
+was a silent no-op until the app was captured explicitly. A task inherits the
+context and the trap does not exist.
+
+**The honest cost**: threads isolate a blocking mistake to one thread, while an
+event loop propagates it to the UI. That is a real trade, and it is the reason
+to keep the escape hatch (`asyncio.to_thread`) rather than to ban threads
+outright. Note though that the UI already blocks on a mutex today, and the file
+writes inside critical sections are already on whatever thread reaches them.

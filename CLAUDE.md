@@ -90,6 +90,18 @@ questions about "why does this exist" are answered by where a thing sits in it.
   drawn frame actually looks, how a real radio's session state machine reacts. Render
   the clip and decode a frame; capture the packets; measure against the real recording.
   Every one of those has caught a bug that a green suite did not.
+- **Concurrency is asyncio, not threads.** Everything concurrent here waits on I/O
+  or on a timer; nothing waits on the CPU. A single event loop expresses all of it,
+  and prompt_toolkit already runs one — `Application.run()` ends in `asyncio.run`,
+  so the logger has an event loop whether or not we use it. Threads buy nothing
+  against a socket and cost the one hazard a single-threaded loop cannot have: a
+  deadlock. `on4kst_irc_bridge.py` is the worked example, 32 coroutines and no
+  locks. When something must happen while something else waits, write a coroutine
+  and a task. The escape hatch is a genuinely blocking library call with no async
+  form — `asyncio.to_thread` at the boundary, holding no lock — and a thread that
+  needs a lock is a design that needs rethinking instead. FINDINGS.md has the audit
+  this rule came from, including the deadlock it found on the round's normal exit
+  path.
 - **No visual glitches**: the logger UI must look professional at all times. Transient
   incorrect states (e.g. a dup highlight flashing for one frame during a state transition)
   are bugs.
