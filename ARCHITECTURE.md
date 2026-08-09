@@ -225,12 +225,38 @@ logger's own terminal and the operator's webcam.
 ```
 uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
 ```
-Dependencies: `numpy`, `pyte`, `pillow` (uv script header) + `ffmpeg`/`ffprobe`.
+Dependencies: `numpy`, `pyte`, `pillow` (`pyproject.toml`) + `ffmpeg`/`ffprobe`.
 
 **RECORDING.md is the companion document** — the full option list, the CW decoder's
 tuned constants and the reasoning behind the QSO-timing heuristics live there, with
 real numbers from real rounds. Keep it current; this section is only what someone
 *editing the code* has to know.
+
+### Where the code lives
+
+`contest_video.py` itself is now only the compositor and the CLI: the ffmpeg
+filtergraph, the intermediate clips, and `main`. Everything it orchestrates sits in
+a module of its own, and the imports form a DAG — nothing below imports anything
+above it.
+
+| Module | What it owns |
+|---|---|
+| `wav.py` | The recorder's WAV files: the IC-9700 title tag, reading a time range |
+| `cw_decode.py` | The signal chain (pitch → envelope → hysteresis → Morse) and the trust gate |
+| `timeline.py` | `Segment`, `Qso`, the EDI read, and wall clock ↔ audio time |
+| `webcam_sync.py` | The one stream with no trustworthy clock: its start, and its drift |
+| `rig_state.py` | Telemetry and input log; RX/TX + QRG/mode events; QSO time matching |
+| `qso_windows.py` | Where each QSO sits in the finished video |
+| `chapters.py` | YouTube chapters and SRT captions |
+| `cast_render.py` | The terminal PiP: an asciinema `.cast` replayed into frames |
+| `scope_render.py` | The spectrum-scope waterfall background |
+| `hud.py` | The HUD's data layer: what the bar shows at any moment |
+| `hud_draw.py` | The HUD's drawing layer: artwork, sprites, readouts |
+| `video_format.py` | Frame size and rate — the two facts all three renderers must agree on |
+
+The data/drawing split inside the HUD is the one worth preserving deliberately:
+`hud.py` needs no art, no fonts and no ffmpeg, which is what makes it fully
+unit-testable, and `hud_draw.py` knows nothing about where its numbers came from.
 
 ### Inputs
 
@@ -248,7 +274,7 @@ real numbers from real rounds. Keep it current; this section is only what someon
   handles itself.
 - **WAV metadata is ground truth for RX/TX and the starting QRG/mode.** The IC-9700
   writes a `title` tag into every file with frequency, mode and RX/TX as of the
-  instant it started recording — no polling lag at all. `_read_wav_title` parses the
+  instant it started recording — no polling lag at all. `wav.read_wav_title` parses the
   RIFF `LIST/INFO/INAM` chunk directly rather than shelling out to `ffprobe` per
   file (6500× faster; see FINDINGS.md). `ptt` therefore needs no telemetry: it
   cannot legitimately change mid-segment, since a real transition is exactly what
@@ -644,7 +670,7 @@ These requirements must be preserved across all future changes:
 
 ## puskas_logger.py – Contest QSO Logger
 
-Purpose-built for Puskás URH Kupa rules. Requires `prompt_toolkit` (declared in uv script header).
+Purpose-built for Puskás URH Kupa rules. Requires `prompt_toolkit` (declared in `pyproject.toml`).
 
 ```
 uv run puskas_logger.py
