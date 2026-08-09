@@ -47,6 +47,7 @@ import numpy as np
 import pyte
 from PIL import Image, ImageDraw, ImageFont
 
+import edi
 from geo import initial_bearing, maidenhead_to_latlon
 from icom_net import band_from_hz, read_scope_records
 
@@ -676,54 +677,27 @@ def trim_to_duration(segs: list[Segment], max_dur: float) -> list[Segment]:
 
 # Reverse of puskas_logger's own EDI encodings (_BAND_FREQ / _MODE_CODE), so
 # a rendered chapter/caption can name the band+mode the logger recorded.
-_EDI_BAND = {"145 MHz": "2M", "435 MHz": "70CM", "1296 MHz": "23CM"}
-_EDI_MODE = {"1": "SSB", "2": "CW", "6": "FM"}
 
 
 def parse_edi(path: str) -> tuple[str, str, list[Qso]]:
-    my_callsign, mywwl, band = "", "", ""
-    qsos: list[Qso] = []
-    in_records = False
-    for line in open(path, encoding="utf-8", errors="replace"):
-        line = line.rstrip("\n")
-        if line.startswith("PCall="):
-            my_callsign = line.split("=", 1)[1].strip()
-        elif line.startswith("PWWLo="):
-            mywwl = line.split("=", 1)[1].strip()
-        elif line.startswith("PBand="):
-            band = _EDI_BAND.get(line.split("=", 1)[1].strip(), "")
-        elif line.startswith("[QSORecords"):
-            in_records = True
-            continue
-        elif line.startswith("["):
-            in_records = False
-        elif in_records and line:
-            f = line.split(";")
-            if len(f) < 11:
-                continue
-            dt = datetime.strptime(f[0] + f[1], "%y%m%d%H%M")
-            try:
-                pts = int(f[10]) if f[10] else 0
-            except ValueError:
-                pts = 0
-            dup = len(f) > 13 and f[13].strip().upper() == "D"
-            mode = _EDI_MODE.get(f[3].strip(), "")
-            qsos.append(
-                Qso(
-                    dt,
-                    f[2],
-                    f[4],
-                    f[5],
-                    f[6],
-                    f[7],
-                    f[9],
-                    pts,
-                    dup,
-                    band=band,
-                    mode=mode,
-                )
-            )
-    return my_callsign, mywwl, qsos
+    log = edi.read(path)
+    qsos = [
+        Qso(
+            r.dt,
+            r.callsign,
+            r.rst_s,
+            r.nr_s,
+            r.rst_r,
+            r.nr_r,
+            r.loc,
+            r.points,
+            r.duplicate,
+            band=log.band,
+            mode=r.mode,
+        )
+        for r in log.records
+    ]
+    return log.my_callsign, log.my_locator, qsos
 
 
 def merge_edi(paths: list[str]) -> tuple[str, str, list[Qso]]:

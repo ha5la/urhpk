@@ -34,6 +34,7 @@ from prompt_toolkit.formatted_text import HTML, FormattedText
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import DynamicStyle, Style
 
+import edi
 import icom_net
 from geo import bearing_between, distance_between
 from wiring import (
@@ -910,8 +911,6 @@ def _is_dup_in_log(qsos: list[QSO], target: QSO) -> bool:
 # ──────────────────────────────────────────────────────────────
 # EDI export
 # ──────────────────────────────────────────────────────────────
-_BAND_FREQ = {"2M": "145 MHz", "70CM": "435 MHz", "23CM": "1296 MHz"}
-_MODE_CODE = {"SSB": "1", "CW": "2", "FM": "6"}
 _MONTH_HU = [
     "",
     "JANUAR",
@@ -953,7 +952,7 @@ def write_edi(lb: LogBook, band: str, tname: str, out_dir: Path) -> Path | None:
         "PAdr1=",
         "PAdr2=",
         "PSect=SINGLE-OP",
-        f"PBand={_BAND_FREQ.get(band, '145 MHz')}",
+        f"PBand={edi.HEADER_BY_BAND.get(band, '145 MHz')}",
         "PClub=",
         "RName=",
         "RCall=",
@@ -993,7 +992,7 @@ def write_edi(lb: LogBook, band: str, tname: str, out_dir: Path) -> Path | None:
         seen.add(k)
         records.append(
             f"{date_6};{q.dt.strftime('%H%M')};{q.callsign};"
-            f"{_MODE_CODE.get(q.mode, '1')};"
+            f"{edi.CODE_BY_MODE.get(q.mode, '1')};"
             f"{q.rst_s};{q.nr_s:03d};{q.rst_r};{q.nr_r:03d};;"
             f"{q.loc};{0 if dup else q.dist_km};;;{'D' if dup else ''};"
         )
@@ -1014,8 +1013,6 @@ def save_all(lb: LogBook, tname: str) -> list[Path]:
 # ──────────────────────────────────────────────────────────────
 # EDI crash recovery
 # ──────────────────────────────────────────────────────────────
-_BAND_FROM_FREQ = {"145 MHz": "2M", "435 MHz": "70CM", "1296 MHz": "23CM"}
-_MODE_FROM_CODE = {"1": "SSB", "2": "CW", "6": "FM"}
 
 
 def load_from_edi(
@@ -1034,17 +1031,12 @@ def load_from_edi(
 
     my_callsign = my_loc = tname = ""
 
-    for path in paths:
-        try:
-            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-                if line.startswith("PCall=") and not my_callsign:
-                    my_callsign = line[6:].strip().upper()
-                elif line.startswith("PWWLo=") and not my_loc:
-                    my_loc = line[6:].strip().upper()
-                elif line.startswith("TName=") and not tname:
-                    tname = line[6:].strip()
-        except Exception:
-            pass
+    logs = [edi.read(p) for p in paths]
+
+    for log in logs:
+        my_callsign = my_callsign or log.my_callsign.upper()
+        my_loc = my_loc or log.my_locator.upper()
+        tname = tname or log.contest_name
         if my_callsign:
             break
 
@@ -1053,57 +1045,30 @@ def load_from_edi(
 
     lb = LogBook(my_callsign, my_loc, loc_cache)
 
-    for path in paths:
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-            band = ""
-            in_qso = False
-            for line in text.splitlines():
-                if line.startswith("PBand="):
-                    band = _BAND_FROM_FREQ.get(line[6:].strip(), "")
-                elif line.startswith("[QSORecords"):
-                    in_qso = True
-                elif in_qso and ";" in line:
-                    f = line.split(";")
-                    if len(f) < 10:
-                        continue
-                    try:
-                        dt = datetime.strptime(
-                            f[0].strip() + f[1].strip(), "%y%m%d%H%M"
-                        ).replace(tzinfo=timezone.utc)
-                        callsign = f[2].strip().upper()
-                        mode = _MODE_FROM_CODE.get(f[3].strip(), "SSB")
-                        rst_s = f[4].strip()
-                        nr_s = int(f[5].strip())
-                        rst_r = f[6].strip()
-                        nr_r = int(f[7].strip())
-                        loc = f[9].strip().upper()
-                        dist_km = (
-                            int(f[10].strip())
-                            if len(f) > 10 and f[10].strip().isdigit()
-                            else 0
-                        )
-                        if not dist_km and loc and RE_LOC.match(loc):
-                            dist_km = lb.dist(loc)
-                        if callsign and band and RE_LOC.match(loc):
-                            lb.add(
-                                QSO(
-                                    dt=dt,
-                                    band=band,
-                                    mode=mode,
-                                    callsign=callsign,
-                                    rst_s=rst_s,
-                                    nr_s=nr_s,
-                                    rst_r=rst_r,
-                                    nr_r=nr_r,
-                                    loc=loc,
-                                    dist_km=dist_km,
-                                )
-                            )
-                    except (ValueError, IndexError):
-                        pass
-        except Exception:
-            pass
+    for log in logs:
+        for r in log.records:
+            callsign = r.callsign.upper()
+            loc = r.loc.upper()
+            if not (callsign and log.band and RE_LOC.match(loc)):
+                continue
+            try:
+                nr_s, nr_r = int(r.nr_s), int(r.nr_r)
+            except ValueError:
+                continue
+            lb.add(
+                QSO(
+                    dt=r.dt.replace(tzinfo=timezone.utc),
+                    band=log.band,
+                    mode=r.mode or "SSB",
+                    callsign=callsign,
+                    rst_s=r.rst_s,
+                    nr_s=nr_s,
+                    rst_r=r.rst_r,
+                    nr_r=nr_r,
+                    loc=loc,
+                    dist_km=r.points or lb.dist(loc),
+                )
+            )
 
     lb.qsos.sort(key=lambda q: (q.dt, q.nr_s))
     return lb, tname
