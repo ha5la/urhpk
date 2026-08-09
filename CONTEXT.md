@@ -73,8 +73,14 @@ _Avoid_: terminal session, screen recording
 ### Identity
 
 **Callsign**:
-The string identifying a station.
+The string identifying a station. **My callsign** when it is specifically our
+own (`my_callsign`), plain Callsign for anyone else's.
 _Avoid_: call (in code that can only mean invoking a function)
+
+Three things keep the old spelling because they are not ours to rename: the
+`"call"` key in `*-input.jsonl`, EDI's `PCall=`/`RCall=` fields, and the
+`<MYCALL>`/`<HISCALL>` CW macro placeholders, which are contest-logger
+convention everywhere.
 
 **Station**:
 The entity a callsign identifies. The harvested database holds stations you

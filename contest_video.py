@@ -524,7 +524,7 @@ def _eff(s: Segment) -> float:
 @dataclass
 class Qso:
     dt: datetime  # UTC (from EDI)
-    call: str
+    callsign: str
     rst_s: str
     nr_s: str
     rst_r: str
@@ -684,13 +684,13 @@ _EDI_MODE = {"1": "SSB", "2": "CW", "6": "FM"}
 
 
 def parse_edi(path: str) -> tuple[str, str, list[Qso]]:
-    mycall, mywwl, band = "", "", ""
+    my_callsign, mywwl, band = "", "", ""
     qsos: list[Qso] = []
     in_records = False
     for line in open(path, encoding="utf-8", errors="replace"):
         line = line.rstrip("\n")
         if line.startswith("PCall="):
-            mycall = line.split("=", 1)[1].strip()
+            my_callsign = line.split("=", 1)[1].strip()
         elif line.startswith("PWWLo="):
             mywwl = line.split("=", 1)[1].strip()
         elif line.startswith("PBand="):
@@ -726,22 +726,22 @@ def parse_edi(path: str) -> tuple[str, str, list[Qso]]:
                     mode=mode,
                 )
             )
-    return mycall, mywwl, qsos
+    return my_callsign, mywwl, qsos
 
 
 def merge_edi(paths: list[str]) -> tuple[str, str, list[Qso]]:
     """Merge one or more per-band EDI logs (e.g. 2M + 70CM from the same
     round) into a single chronological QSO list -- the recording is one
     continuous audio timeline regardless of how many bands were worked."""
-    mycall, mywwl = "", ""
+    my_callsign, mywwl = "", ""
     qsos: list[Qso] = []
     for path in paths:
         mc, mw, qs = parse_edi(path)
-        if not mycall:
-            mycall, mywwl = mc, mw
+        if not my_callsign:
+            my_callsign, mywwl = mc, mw
         qsos.extend(qs)
     qsos.sort(key=lambda q: q.dt)
-    return mycall, mywwl, qsos
+    return my_callsign, mywwl, qsos
 
 
 def audio_time_for(wall: datetime, segs: list[Segment]) -> float:
@@ -1419,7 +1419,7 @@ class InputLogEvent:
     t: datetime
     kind: str  # 'text' (keystroke) or 'qso' (an actual submit)
     text: str = ""  # kind == 'text': the full input-box contents
-    call: str = ""  # kind == 'qso'
+    callsign: str = ""  # kind == 'qso'
     dup: bool = False  # kind == 'qso'
 
 
@@ -1652,18 +1652,18 @@ def match_qso_times(
     trap -- a --duration cut only ever removes a *suffix* in time, so the
     surviving occurrences of any call are still a prefix of the full sequence,
     and "next unused" stays correct."""
-    by_call: dict[str, list[datetime]] = {}
+    by_callsign: dict[str, list[datetime]] = {}
     for e in input_log:
         if e.kind == "qso":
-            by_call.setdefault(e.call, []).append(e.t)
+            by_callsign.setdefault(e.callsign, []).append(e.t)
     used: dict[str, int] = {}
     out: list[datetime | None] = []
     for q in qsos:
-        i = used.get(q.call, 0)
-        cands = by_call.get(q.call, [])
+        i = used.get(q.callsign, 0)
+        cands = by_callsign.get(q.callsign, [])
         if i < len(cands):
             out.append(cands[i])
-            used[q.call] = i + 1
+            used[q.callsign] = i + 1
         else:
             out.append(None)
     return out
@@ -1898,7 +1898,7 @@ def _qso_label(i: int, q: Qso) -> str:
     bm = " ".join(x for x in (q.band, q.mode) if x)
     bm = f"  {bm}" if bm else ""
     tag = " (dup)" if q.dup else ""
-    return f"QSO {i + 1:03d} {q.call}{bm}{tag}"
+    return f"QSO {i + 1:03d} {q.callsign}{bm}{tag}"
 
 
 def build_chapters(qsos: list[Qso], windows: list[tuple[float, float]]) -> str:
@@ -3641,9 +3641,9 @@ def main() -> None:
         sys.exit(f"no timestamped WAVs found in {args.recdir}")
     print(f"{len(segs)} segments, {segs[-1].audio_t + segs[-1].dur:.0f}s audio")
 
-    mycall, mywwl, qsos_all = merge_edi(args.edi)
+    my_callsign, mywwl, qsos_all = merge_edi(args.edi)
     offset_h = derive_utc_offset(segs, qsos_all)
-    print(f"{mycall} {mywwl}: {len(qsos_all)} QSOs, UTC+{offset_h} local")
+    print(f"{my_callsign} {mywwl}: {len(qsos_all)} QSOs, UTC+{offset_h} local")
 
     cast_start = None
     cast_rate = 0.0

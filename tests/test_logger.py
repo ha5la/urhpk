@@ -53,7 +53,7 @@ def _dt(h: int = 16, m: int = 0) -> datetime:
 
 
 def _qso(
-    call="HA7NS",
+    callsign="HA7NS",
     band="2M",
     mode="SSB",
     nr_s=1,
@@ -70,7 +70,7 @@ def _qso(
         dt=dt or _dt(h, m),
         band=band,
         mode=mode,
-        call=call,
+        callsign=callsign,
         rst_s=rst_s,
         nr_s=nr_s,
         rst_r=rst_r,
@@ -92,15 +92,15 @@ class TestParseInput:
 
     def test_with_locator(self):
         r = parse_input("HA7NS 59 015 JN97WM")
-        assert r == {"call": "HA7NS", "rst_r": "59", "nr_r": 15, "loc": "JN97WM"}
+        assert r == {"callsign": "HA7NS", "rst_r": "59", "nr_r": 15, "loc": "JN97WM"}
 
     def test_cw_rst(self):
         r = parse_input("HA7NS 599 014 JN97WM")
-        assert r == {"call": "HA7NS", "rst_r": "599", "nr_r": 14, "loc": "JN97WM"}
+        assert r == {"callsign": "HA7NS", "rst_r": "599", "nr_r": 14, "loc": "JN97WM"}
 
     def test_lowercase_input_normalised(self):
         r = parse_input("ha7ns 59 001 jn97wm")
-        assert r["call"] == "HA7NS"
+        assert r["callsign"] == "HA7NS"
         assert r["loc"] == "JN97WM"
 
     def test_four_char_locator_accepted(self):
@@ -114,7 +114,7 @@ class TestParseInput:
 
     def test_portable_callsign(self):
         r = parse_input("HA5LA/P 59 007 JN97TF")
-        assert r["call"] == "HA5LA/P"
+        assert r["callsign"] == "HA5LA/P"
 
     def test_empty_line_returns_empty_string(self):
         assert parse_input("") == ""
@@ -184,36 +184,36 @@ class TestLogBook:
         assert self.lb.add(_qso()) is False
 
     def test_add_returns_true_for_dup(self):
-        self.lb.add(_qso(call="HA7NS", band="2M", mode="SSB"))
-        assert self.lb.add(_qso(call="HA7NS", band="2M", mode="SSB")) is True
+        self.lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB"))
+        assert self.lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB")) is True
 
     def test_dup_check_uses_all_three_keys(self):
-        self.lb.add(_qso(call="HA7NS", band="2M", mode="SSB"))
-        assert self.lb.add(_qso(call="HA7NS", band="70CM", mode="SSB")) is False
-        assert self.lb.add(_qso(call="HA7NS", band="2M", mode="CW")) is False
-        assert self.lb.add(_qso(call="HA7NS", band="2M", mode="FM")) is False
+        self.lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB"))
+        assert self.lb.add(_qso(callsign="HA7NS", band="70CM", mode="SSB")) is False
+        assert self.lb.add(_qso(callsign="HA7NS", band="2M", mode="CW")) is False
+        assert self.lb.add(_qso(callsign="HA7NS", band="2M", mode="FM")) is False
 
     def test_nine_valid_combos_per_station(self):
         combos = [(b, m) for b in ("2M", "70CM", "23CM") for m in ("SSB", "CW", "FM")]
         assert len(combos) == 9
         for b, m in combos:
-            assert self.lb.add(_qso(call="HA7NS", band=b, mode=m)) is False
+            assert self.lb.add(_qso(callsign="HA7NS", band=b, mode=m)) is False
 
     def test_worked_combos_empty_for_never_worked_call(self):
         # nothing worked yet -> nothing to warn about
         assert self.lb.worked_combos("HA7NS") == {}
 
     def test_worked_combos_lists_worked_modes_by_band(self):
-        self.lb.add(_qso(call="HA7NS", band="2M", mode="SSB"))
-        self.lb.add(_qso(call="HA7NS", band="2M", mode="CW"))
-        self.lb.add(_qso(call="HA7NS", band="70CM", mode="CW"))
+        self.lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB"))
+        self.lb.add(_qso(callsign="HA7NS", band="2M", mode="CW"))
+        self.lb.add(_qso(callsign="HA7NS", band="70CM", mode="CW"))
         assert self.lb.worked_combos("HA7NS") == {
             "2M": ["SSB", "CW"],
             "70CM": ["CW"],
         }
 
     def test_worked_combos_omits_bands_with_nothing_worked(self):
-        self.lb.add(_qso(call="HA7NS", band="70CM", mode="SSB"))
+        self.lb.add(_qso(callsign="HA7NS", band="70CM", mode="SSB"))
         combos = self.lb.worked_combos("HA7NS")
         assert "2M" not in combos and "23CM" not in combos
         assert combos["70CM"] == ["SSB"]
@@ -221,7 +221,7 @@ class TestLogBook:
     def test_worked_combos_lists_all_nine_once_all_worked(self):
         for b in ("2M", "70CM", "23CM"):
             for m in ("SSB", "CW", "FM"):
-                self.lb.add(_qso(call="HA7NS", band=b, mode=m))
+                self.lb.add(_qso(callsign="HA7NS", band=b, mode=m))
         assert self.lb.worked_combos("HA7NS") == {
             "2M": ["SSB", "CW", "FM"],
             "70CM": ["SSB", "CW", "FM"],
@@ -229,20 +229,20 @@ class TestLogBook:
         }
 
     def test_worked_combos_is_per_callsign(self):
-        self.lb.add(_qso(call="HA7NS", band="2M", mode="SSB"))
+        self.lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB"))
         assert self.lb.worked_combos("HA3KHB") == {}
 
     def test_undo_removes_last_qso(self):
-        self.lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_s=1))
-        self.lb.add(_qso(call="HA3KHB", band="2M", mode="SSB", nr_s=2))
+        self.lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB", nr_s=1))
+        self.lb.add(_qso(callsign="HA3KHB", band="2M", mode="SSB", nr_s=2))
         q = self.lb.undo()
-        assert q.call == "HA3KHB"
+        assert q.callsign == "HA3KHB"
         assert len(self.lb.qsos) == 1
 
     def test_undo_rebuilds_worked_set(self):
-        self.lb.add(_qso(call="HA7NS", band="2M", mode="SSB"))
+        self.lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB"))
         self.lb.undo()
-        assert self.lb.add(_qso(call="HA7NS", band="2M", mode="SSB")) is False
+        assert self.lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB")) is False
 
     def test_undo_on_empty_returns_none(self):
         assert self.lb.undo() is None
@@ -282,17 +282,17 @@ class TestLogBook:
 
 class TestIsDupInLog:
     def test_first_occurrence_is_not_dup(self):
-        q = _qso(call="HA7NS", band="2M", mode="SSB")
+        q = _qso(callsign="HA7NS", band="2M", mode="SSB")
         assert _is_dup_in_log([q], q) is False
 
     def test_second_occurrence_is_dup(self):
-        q1 = _qso(call="HA7NS", band="2M", mode="SSB", h=16)
-        q2 = _qso(call="HA7NS", band="2M", mode="SSB", h=17)
+        q1 = _qso(callsign="HA7NS", band="2M", mode="SSB", h=16)
+        q2 = _qso(callsign="HA7NS", band="2M", mode="SSB", h=17)
         assert _is_dup_in_log([q1, q2], q2) is True
 
     def test_different_band_not_dup(self):
-        q1 = _qso(call="HA7NS", band="2M", mode="SSB")
-        q2 = _qso(call="HA7NS", band="70CM", mode="SSB")
+        q1 = _qso(callsign="HA7NS", band="2M", mode="SSB")
+        q2 = _qso(callsign="HA7NS", band="70CM", mode="SSB")
         assert _is_dup_in_log([q1, q2], q2) is False
 
 
@@ -329,7 +329,9 @@ class TestWriteEdi:
 
     def test_writes_file(self, tmp_path):
         lb = LogBook("HA5LA", "JN97TF", {})
-        lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_s=1, nr_r=1, dist_km=38))
+        lb.add(
+            _qso(callsign="HA7NS", band="2M", mode="SSB", nr_s=1, nr_r=1, dist_km=38)
+        )
         p = write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path)
         assert p is not None and p.exists()
 
@@ -352,7 +354,7 @@ class TestWriteEdi:
         lb = LogBook("HA5LA", "JN97TF", {})
         lb.add(
             _qso(
-                call="HA7NS",
+                callsign="HA7NS",
                 band="2M",
                 mode="SSB",
                 nr_s=1,
@@ -380,8 +382,8 @@ class TestWriteEdi:
 
     def test_dup_flagged_with_d(self, tmp_path):
         lb = LogBook("HA5LA", "JN97TF", {})
-        lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_s=1, h=16))
-        lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_s=2, h=17))
+        lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB", nr_s=1, h=16))
+        lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB", nr_s=2, h=17))
         txt = write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path).read_text()
         lines = [line for line in txt.splitlines() if "HA7NS" in line]
         assert len(lines) == 2
@@ -390,9 +392,11 @@ class TestWriteEdi:
 
     def test_dup_excluded_from_score(self, tmp_path):
         lb = LogBook("HA5LA", "JN97TF", {})
-        lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_s=1, dist_km=38, h=16))
-        lb.add(_qso(call="HA3KHB", band="2M", mode="SSB", nr_s=2, dist_km=168, h=17))
-        lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_s=3, dist_km=38, h=18))
+        lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB", nr_s=1, dist_km=38, h=16))
+        lb.add(
+            _qso(callsign="HA3KHB", band="2M", mode="SSB", nr_s=2, dist_km=168, h=17)
+        )
+        lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB", nr_s=3, dist_km=38, h=18))
         txt = write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path).read_text()
         assert "CQSOP=206" in txt  # 38 + 168; dup not counted
 
@@ -426,7 +430,7 @@ class TestLoadFromEdi:
         lb = LogBook("HA5LA", "JN97TF", {})
         lb.add(
             _qso(
-                call="HA7NS",
+                callsign="HA7NS",
                 band="2M",
                 mode="SSB",
                 nr_s=1,
@@ -438,7 +442,7 @@ class TestLoadFromEdi:
         )
         lb.add(
             _qso(
-                call="HA3KHB",
+                callsign="HA3KHB",
                 band="2M",
                 mode="CW",
                 nr_s=2,
@@ -452,7 +456,7 @@ class TestLoadFromEdi:
         )
         lb.add(
             _qso(
-                call="HA7NS",
+                callsign="HA7NS",
                 band="2M",
                 mode="SSB",
                 nr_s=3,
@@ -477,7 +481,7 @@ class TestLoadFromEdi:
         lb = self._make_logbook()
         write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path)
         lb2, _ = load_from_edi(list(tmp_path.glob("*.[Ee][Dd][Ii]")), {})
-        assert lb2.my_call == "HA5LA"
+        assert lb2.my_callsign == "HA5LA"
         assert lb2.my_loc == "JN97TF"
 
     def test_roundtrip_preserves_tname(self, tmp_path):
@@ -493,7 +497,7 @@ class TestLoadFromEdi:
         # HA7NS SSB 2M was worked first → second entry is a dup
         assert ("HA7NS", "2M", "SSB") in lb2.worked
         # adding again should be detected as dup
-        assert lb2.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_s=4)) is True
+        assert lb2.add(_qso(callsign="HA7NS", band="2M", mode="SSB", nr_s=4)) is True
 
     def test_roundtrip_next_nr_continues(self, tmp_path):
         lb = self._make_logbook()
@@ -503,8 +507,8 @@ class TestLoadFromEdi:
 
     def test_multiband_roundtrip(self, tmp_path):
         lb = LogBook("HA5LA", "JN97TF", {})
-        lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_s=1, h=16))
-        lb.add(_qso(call="HA7NS", band="70CM", mode="FM", nr_s=1, h=17))
+        lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB", nr_s=1, h=16))
+        lb.add(_qso(callsign="HA7NS", band="70CM", mode="FM", nr_s=1, h=17))
         write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path)
         write_edi(lb, "70CM", "PUSKAS2026MAJUS", tmp_path)
         paths = sorted(tmp_path.glob("*.[Ee][Dd][Ii]"))
@@ -528,7 +532,7 @@ class TestLoadFromEdi:
         p.write_text(edi)
         lb2, _ = load_from_edi([p], {})
         assert len(lb2.qsos) == 1
-        assert lb2.qsos[0].call == "HA7NS"
+        assert lb2.qsos[0].callsign == "HA7NS"
 
     def test_uppercase_and_lowercase_edi_not_doubled(self, tmp_path):
         """Coexisting foo.EDI and foo.edi must not double the QSOs on recovery.
@@ -561,9 +565,13 @@ class TestLoadFromEdi:
 class TestQsoEdit:
     def _lb_with_qsos(self):
         lb = LogBook("HA5LA", "JN97TF", {"HA7NS": ["JN97WM"], "HA3KHB": ["JN86SR"]})
-        lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_s=1, nr_r=1, h=16, m=1))
-        lb.add(_qso(call="HA3KHB", band="2M", mode="SSB", nr_s=2, nr_r=14, h=16, m=59))
-        lb.add(_qso(call="HA8RM", band="2M", mode="SSB", nr_s=3, nr_r=12, h=17, m=4))
+        lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB", nr_s=1, nr_r=1, h=16, m=1))
+        lb.add(
+            _qso(callsign="HA3KHB", band="2M", mode="SSB", nr_s=2, nr_r=14, h=16, m=59)
+        )
+        lb.add(
+            _qso(callsign="HA8RM", band="2M", mode="SSB", nr_s=3, nr_r=12, h=17, m=4)
+        )
         return lb
 
     def _apply_edit(self, lb, edit_idx, parsed):
@@ -574,7 +582,7 @@ class TestQsoEdit:
             dt=old.dt,
             band=old.band,
             mode=old.mode,
-            call=parsed["call"],
+            callsign=parsed["callsign"],
             rst_s=old.rst_s,
             nr_s=old.nr_s,
             rst_r=parsed["rst_r"],
@@ -582,14 +590,14 @@ class TestQsoEdit:
             loc=loc,
             dist_km=lb.dist(loc),
         )
-        lb.worked = {(q.call, q.band, q.mode) for q in lb.qsos}
+        lb.worked = {(q.callsign, q.band, q.mode) for q in lb.qsos}
 
     def test_edit_last_callsign_typo(self):
         lb = self._lb_with_qsos()
         parsed = parse_input("HA8RM 59 012 JN96UW")
         # edit_idx=0 → last QSO (HA8RM was logged with wrong loc, fix it)
         self._apply_edit(lb, 0, parsed)
-        assert lb.qsos[2].call == "HA8RM"
+        assert lb.qsos[2].callsign == "HA8RM"
         assert lb.qsos[2].loc == "JN96UW"
 
     def test_edit_preserves_dt_band_mode_nr_s_rst_s(self):
@@ -609,8 +617,8 @@ class TestQsoEdit:
         parsed = parse_input("HA3KHB 59 015 JN86SR")
         self._apply_edit(lb, 1, parsed)  # edit_idx=1 → middle QSO
         assert lb.qsos[1].nr_r == 15
-        assert lb.qsos[0].call == "HA7NS"  # others unchanged
-        assert lb.qsos[2].call == "HA8RM"
+        assert lb.qsos[0].callsign == "HA7NS"  # others unchanged
+        assert lb.qsos[2].callsign == "HA8RM"
 
     def test_edit_rebuilds_worked_set(self):
         lb = self._lb_with_qsos()
@@ -627,7 +635,7 @@ class TestQsoEdit:
         # HA7NS should no longer be in worked (it was the only one)
         assert ("HA7NS", "2M", "SSB") not in lb.worked
         # Adding HA7NS now should not be a dup
-        assert lb.add(_qso(call="HA7NS", band="2M", mode="SSB")) is False
+        assert lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB")) is False
 
     def test_missing_locator_returns_error(self):
         r = parse_input("HA7NS 59 001")
@@ -639,7 +647,7 @@ class TestQsoEdit:
         self._apply_edit(lb, 0, parsed)
         write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path)
         lb2, _ = load_from_edi(list(tmp_path.glob("*.[Ee][Dd][Ii]")), {})
-        assert lb2.qsos[2].call == "HA8RM"
+        assert lb2.qsos[2].callsign == "HA8RM"
         assert lb2.qsos[2].loc == "JN96UW"
 
 
@@ -660,8 +668,8 @@ class TestBandSummary:
 
     def test_dups_excluded_from_pts(self):
         lb = LogBook("HA5LA", "JN97TF", {})
-        lb.add(_qso(call="HA7NS", band="2M", dist_km=100, nr_s=1, h=16))
-        lb.add(_qso(call="HA7NS", band="2M", dist_km=100, nr_s=2, h=17))  # dup
+        lb.add(_qso(callsign="HA7NS", band="2M", dist_km=100, nr_s=1, h=16))
+        lb.add(_qso(callsign="HA7NS", band="2M", dist_km=100, nr_s=2, h=17))  # dup
         assert _band_summary(lb) == "2M:2q/100pt"
 
     def test_three_bands(self):
@@ -694,7 +702,9 @@ class TestPrintRecent:
     def _lb(self):
         lb = LogBook("HA5LA", "JN97TF", {})
         for i in range(10):
-            lb.add(_qso(call=f"HA{i}AA", nr_s=i + 1, h=14, m=i * 5, dist_km=100 + i))
+            lb.add(
+                _qso(callsign=f"HA{i}AA", nr_s=i + 1, h=14, m=i * 5, dist_km=100 + i)
+            )
         return lb
 
     def _lines(self, lb, **kwargs):
@@ -748,7 +758,9 @@ class TestPrintRecent:
     def test_bearing_column_always_shown(self):
         lb = LogBook("HA5LA", "JN97TF", {})
         lb.add(
-            _qso(call="HA7NS", nr_s=1, h=14, loc="JN97WM", dist_km=lb.dist("JN97WM"))
+            _qso(
+                callsign="HA7NS", nr_s=1, h=14, loc="JN97WM", dist_km=lb.dist("JN97WM")
+            )
         )
         lines = self._lines(lb, n=4)
         qso_line = next(line for line in lines if "HA7NS" in line)
@@ -761,7 +773,9 @@ class TestPrintRecent:
     def test_tx_rx_arrows_in_log_line(self):
         lb = LogBook("HA5LA", "JN97TF", {})
         lb.add(
-            _qso(call="HA7NS", nr_s=1, h=14, loc="JN97WM", dist_km=lb.dist("JN97WM"))
+            _qso(
+                callsign="HA7NS", nr_s=1, h=14, loc="JN97WM", dist_km=lb.dist("JN97WM")
+            )
         )
         lines = self._lines(lb, n=4)
         qso_line = next(line for line in lines if "HA7NS" in line)
@@ -773,15 +787,15 @@ class TestPrintRecent:
 
     def test_multiband_load_sorted_by_timestamp(self, tmp_path):
         lb = LogBook("HA5LA", "JN97TF", {})
-        lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_s=1, h=14, m=0))
-        lb.add(_qso(call="HA3KHB", band="70CM", mode="FM", nr_s=1, h=14, m=10))
-        lb.add(_qso(call="HA8RM", band="2M", mode="SSB", nr_s=2, h=14, m=20))
+        lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB", nr_s=1, h=14, m=0))
+        lb.add(_qso(callsign="HA3KHB", band="70CM", mode="FM", nr_s=1, h=14, m=10))
+        lb.add(_qso(callsign="HA8RM", band="2M", mode="SSB", nr_s=2, h=14, m=20))
         write_edi(lb, "2M", "T", tmp_path)
         write_edi(lb, "70CM", "T", tmp_path)
         # Load in 70CM-first order to exercise sorting
         paths = sorted(tmp_path.glob("*.[Ee][Dd][Ii]"), reverse=True)
         lb2, _ = load_from_edi(paths, {})
-        assert [q.call for q in lb2.qsos] == ["HA7NS", "HA3KHB", "HA8RM"]
+        assert [q.callsign for q in lb2.qsos] == ["HA7NS", "HA3KHB", "HA8RM"]
 
 
 # ──────────────────────────────────────────────────────────────
@@ -816,29 +830,29 @@ class TestPredictNr:
 
     def test_cross_mode_recent_returns_nr_r_plus_one(self):
         lb = self._lb()
-        lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_r=15, dt=_dt(16, 0)))
+        lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB", nr_r=15, dt=_dt(16, 0)))
         assert _predict_nr(lb, "HA7NS", "2M", "CW", now=_dt(16, 4)) == 16
 
     def test_same_mode_not_used(self):
         lb = self._lb()
-        lb.add(_qso(call="HA7NS", band="2M", mode="CW", nr_r=15, dt=_dt(16, 0)))
+        lb.add(_qso(callsign="HA7NS", band="2M", mode="CW", nr_r=15, dt=_dt(16, 0)))
         assert _predict_nr(lb, "HA7NS", "2M", "CW", now=_dt(16, 4)) is None
 
     def test_different_band_not_used(self):
         lb = self._lb()
-        lb.add(_qso(call="HA7NS", band="70CM", mode="SSB", nr_r=15, dt=_dt(16, 0)))
+        lb.add(_qso(callsign="HA7NS", band="70CM", mode="SSB", nr_r=15, dt=_dt(16, 0)))
         assert _predict_nr(lb, "HA7NS", "2M", "CW", now=_dt(16, 4)) is None
 
     def test_most_recent_cross_mode_wins(self):
         lb = self._lb()
-        lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_r=10, dt=_dt(16, 0)))
-        lb.add(_qso(call="HA7NS", band="2M", mode="CW", nr_r=20, dt=_dt(16, 1)))
+        lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB", nr_r=10, dt=_dt(16, 0)))
+        lb.add(_qso(callsign="HA7NS", band="2M", mode="CW", nr_r=20, dt=_dt(16, 1)))
         # current mode FM, 4 min later: most recent cross-mode is CW/20 → predict 21
         assert _predict_nr(lb, "HA7NS", "2M", "FM", now=_dt(16, 4)) == 21
 
     def test_old_qso_returns_none(self):
         lb = self._lb()
-        lb.add(_qso(call="HA7NS", band="2M", mode="SSB", nr_r=15, dt=_dt(16, 0)))
+        lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB", nr_r=15, dt=_dt(16, 0)))
         # 6 minutes later — outside the 5-minute window
         assert _predict_nr(lb, "HA7NS", "2M", "CW", now=_dt(16, 6)) is None
 

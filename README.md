@@ -46,7 +46,7 @@ Then in irssi:
 
 Public ON4KST chat appears in `#on4kst`. Private messages arrive as IRC PMs.
 
-Credentials are read from `~/.netrc` (`machine www.on4kst.info login <call> password <pass>`).
+Credentials are read from `~/.netrc` (`machine www.on4kst.info login <callsign> password <pass>`).
 
 ### Getting notified of a private message
 

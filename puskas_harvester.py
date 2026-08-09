@@ -117,10 +117,10 @@ def fetch_claimed(event_id: str) -> list[dict]:
     stations: dict[str, str] = {}
     for category in data:
         for log in category.get("logs", []):
-            call = log.get("_id", {}).get("callsign", "").upper().strip()
+            callsign = log.get("_id", {}).get("callsign", "").upper().strip()
             wwl = log.get("_id", {}).get("WWL", "").upper().strip()
-            if call and wwl and call not in stations:
-                stations[call] = wwl
+            if callsign and wwl and callsign not in stations:
+                stations[callsign] = wwl
     return [{"callsign": c, "wwl": w} for c, w in stations.items()]
 
 
@@ -148,11 +148,11 @@ def fetch_qsos(event_id: str, callsign: str, round_code: str) -> list[dict]:
         return []
     qsos = []
     for q in data.get("qsos", []):
-        dx_call = q.get("callsign", "").upper().strip()
+        dx_callsign = q.get("callsign", "").upper().strip()
         dx_wwl = q.get("rWWL", "").upper().strip()
         band = q.get("band", "").strip()
-        if dx_call and dx_wwl:
-            qsos.append({"callsign": dx_call, "wwl": dx_wwl, "band": band})
+        if dx_callsign and dx_wwl:
+            qsos.append({"callsign": dx_callsign, "wwl": dx_wwl, "band": band})
     return qsos
 
 
@@ -177,13 +177,13 @@ def main():
     # call → {"wwls": list[str] most-recent-first, "bands": list[str]}
     stations: dict[str, dict] = {}
 
-    def _record(call: str, wwl: str) -> None:
+    def _record(callsign: str, wwl: str) -> None:
         """Add wwl to station's list; move to front if already seen (most recent = front)."""
-        if call not in stations:
-            stations[call] = {"wwls": [], "bands": []}
+        if callsign not in stations:
+            stations[callsign] = {"wwls": [], "bands": []}
         if not wwl:
             return
-        wwls = stations[call]["wwls"]
+        wwls = stations[callsign]["wwls"]
         if wwl in wwls:
             wwls.remove(wwl)
         wwls.insert(0, wwl)
@@ -194,15 +194,15 @@ def main():
         print(f"  {len(claimed)} submitters")
 
         for j, s in enumerate(claimed, 1):
-            call = s["callsign"]
+            callsign = s["callsign"]
             wwl = s["wwl"]
-            _record(call, wwl)
+            _record(callsign, wwl)
 
-            for code in fetch_round_codes(event_id, call):
-                for q in fetch_qsos(event_id, call, code):
+            for code in fetch_round_codes(event_id, callsign):
+                for q in fetch_qsos(event_id, callsign, code):
                     band = q["band"]
-                    if band and band not in stations[call]["bands"]:
-                        stations[call]["bands"].append(band)
+                    if band and band not in stations[callsign]["bands"]:
+                        stations[callsign]["bands"].append(band)
 
             if j % 10 == 0 or j == len(claimed):
                 print(

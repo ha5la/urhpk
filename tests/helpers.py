@@ -150,7 +150,7 @@ class MockKSTProxy:
 class MockBridge:
     """Minimal Bridge substitute — lets IRCSession tests run without KST."""
 
-    callsign = CALLSIGN
+    my_callsign = CALLSIGN
 
     def __init__(self):
         self.kst = MockKSTProxy()

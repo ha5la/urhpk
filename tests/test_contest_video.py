@@ -639,10 +639,10 @@ class TestEdi:
             "260704;0908;HG7F;2;599;001;599;010;;JN97KR;26;;;;\n"
             "260704;0929;HA7NK;2;599;004;599;029;;JN97WW;0;;;D;\n"
         )
-        mycall, mywwl, qsos = parse_edi(str(edi))
-        assert (mycall, mywwl) == ("HA5LA", "JN97MM")
+        my_callsign, mywwl, qsos = parse_edi(str(edi))
+        assert (my_callsign, mywwl) == ("HA5LA", "JN97MM")
         assert len(qsos) == 2
-        assert qsos[0].call == "HG7F" and qsos[0].pts == 26
+        assert qsos[0].callsign == "HG7F" and qsos[0].pts == 26
         assert qsos[0].dt == datetime(2026, 7, 4, 9, 8)
         assert qsos[1].dup is True and qsos[1].pts == 0
 
@@ -660,9 +660,9 @@ class TestEdi:
             "PCall=HA5LA\nPWWLo=JN97TF\n[QSORecords;1]\n"
             "260706;1615;B;1;59;001;59;002;;JN97WM;37;;;;\n"
         )
-        mycall, mywwl, qsos = merge_edi([str(band_2m), str(band_70cm)])
-        assert (mycall, mywwl) == ("HA5LA", "JN97TF")
-        assert [q.call for q in qsos] == [
+        my_callsign, mywwl, qsos = merge_edi([str(band_2m), str(band_70cm)])
+        assert (my_callsign, mywwl) == ("HA5LA", "JN97TF")
+        assert [q.callsign for q in qsos] == [
             "A",
             "B",
             "C",
@@ -1263,7 +1263,7 @@ class TestAss:
             "PCall=HA5LA\nPWWLo=JN97MM\n[QSORecords;1]\n"
             "260704;1117;HA7NK;2;599;002;599;014;;JN97WW;77;;;;\n"
         )
-        mycall, mywwl, qsos = parse_edi(str(edi))
+        my_callsign, mywwl, qsos = parse_edi(str(edi))
         segs = [
             Segment(
                 "a",
@@ -1301,7 +1301,7 @@ class TestAss:
             "PCall=HA5LA\nPWWLo=JN97MM\n[QSORecords;1]\n"
             "260704;1301;HA5MA;2;599;003;599;019;;JN97MK;9;;;;\n"
         )
-        mycall, mywwl, qsos = parse_edi(str(edi))
+        my_callsign, mywwl, qsos = parse_edi(str(edi))
         segs = [
             Segment(
                 "a",
@@ -1336,7 +1336,7 @@ class TestAss:
             "PCall=HA5LA\nPWWLo=JN97MM\n[QSORecords;1]\n"
             "260704;1300;HA7NK;1;59;001;59;014;;JN97WW;77;;;;\n"
         )
-        mycall, mywwl, qsos = parse_edi(str(edi))
+        my_callsign, mywwl, qsos = parse_edi(str(edi))
         segs = [
             Segment(
                 "a", datetime(2026, 7, 4, 13, 0, 0), 300.0, 0.0
@@ -1725,8 +1725,8 @@ def _text(t, text):
     return InputLogEvent(t, "text", text=text)
 
 
-def _qso_ev(t, call, dup=False):
-    return InputLogEvent(t, "qso", call=call, dup=dup)
+def _qso_ev(t, callsign, dup=False):
+    return InputLogEvent(t, "qso", callsign=callsign, dup=dup)
 
 
 class TestInputLog:
@@ -1741,7 +1741,7 @@ class TestInputLog:
         assert log == [
             InputLogEvent(datetime(2026, 7, 4, 11, 0, 2, 123456), "text", text="H"),
             InputLogEvent(
-                datetime(2026, 7, 4, 11, 0, 5), "qso", call="HA7NS", dup=False
+                datetime(2026, 7, 4, 11, 0, 5), "qso", callsign="HA7NS", dup=False
             ),
         ]
 
@@ -1839,8 +1839,8 @@ class TestParseWebcamPreciseFilename:
 
 
 class TestMatchQsoTimes:
-    def _qso(self, dt, call):
-        return Qso(dt, call, "59", "1", "59", "2", "JN97MM", 10, False)
+    def _qso(self, dt, callsign):
+        return Qso(dt, callsign, "59", "1", "59", "2", "JN97MM", 10, False)
 
     def test_matches_by_call_for_a_single_occurrence(self):
         qsos = [self._qso(datetime(2026, 7, 6, 16, 1), "HA7NS")]
@@ -2293,9 +2293,9 @@ def _hud_seg(dur=600.0, audio_t=0.0, wall=None):
     return Segment("a", wall or datetime(2026, 8, 3, 20, 0, 0), dur, audio_t)
 
 
-def _hud_qso(call, pts, loc="JN97TF", dup=False):
+def _hud_qso(callsign, pts, loc="JN97TF", dup=False):
     return Qso(
-        datetime(2026, 8, 3, 18, 0), call, "599", "001", "599", "001", loc, pts, dup
+        datetime(2026, 8, 3, 18, 0), callsign, "599", "001", "599", "001", loc, pts, dup
     )
 
 

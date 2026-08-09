@@ -216,7 +216,7 @@ async def scatter_candidates(my_loc: str, online_users: dict[str, dict]) -> list
         return []
     my_lat, my_lon = maidenhead_to_latlon(my_loc)
     candidates = []
-    for call, user in online_users.items():
+    for callsign, user in online_users.items():
         loc = user.get("loc", "")
         if not loc:
             continue
@@ -236,7 +236,7 @@ async def scatter_candidates(my_loc: str, online_users: dict[str, dict]) -> list
         )
         candidates.append(
             {
-                "call": call,
+                "callsign": callsign,
                 "loc": loc,
                 "dist_km": dist,
                 "bear_to_mid": bear_to_mid,
@@ -277,9 +277,14 @@ async def fetch_rig_info() -> tuple[str, str]:
 
 
 def sked_text(
-    call: str, my_call: str, my_loc: str, their_loc: str, qrg: str = "", mode: str = ""
+    callsign: str,
+    my_callsign: str,
+    my_loc: str,
+    their_loc: str,
+    qrg: str = "",
+    mode: str = "",
 ) -> str:
-    msg = f"Hi {call}, sked? Puskás URH Kupa"
+    msg = f"Hi {callsign}, sked? Puskás URH Kupa"
     if my_loc and their_loc:
         try:
             lat1, lon1 = maidenhead_to_latlon(my_loc)
@@ -295,7 +300,7 @@ def sked_text(
             msg += f" {mode}"
     if my_loc:
         msg += f" ({my_loc})"
-    msg += f". 73 {my_call}"
+    msg += f". 73 {my_callsign}"
     return msg
 
 
@@ -364,8 +369,8 @@ def _persist_seen(data: str) -> None:
 
 
 class Bridge:
-    def __init__(self, callsign: str):
-        self.callsign = callsign
+    def __init__(self, my_callsign: str):
+        self.my_callsign = my_callsign
         self.my_locator = ""
         self.kst: ON4KSTClient | None = None
         self._sessions: set[IRCSession] = set()
@@ -399,19 +404,19 @@ class Bridge:
                 await self.kst.send(text)
         else:
             if text.strip().lower() == "sked":
-                call = target.upper()
-                user = self.kst.online_users.get(call) or {}
+                callsign = target.upper()
+                user = self.kst.online_users.get(callsign) or {}
                 qrg, mode = await fetch_rig_info()
                 msg = sked_text(
-                    call,
-                    self.callsign,
+                    callsign,
+                    self.my_callsign,
                     self.my_locator,
                     user.get("loc", ""),
                     qrg,
                     mode,
                 )
-                await self.kst.send(f"/CQ {call} {msg}")
-                await self._notify(f"→ /CQ {call}: {msg}")
+                await self.kst.send(f"/CQ {callsign} {msg}")
+                await self._notify(f"→ /CQ {callsign}: {msg}")
             else:
                 await self.kst.send(f"/CQ {target.upper()} {text}")
 
@@ -429,7 +434,7 @@ class Bridge:
     async def _notify_status(self, text: str):
         for s in list(self._sessions):
             try:
-                await s._send(f":{SERVER_NAME} NOTICE {self.callsign} :{text}")
+                await s._send(f":{SERVER_NAME} NOTICE {self.my_callsign} :{text}")
             except Exception:
                 pass
 
@@ -471,8 +476,8 @@ class Bridge:
             return
         my_lat, my_lon = maidenhead_to_latlon(self.my_locator)
         rows = []
-        for call, user in self.kst.online_users.items():
-            if call == self.callsign:
+        for callsign, user in self.kst.online_users.items():
+            if callsign == self.my_callsign:
                 continue
             loc = user.get("loc", "")
             if not loc:
@@ -481,7 +486,7 @@ class Bridge:
                 th_lat, th_lon = maidenhead_to_latlon(loc)
                 dist = haversine_km(my_lat, my_lon, th_lat, th_lon)
                 bear = initial_bearing(my_lat, my_lon, th_lat, th_lon)
-                rows.append((call, loc, dist, bear, user.get("away", False)))
+                rows.append((callsign, loc, dist, bear, user.get("away", False)))
             except Exception:
                 continue
         rows.sort(key=lambda r: r[2])
@@ -489,10 +494,10 @@ class Bridge:
             await self._notify("No other stations online.")
             return
         await self._notify(f"Online stations ({len(rows)}), sorted by distance:")
-        for call, loc, dist, bear, away in rows:
+        for callsign, loc, dist, bear, away in rows:
             away_str = " (away)" if away else ""
             await self._notify(
-                f"  {call:<10} {loc:<8} {int(dist):>5} km  {int(bear):>3}°{away_str}"
+                f"  {callsign:<10} {loc:<8} {int(dist):>5} km  {int(bear):>3}°{away_str}"
             )
 
     async def _run_scatter(self):
@@ -521,20 +526,20 @@ class Bridge:
             else:
                 ac_str = "no aircraft near midpoint"
             await self._notify(
-                f"  {c['call']:<10} {c['loc']:<8} "
+                f"  {c['callsign']:<10} {c['loc']:<8} "
                 f"{int(c['dist_km']):>5} km  "
                 f"aim {int(c['bear_to_mid']):>3}° → {c['mid_loc']}  "
                 f"{ac_str}"
             )
 
     async def kst_message(
-        self, utc: str, from_call: str, recipient: str | None, text: str
+        self, utc: str, from_callsign: str, recipient: str | None, text: str
     ):
-        if from_call == self.callsign:
+        if from_callsign == self.my_callsign:
             return  # suppress echo of our own messages
 
-        if recipient and recipient == self.callsign:
-            target = self.callsign  # PM addressed to me → query window
+        if recipient and recipient == self.my_callsign:
+            target = self.my_callsign  # PM addressed to me → query window
         elif recipient:
             target = CHANNEL  # addressed to someone else → channel
             text = f"({recipient}) {text}"
@@ -543,22 +548,22 @@ class Bridge:
 
         for s in list(self._sessions):
             try:
-                await s.send_privmsg(from_call, target, text)
+                await s.send_privmsg(from_callsign, target, text)
             except Exception:
                 pass
 
     async def kst_userlist(self, old: dict[str, dict], new: dict[str, dict]):
         # Update persistent seen-stations file (only write if something changed)
         changed = False
-        for call, user in new.items():
+        for callsign, user in new.items():
             loc = user.get("loc", "")
             if not loc:
                 continue
-            if call not in self._seen:
-                self._seen[call] = {"wwls": [loc], "bands": []}
+            if callsign not in self._seen:
+                self._seen[callsign] = {"wwls": [loc], "bands": []}
                 changed = True
                 continue
-            wwls = self._seen[call]["wwls"]
+            wwls = self._seen[callsign]["wwls"]
             if wwls and wwls[0] == loc:
                 continue  # already the most-recent locator — no change
             if loc in wwls:
@@ -573,12 +578,12 @@ class Bridge:
         parted = set(old) - set(new)
         for s in list(self._sessions):
             try:
-                for call in joined:
-                    if call != self.callsign:
-                        await s.send_join(call)
-                for call in parted:
-                    if call != self.callsign:
-                        await s.send_part(call)
+                for callsign in joined:
+                    if callsign != self.my_callsign:
+                        await s.send_join(callsign)
+                for callsign in parted:
+                    if callsign != self.my_callsign:
+                        await s.send_part(callsign)
             except Exception:
                 pass
 
@@ -618,8 +623,10 @@ class IRCSession:
     # Server-to-client message helpers
     # ----------------------------------------------------------
 
-    async def send_privmsg(self, from_call: str, target: str, text: str):
-        await self._send(f":{from_call}!{from_call}@on4kst PRIVMSG {target} :{text}")
+    async def send_privmsg(self, from_callsign: str, target: str, text: str):
+        await self._send(
+            f":{from_callsign}!{from_callsign}@on4kst PRIVMSG {target} :{text}"
+        )
 
     async def send_join(self, callsign: str):
         await self._send(f":{callsign}!{callsign}@on4kst JOIN {CHANNEL}")
@@ -630,7 +637,7 @@ class IRCSession:
     async def _send_names(self):
         kst = self._bridge.kst
         users = list(kst.online_users.keys()) if kst else []
-        me = self._bridge.callsign
+        me = self._bridge.my_callsign
         nicks = [me] + [u for u in users if u != me]
         for i in range(0, max(1, len(nicks)), 20):
             chunk = " ".join(nicks[i : i + 20])
@@ -642,19 +649,19 @@ class IRCSession:
     # ----------------------------------------------------------
 
     async def _welcome(self):
-        callsign = self._bridge.callsign
+        my_callsign = self._bridge.my_callsign
         await self._num(1, f"Welcome to the ON4KST IRC Bridge, {self.nick}")
         await self._num(2, f"Your host is {SERVER_NAME}")
         await self._num(3, "This server was created today")
         await self._num(4, SERVER_NAME, "on4kst-bridge-1.0", "o", "o")
         await self._num(375, f"- {SERVER_NAME} Message of the Day -")
         await self._num(372, "- ON4KST 144/432 MHz IRC bridge")
-        await self._num(372, f"- Connected as: {callsign}")
+        await self._num(372, f"- Connected as: {my_callsign}")
         await self._num(372, f"- Join {CHANNEL} to enter the chat")
         await self._num(376, "End of MOTD command.")
-        if self.nick.upper() != callsign.upper():
-            await self._send(f":{self.nick}!{self.nick}@localhost NICK {callsign}")
-            self.nick = callsign
+        if self.nick.upper() != my_callsign.upper():
+            await self._send(f":{self.nick}!{self.nick}@localhost NICK {my_callsign}")
+            self.nick = my_callsign
         self._reg = True
         await self._bridge.irc_connected(self)
         await self._do_join()  # auto-join #on4kst immediately after welcome
@@ -731,12 +738,12 @@ class IRCSession:
         elif cmd == "WHO":
             target = parts[1].strip() if len(parts) > 1 else CHANNEL
             if target.lower() == CHANNEL.lower() and self._bridge.kst:
-                for call, user in self._bridge.kst.online_users.items():
+                for callsign, user in self._bridge.kst.online_users.items():
                     flag = "G" if user.get("away") else "H"
                     gecos = user.get("info") or user["loc"]
                     await self._send(
-                        f":{SERVER_NAME} 352 {self.nick} {CHANNEL} {call} on4kst "
-                        f"{SERVER_NAME} {call} {flag} :0 {gecos} [{user['loc']}]"
+                        f":{SERVER_NAME} 352 {self.nick} {CHANNEL} {callsign} on4kst "
+                        f"{SERVER_NAME} {callsign} {flag} :0 {gecos} [{user['loc']}]"
                     )
             await self._num(315, CHANNEL, "End of WHO list.")
 
@@ -802,11 +809,11 @@ class IRCSession:
 
 class ON4KSTClient:
     def __init__(
-        self, host: str, port: int, callsign: str, password: str, bridge: Bridge
+        self, host: str, port: int, my_callsign: str, password: str, bridge: Bridge
     ):
         self.host = host
         self.port = port
-        self.callsign = callsign.upper()
+        self.my_callsign = my_callsign.upper()
         self.password = password
         self._bridge = bridge
         self._reader: asyncio.StreamReader | None = None
@@ -859,7 +866,7 @@ class ON4KSTClient:
     async def login(self) -> bool:
         if not await self._read_until(RE_LOGIN):
             return False
-        await self.send(self.callsign.lower())
+        await self.send(self.my_callsign.lower())
         if not await self._read_until(RE_PASSWORD):
             return False
         await self.send(self.password)
@@ -883,7 +890,7 @@ class ON4KSTClient:
                     buf += strip_iac(chunk)
                     text = buf.decode("utf-8", errors="replace")
                     for line in text.splitlines():
-                        if self.callsign in line.upper():
+                        if self.my_callsign in line.upper():
                             m = RE_LOCATOR.search(line)
                             if m:
                                 return m.group(1).upper()
@@ -913,10 +920,10 @@ class ON4KSTClient:
         m = RE_USR.match(stripped)
         if m:
             away = m.group(1) == "("
-            call = m.group(2).upper()
+            callsign = m.group(2).upper()
             loc = m.group(3).upper()
             info = m.group(4).strip()
-            self._new_users[call] = {"loc": loc, "info": info, "away": away}
+            self._new_users[callsign] = {"loc": loc, "info": info, "away": away}
             self._collecting = True
             return
 
@@ -939,7 +946,7 @@ class ON4KSTClient:
         m = RE_CHAT_MSG.match(stripped)
         if m:
             utc = m.group(1)
-            from_call = m.group(2).upper()
+            from_callsign = m.group(2).upper()
             rest = m.group(3)
             r = RE_RECIPIENT.match(rest)
             if r:
@@ -949,7 +956,7 @@ class ON4KSTClient:
                 recipient = None
                 text = rest
             asyncio.create_task(
-                self._bridge.kst_message(utc, from_call, recipient, text)
+                self._bridge.kst_message(utc, from_callsign, recipient, text)
             )
 
     def _flush_userlist(self):
@@ -985,11 +992,11 @@ class ON4KSTClient:
 # ============================================================
 
 
-async def _run_kst(bridge: Bridge, callsign: str, password: str):
+async def _run_kst(bridge: Bridge, my_callsign: str, password: str):
     """Keep ON4KST connected, reconnecting as needed."""
     was_connected = False
     while True:
-        kst = ON4KSTClient(KST_HOST, KST_PORT, callsign, password, bridge)
+        kst = ON4KSTClient(KST_HOST, KST_PORT, my_callsign, password, bridge)
         bridge.kst = kst
         print(f"[KST] Connecting to {KST_HOST}:{KST_PORT} ...")
         if await kst.connect():
@@ -1027,10 +1034,10 @@ async def _run_kst(bridge: Bridge, callsign: str, password: str):
 
 
 async def _main():
-    callsign, password = load_credentials()
-    print(f"[bridge] Callsign: {callsign}")
+    my_callsign, password = load_credentials()
+    print(f"[bridge] Callsign: {my_callsign}")
 
-    bridge = Bridge(callsign)
+    bridge = Bridge(my_callsign)
 
     async def _irc_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         addr = writer.get_extra_info("peername")
@@ -1046,7 +1053,7 @@ async def _main():
     async with server:
         await asyncio.gather(
             server.serve_forever(),
-            _run_kst(bridge, callsign, password),
+            _run_kst(bridge, my_callsign, password),
         )
 
 

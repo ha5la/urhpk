@@ -26,7 +26,7 @@ quick start is in README.md.
   AWAY command from IRC client forwards the same
 - User list updates (every 120 s) trigger IRC JOIN/PART events for member list accuracy
 - **ON4KST seen-stations**: every user list update is persisted to `~/.puskas/on4kst-seen-stations.json`
-  (`{call: {wwls: [most_recent, ...], bands: []}}` — same format as `puskas-seen-stations.json` in `~/.puskas/`
+  (`{callsign: {wwls: [most_recent, ...], bands: []}}` — same format as `puskas-seen-stations.json` in `~/.puskas/`
   but `bands` is always empty since band is not known from ON4KST). The logger merges this file
   with `~/.puskas/puskas-seen-stations.json` to build its locator cache.
 - IRC subset implemented: CAP negotiation, NICK/USER registration, PING/PONG,
@@ -72,7 +72,7 @@ uv run puskas_harvester.py
 - Records **only log submitters** — partner callsigns/locators from uploaded logs are skipped
   because they are typed by someone else and prone to typos
 - QSO records are still fetched per submitter to capture which bands they operated on
-- Output: `~/.puskas/puskas-seen-stations.json` — `{call: {wwls: [most_recent, ...], bands}}`
+- Output: `~/.puskas/puskas-seen-stations.json` — `{callsign: {wwls: [most_recent, ...], bands}}`
   where `wwls` is a list of all known locators in reverse-chronological order (most recently
   observed in any Puskás round appears first)
 - All API responses cached in `.puskas_cache/`; delete it to force a fresh fetch
@@ -314,7 +314,7 @@ actually began. `qso_windows()` snaps each QSO onto real audio structure —
 `cluster_starts` finds every burst of activity, `_tx_start` finds the operator's own
 first transmission within it, `_snap_to_cluster` takes the *latest* burst at or
 before the anchor. `--input-log` supplies an exact anchor where available
-(`match_qso_times` pairs EDI QSOs to logged `'qso'` events **by call in
+(`match_qso_times` pairs EDI QSOs to logged `'qso'` events **by callsign in
 chronological order**, never by minute — a hand-edited seed log is expected to move
 timestamps across minute boundaries). Each rule here fixed a specific reported bug;
 RECORDING.md has the cases, and the regression tests name them.
@@ -591,7 +591,7 @@ These requirements must be preserved across all future changes:
   the operator can see surrounding context and is not misled into thinking QSOs outside the
   window have been deleted.
 - **Edit preserves immutable fields**: dt, band, mode, nr_s, rst_s are kept from the
-  original QSO; only the received side (call, rst_r, nr_r, loc) can change. Band and mode
+  original QSO; only the received side (callsign, rst_r, nr_r, loc) can change. Band and mode
   come from the original QSO, not the current rig state — this is intentional. Escape in
   edit mode triggers `_REDRAW` so the highlight clears immediately.
 - **Edit mode isolates from rig changes**: while `_state['edit_idx'] is not None`,
@@ -663,7 +663,7 @@ uv run puskas_logger.py
 
 `_merge_loc_sources(*sources)` takes sources highest-priority-first; each locator
 appears once at the position of its highest-priority source. `_update_loc_cache(cache,
-call, loc)` inserts `loc` at the front of `cache[call]` (most recently used first).
+callsign, loc)` inserts `loc` at the front of `cache[callsign]` (most recently used first).
 No API calls during contest.
 
 **Crash recovery**: at startup, scans `*.edi` / `*.EDI` (case-insensitive) in the current
@@ -684,7 +684,7 @@ HA7NS 599 014 JN97WM   → CW with locator
 - Tab-complete locators after NR: shows all known locators for the callsign in
   reverse-chronological order (most recently used first)
 - Space after callsign → auto-fills RST (59 or 599); if there is a recent cross-mode
-  QSO (same call, same band, different mode, within **5 minutes**) the predicted received
+  QSO (same callsign, same band, different mode, within **5 minutes**) the predicted received
   NR (`last_nr_r + 1`) is also filled (`_predict_nr` with injectable `now` parameter).
   When NR is predicted no trailing space is appended — the operator's next Space press
   both separates NR from locator and triggers locator autocomplete (single clean separator).
@@ -696,7 +696,7 @@ HA7NS 599 014 JN97WM   → CW with locator
   green geo info are shown together — geo is never suppressed
 - Right-prompt also shows, in **bright** red (`ansibrightred`), the band/mode combos
   already worked with this callsign this round (e.g. `2M:SSB,CW 70CM:CW`), grouped by
-  band — `LogBook.worked_combos(call)` checks all 9 (3 bands × 3 modes). Red because
+  band — `LogBook.worked_combos(callsign)` checks all 9 (3 bands × 3 modes). Red because
   these are the combos that would be dups; naturally empty (and so hidden) for a
   brand-new callsign with nothing worked yet. **Must be `ansibrightred`, not plain
   `ansired`**: when the current band/mode is itself a dup the whole input line

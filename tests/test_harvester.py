@@ -225,12 +225,12 @@ class TestMain:
         monkeypatch.setattr(
             puskas_harvester,
             "fetch_round_codes",
-            lambda eid, call: (round_codes or {}).get((eid, call), []),
+            lambda eid, callsign: (round_codes or {}).get((eid, callsign), []),
         )
         monkeypatch.setattr(
             puskas_harvester,
             "fetch_qsos",
-            lambda eid, call, code: (qsos or {}).get((eid, call, code), []),
+            lambda eid, callsign, code: (qsos or {}).get((eid, callsign, code), []),
         )
         output = tmp_path / "output.json"
         monkeypatch.setattr(puskas_harvester, "PUSKAS_DIR", tmp_path)
