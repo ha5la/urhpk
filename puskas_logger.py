@@ -10,6 +10,7 @@ Commands: !undo  !help
 Ctrl-D at empty prompt → save EDI files and exit
 """
 
+import asyncio
 import netrc
 import os
 import re
@@ -517,9 +518,24 @@ def _handle_command(line: str, lb: LogBook, tname: str):
 # ──────────────────────────────────────────────────────────────
 # Offline setup wizard
 # ──────────────────────────────────────────────────────────────
-def _offline_setup():
+async def _ainput(prompt: str) -> str:
+    """input() off the event loop.
+
+    The one place a thread is still right: reading a tty line has no asyncio
+    form, and this holds no lock. Used only by the startup wizard, before the
+    prompt_toolkit application takes over stdin.
+    """
+    return await asyncio.to_thread(input, prompt)
+
+
+async def _offline_setup():
     """Ask for band and mode interactively when rig is offline at startup.
     Raises EOFError / KeyboardInterrupt if the user wants to quit.
+
+    The loop re-checks current_rig() every time round, because powering the
+    radio on is the other way out of here -- which is why input() runs off the
+    event loop. Blocking it would starve the radio task the wizard is waiting
+    for, and the operator would be stuck typing a band the radio already knows.
     """
     band, mode, _, online = current_rig()
     if online or (band and mode):
@@ -536,13 +552,13 @@ def _offline_setup():
         if online or (band and mode):
             return
         if not band:
-            raw = input(f"  Band [{' / '.join(BANDS)}]: ").strip().upper()
+            raw = (await _ainput(f"  Band [{' / '.join(BANDS)}]: ")).strip().upper()
             if raw in BANDS:
                 _rig_manual["band"] = raw
             else:
                 print(f"  \033[31m{raw!r} — choose {', '.join(BANDS)}\033[0m")
         elif not mode:
-            raw = input(f"  Mode [{' / '.join(MODES)}]: ").strip().upper()
+            raw = (await _ainput(f"  Mode [{' / '.join(MODES)}]: ")).strip().upper()
             if raw in MODES:
                 _rig_manual["mode"] = raw
             else:
@@ -563,7 +579,7 @@ def _is_contest_time(now: datetime | None = None) -> bool:
 # ──────────────────────────────────────────────────────────────
 # Main loop
 # ──────────────────────────────────────────────────────────────
-def run(lb: LogBook, tname: str):
+async def run(lb: LogBook, tname: str):
     # 0 = last QSO selected for edit, 1 = second-to-last, None = no edit in progress
     _state: dict = {
         "edit_idx": None,
@@ -961,7 +977,7 @@ def run(lb: LogBook, tname: str):
     threading.Thread(target=_toolbar_watcher, args=(session.app,), daemon=True).start()
 
     try:
-        _offline_setup()
+        await _offline_setup()
     except (EOFError, KeyboardInterrupt):
         return
 
@@ -997,7 +1013,7 @@ def run(lb: LogBook, tname: str):
                 b, m, *_ = current_rig()
                 return f"{b or '?'} {m or '?'}  RX ► "
 
-            result = session.prompt(
+            result = await session.prompt_async(
                 _prompt_msg,
                 bottom_toolbar=_toolbar,
                 rprompt=_rprompt,
@@ -1222,7 +1238,7 @@ def main():
     input("[Enter to start]")
 
     try:
-        run(lb, tname)
+        asyncio.run(run(lb, tname))
     except Exception as e:
         print(f"\n[ERROR] {e}")
         save_all(lb, tname)
