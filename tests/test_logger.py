@@ -1,5 +1,6 @@
 """Tests for puskas_logger pure functions — no rig, no network, no prompts."""
 
+import asyncio
 import io
 import threading
 from datetime import datetime, timezone
@@ -1468,23 +1469,12 @@ class TestRigServer:
     """The logger's rigctld-dialect TCP server (port 4532) -- what
     on4kst_irc_bridge.py polls now that rigctld itself is gone."""
 
-    def _client(self, port):
-        import socket
+    async def _serve(self):
+        server = await rig_server.start(0, pl.rig_snapshot)
+        assert server is not None
+        return server, server.sockets[0].getsockname()[1]
 
-        s = socket.create_connection(("127.0.0.1", port), timeout=2.0)
-        return s, s.makefile("rb")
-
-    def _serve(self):
-        import threading
-
-        srv = rig_server.bind(0)
-        assert srv is not None
-        threading.Thread(
-            target=rig_server.serve, args=(srv, pl.rig_snapshot), daemon=True
-        ).start()
-        return srv, srv.getsockname()[1]
-
-    def test_serves_f_and_m_like_rigctld(self):
+    async def test_serves_f_and_m_like_rigctld(self):
         # Exactly the byte flow on4kst_irc_bridge.fetch_rig_info() produces:
         # "f\nm\n", then read freq line + mode line (passband line ignored).
         with _rig_lock:
@@ -1496,38 +1486,59 @@ class TestRigServer:
                 freq_hz=144_080_000,
                 raw_mode="CW",
             )
-        srv, port = self._serve()
+        server, port = await self._serve()
         try:
-            s, r = self._client(port)
-            s.sendall(b"f\nm\n")
-            assert r.readline() == b"144080000\n"
-            assert r.readline() == b"CW\n"
-            assert r.readline() == b"0\n"
-            s.close()
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.write(b"f\nm\n")
+            await writer.drain()
+            assert await reader.readline() == b"144080000\n"
+            assert await reader.readline() == b"CW\n"
+            assert await reader.readline() == b"0\n"
+            writer.close()
         finally:
-            srv.close()
+            server.close()
             with _rig_lock:
                 _rig.update(band="", mode="", qrg="", online=False)
 
-    def test_replies_rprt_error_when_radio_offline(self):
+    async def test_replies_rprt_error_when_radio_offline(self):
         with _rig_lock:
             _rig.update(band="", mode="", qrg="", online=False)
-        srv, port = self._serve()
+        server, port = await self._serve()
         try:
-            s, r = self._client(port)
-            s.sendall(b"f\n")
-            assert r.readline() == b"RPRT -1\n"
-            s.close()
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.write(b"f\n")
+            await writer.drain()
+            assert await reader.readline() == b"RPRT -1\n"
+            writer.close()
         finally:
-            srv.close()
+            server.close()
 
-    def test_bind_yields_none_when_port_taken(self):
-        srv = rig_server.bind(0)
-        assert srv is not None
+    async def test_two_clients_are_served_at_once(self):
+        # start_server replaced an accept loop plus a thread per client; this
+        # pins the property that made those threads exist in the first place.
+        with _rig_lock:
+            _rig.update(online=True, freq_hz=144_300_000, raw_mode="USB")
+        server, port = await self._serve()
         try:
-            assert rig_server.bind(srv.getsockname()[1]) is None
+            a = await asyncio.open_connection("127.0.0.1", port)
+            b = await asyncio.open_connection("127.0.0.1", port)
+            for reader, writer in (a, b):
+                writer.write(b"f\n")
+                await writer.drain()
+            for reader, writer in (a, b):
+                assert await reader.readline() == b"144300000\n"
+                writer.close()
         finally:
-            srv.close()
+            server.close()
+            with _rig_lock:
+                _rig.update(online=False, freq_hz=0, raw_mode="")
+
+    async def test_start_yields_none_when_port_taken(self):
+        server, port = await self._serve()
+        try:
+            assert await rig_server.start(port, pl.rig_snapshot) is None
+        finally:
+            server.close()
 
 
 class TestSignalTeardown:

@@ -5,57 +5,50 @@ first, verified live — so the logger owns it and serves everyone else from its
 own push-fresh cache. Replies come from memory, which is why on4kst_irc_bridge
 can query at the moment it composes a sked instead of keeping a poll cache.
 
-Where the state comes from is not this module's business: `serve` is handed a
+Where the state comes from is not this module's business: `start` is handed a
 `snapshot()` returning (online, freq_hz, raw_mode), and answers from whatever
 that says at the instant a query arrives.
 """
 
 from __future__ import annotations
 
-import socket
-import threading
+import asyncio
 from typing import Callable
 
 Snapshot = Callable[[], tuple[bool, int, str]]
 
 
-def bind(port: int) -> socket.socket | None:
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        srv.bind(("127.0.0.1", port))
-    except OSError:
-        srv.close()
-        return None  # port taken (e.g. a real rigctld) — serve nothing
-    srv.listen(4)
-    return srv
+async def start(port: int, snapshot: Snapshot) -> asyncio.Server | None:
+    """Serve the dialect on 127.0.0.1:port, or None if the port is taken.
 
+    A taken port means something else is already answering there — a real
+    rigctld, or a second logger — so the right move is to serve nothing rather
+    than to fight over it.
+    """
 
-def _serve_client(conn: socket.socket, snapshot: Snapshot) -> None:
-    try:
-        with conn, conn.makefile("rb") as r:
-            for line in r:
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        try:
+            while True:
+                line = await reader.readline()
+                if not line:
+                    return
                 cmd = line.strip()
                 online, freq_hz, raw_mode = snapshot()
                 if cmd == b"f" and online:
-                    conn.sendall(f"{freq_hz}\n".encode())
+                    writer.write(f"{freq_hz}\n".encode())
                 elif cmd == b"m" and online:
-                    conn.sendall(f"{raw_mode}\n0\n".encode())
+                    writer.write(f"{raw_mode}\n0\n".encode())
                 elif cmd == b"q":
-                    break
+                    return
                 else:
-                    conn.sendall(b"RPRT -1\n")
-    except Exception:
-        pass
+                    writer.write(b"RPRT -1\n")
+                await writer.drain()
+        except (ConnectionError, asyncio.IncompleteReadError):
+            pass
+        finally:
+            writer.close()
 
-
-def serve(srv: socket.socket, snapshot: Snapshot) -> None:
-    """Accept loop: one thread per client, each answering from `snapshot`."""
-    while True:
-        try:
-            conn, _ = srv.accept()
-        except OSError:
-            return
-        threading.Thread(
-            target=_serve_client, args=(conn, snapshot), daemon=True
-        ).start()
+    try:
+        return await asyncio.start_server(handle, "127.0.0.1", port)
+    except OSError:
+        return None

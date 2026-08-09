@@ -21,12 +21,15 @@ import os
 import pty
 import select
 import signal
+import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 import pytest
+
+from wiring import RIG_SERVER_PORT
 
 pytestmark = pytest.mark.smoke
 
@@ -139,6 +142,36 @@ def test_a_whole_round_offline(logger, tmp_path):
     kinds = {e["event"] for e in events}
     assert "text" in kinds, "keystrokes were not recorded"
     assert "qso" in kinds, "the logged QSO was not recorded"
+
+
+def _port_free(port: int) -> bool:
+    with socket.socket() as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False
+
+
+def test_the_rig_server_answers_while_the_logger_runs(logger):
+    """The bridge asks the running logger for the radio's frequency.
+
+    Unit tests cover the dialect; this covers the part they cannot -- that the
+    server is actually being served, by the same event loop that is drawing the
+    UI. With no radio attached the honest answer is the error reply.
+    """
+    if not _port_free(RIG_SERVER_PORT):
+        pytest.skip(f"port {RIG_SERVER_PORT} already in use on this machine")
+
+    for marker, reply in PROMPTS:
+        logger.wait_for(marker)
+        logger.send(reply)
+    logger.wait_for(b"PUSK")
+
+    with socket.create_connection(("127.0.0.1", RIG_SERVER_PORT), timeout=5) as s:
+        s.sendall(b"f\n")
+        assert s.makefile("rb").readline() == b"RPRT -1\n"
 
 
 def test_sigterm_finishes_instead_of_hanging(logger, tmp_path):

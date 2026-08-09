@@ -700,7 +700,7 @@ async def run(lb: LogBook, tname: str):
             _is_contest_time(now),
         )
 
-    def _toolbar_watcher(app) -> None:
+    async def _toolbar_watcher(app) -> None:
         """Replaces prompt_toolkit's own refresh_interval polling: that
         called _toolbar() (and therefore redrew the screen) unconditionally
         every 100ms, 10x/s, even though almost every one of those ticks
@@ -713,18 +713,18 @@ async def run(lb: LogBook, tname: str):
         cadence (so a real second-boundary is still caught within ~100ms,
         preserving why 10Hz was chosen over 1Hz in the first place) but only
         calling invalidate() when the signature actually differs cuts this
-        down to roughly one redraw per second in the common case. `app` is
-        `session.app`, captured directly rather than via get_app() -- a
-        plain background thread runs in its own fresh contextvars Context,
-        so get_app() from here would see no running Application at all and
-        return a DummyApplication whose invalidate() is a silent no-op."""
+        down to roughly one redraw per second in the common case.
+
+        `app` is passed in rather than found with get_app(): this task is
+        created before prompt_async() runs, so the application is not the
+        current one in this context yet."""
         last = None
         while True:
             sig = _toolbar_signature()
             if sig != last:
                 last = sig
                 app.invalidate()
-            time.sleep(0.1)
+            await asyncio.sleep(0.1)
 
     def _qso_to_input(q: QSO) -> str:
         parts = [q.callsign, q.rst_r, f"{q.nr_r:03d}"]
@@ -974,11 +974,13 @@ async def run(lb: LogBook, tname: str):
         enable_history_search=False,
     )
     session.default_buffer.on_text_changed += on_buffer_changed
-    threading.Thread(target=_toolbar_watcher, args=(session.app,), daemon=True).start()
+    watcher = asyncio.create_task(_toolbar_watcher(session.app))
+    await rig_server.start(RIG_SERVER_PORT, rig_snapshot)
 
     try:
         await _offline_setup()
     except (EOFError, KeyboardInterrupt):
+        watcher.cancel()
         return
 
     while True:
@@ -1126,6 +1128,7 @@ async def run(lb: LogBook, tname: str):
         _cache_loc(callsign, loc)
         save_all(lb, tname)
 
+    watcher.cancel()
     print("\nSaving EDI files...")
     paths = save_all(lb, tname)
     if paths:
@@ -1210,11 +1213,6 @@ def main():
     _radio["thread"] = t
     t.start()
     threading.Thread(target=rotator.poll_thread, daemon=True).start()
-    _rig_srv = rig_server.bind(RIG_SERVER_PORT)
-    if _rig_srv is not None:
-        threading.Thread(
-            target=rig_server.serve, args=(_rig_srv, rig_snapshot), daemon=True
-        ).start()
     _scope_path = Path(
         f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{lb.my_callsign}.scope"
     )
