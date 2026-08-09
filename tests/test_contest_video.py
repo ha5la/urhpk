@@ -14,11 +14,19 @@ import numpy as np
 import pyte
 from PIL import Image, ImageDraw, ImageFont
 
+import cast_render
 import contest_video as cv
 import cw_decode
+from cast_render import (
+    CAST_BG,
+    _cast_color,
+    _CastScreen,
+    _CastStream,
+    _draw_cast_row,
+    parse_cast_header,
+)
 from contest_video import (
     CAPTION_DUR_S,
-    CAST_BG,
     GAP_KEEP_S,
     SCOPE_AMP_MAX,
     InputLogEvent,
@@ -26,10 +34,6 @@ from contest_video import (
     Segment,
     SegState,
     TelemetrySample,
-    _cast_color,
-    _CastScreen,
-    _CastStream,
-    _draw_cast_row,
     _eff,
     _find_offset_correction,
     _resize_scope_row,
@@ -47,7 +51,6 @@ from contest_video import (
     load_telemetry,
     match_qso_times,
     merge_edi,
-    parse_cast_header,
     parse_edi,
     parse_webcam_precise_filename,
     parse_webcam_wall,
@@ -960,7 +963,7 @@ class TestTerminalCast:
         assert _cast_color("nonexistent-color-name", default) == default
 
     def test_cast_color_looks_up_known_names(self):
-        assert _cast_color("red", (0, 0, 0)) == cv.CAST_PALETTE["red"]
+        assert _cast_color("red", (0, 0, 0)) == cast_render.CAST_PALETTE["red"]
 
     def test_draw_cast_row_descender_survives_the_row_belows_own_redraw(self):
         # Regression test for a real bug: a naive 1.2x-of-font-size line
@@ -975,8 +978,12 @@ class TestTerminalCast:
         # through a render.  Verified red before green: this exact
         # comparison showed 39 differing pixels with the old int(size*1.2)
         # formula and 0 with font.getmetrics()-based line height.
-        font = ImageFont.truetype(cv.CAST_FONT_PATH, cv.CAST_FONT_SIZE)
-        font_b = ImageFont.truetype(cv.CAST_FONT_BOLD, cv.CAST_FONT_SIZE)
+        font = ImageFont.truetype(
+            cast_render.CAST_FONT_PATH, cast_render.CAST_FONT_SIZE
+        )
+        font_b = ImageFont.truetype(
+            cast_render.CAST_FONT_BOLD, cast_render.CAST_FONT_SIZE
+        )
         cw = font.getlength("M")
         ascent, descent = font.getmetrics()
         lh = ascent + descent
@@ -3073,10 +3080,12 @@ class TestSideStreamTrimming:
 
         monkeypatch.setattr(cv.subprocess, "Popen", lambda *a, **k: FakeProc())
         cast = self._cast(tmp_path, 60.0)
-        cv.render_cast_video(cast, str(tmp_path / "o.mp4"), fps=1.0)
+        cast_render.render_cast_video(cast, str(tmp_path / "o.mp4"), fps=1.0)
         full = len(frames)
         frames.clear()
-        cv.render_cast_video(cast, str(tmp_path / "o.mp4"), fps=1.0, max_duration=10.0)
+        cast_render.render_cast_video(
+            cast, str(tmp_path / "o.mp4"), fps=1.0, max_duration=10.0
+        )
         assert len(frames) < full / 4
         assert len(frames) == 11  # 0..10s inclusive at 1 fps
 
@@ -3094,7 +3103,7 @@ class TestSideStreamTrimming:
                 return 0
 
         monkeypatch.setattr(cv.subprocess, "Popen", lambda *a, **k: FakeProc())
-        cv.render_cast_video(
+        cast_render.render_cast_video(
             self._cast(tmp_path, 30.0), str(tmp_path / "o.mp4"), fps=1.0
         )
         assert len(frames) == 31
