@@ -17,6 +17,7 @@ from PIL import Image, ImageDraw, ImageFont
 import cast_render
 import contest_video as cv
 import cw_decode
+import rig_state
 import timeline as tl
 import webcam_sync
 from cast_render import (
@@ -30,20 +31,13 @@ from cast_render import (
 from contest_video import (
     CAPTION_DUR_S,
     SCOPE_AMP_MAX,
-    InputLogEvent,
-    SegState,
-    TelemetrySample,
     _resize_scope_row,
     _scope_colormap,
     _srt_time,
     _yt_time,
     build_chapters,
     build_srt,
-    build_state_events,
     cluster_starts,
-    load_input_log,
-    load_telemetry,
-    match_qso_times,
     qso_windows,
     render_scope_video,
 )
@@ -58,6 +52,15 @@ from cw_decode import (
     gate_events,
 )
 from icom_net import write_scope_record
+from rig_state import (
+    InputLogEvent,
+    SegState,
+    TelemetrySample,
+    build_state_events,
+    load_input_log,
+    load_telemetry,
+    match_qso_times,
+)
 from timeline import (
     GAP_KEEP_S,
     Qso,
@@ -2825,7 +2828,7 @@ class TestMeterCalibration:
             '{"t": "2026-08-03T18:00:30.000000Z", "vd": 152, "id": 171,'
             ' "swr": 28, "po": 213}\n'
         )
-        telemetry = cv.load_telemetry(str(f))
+        telemetry = rig_state.load_telemetry(str(f))
         assert (telemetry[0].vd, telemetry[0].id_raw) == (152, 171)
         tl = cv.HudTimeline(
             segs=[_hud_seg()],
@@ -2850,7 +2853,7 @@ class TestMeterCalibration:
             '{"t": "2026-08-03T18:01:00.000000Z", "vd": null, "id": null,'
             ' "swr": null, "po": null}\n'
         )
-        telemetry = cv.load_telemetry(str(f))
+        telemetry = rig_state.load_telemetry(str(f))
         assert telemetry[1].meters_offline
         segs = [_hud_seg()]
         tl = cv.HudTimeline(
