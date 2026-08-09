@@ -43,4 +43,4 @@ fi
 irssi_cmd="while ! nc -z 127.0.0.1 6667; do sleep 0.2; done; exec irssi -c 127.0.0.1 -p 6667"
 
 filename="$(date -uIseconds).cast"
-asciinema rec "${filename}" -c "tmux new-session '$irssi_cmd'\; split-window $d/puskas_logger.py\; select-layout even-horizontal\; new-window -d -n bg $d/hamlib_supervisor.py\; split-window -t bg $d/on4kst_irc_bridge.py"
+exec asciinema rec "${filename}" -c "tmux new-session '$irssi_cmd'\; split-window $d/puskas_logger.py\; select-layout even-horizontal\; new-window -d -n bg $d/hamlib_supervisor.py\; split-window -t bg $d/on4kst_irc_bridge.py"
