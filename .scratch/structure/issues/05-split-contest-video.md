@@ -1,6 +1,6 @@
 # 05 — Split contest_video.py (3,995 lines)
 
-Status: needs-triage
+Status: claimed
 
 Blocked by: 03
 

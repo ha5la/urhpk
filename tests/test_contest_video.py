@@ -15,13 +15,12 @@ import pyte
 from PIL import Image, ImageDraw, ImageFont
 
 import contest_video as cv
+import cw_decode
 from contest_video import (
     CAPTION_DUR_S,
     CAST_BG,
     GAP_KEEP_S,
-    MAX_OVER_S,
     SCOPE_AMP_MAX,
-    CharEvent,
     InputLogEvent,
     Qso,
     Segment,
@@ -30,11 +29,9 @@ from contest_video import (
     _cast_color,
     _CastScreen,
     _CastStream,
-    _dominance,
     _draw_cast_row,
     _eff,
     _find_offset_correction,
-    _quality,
     _resize_scope_row,
     _rms_envelope,
     _scope_colormap,
@@ -45,18 +42,13 @@ from contest_video import (
     build_srt,
     build_state_events,
     cluster_starts,
-    cw_subranges,
-    decode_long_segment,
-    decode_segment,
     derive_utc_offset,
-    gate_events,
     load_input_log,
     load_telemetry,
     match_qso_times,
     merge_edi,
     parse_cast_header,
     parse_edi,
-    parse_wav_title,
     parse_webcam_precise_filename,
     parse_webcam_wall,
     qso_windows,
@@ -69,12 +61,23 @@ from contest_video import (
     webcam_start_from_log,
     webcam_start_wall,
 )
+from cw_decode import (
+    MAX_OVER_S,
+    CharEvent,
+    _dominance,
+    _quality,
+    cw_subranges,
+    decode_long_segment,
+    decode_segment,
+    gate_events,
+)
 from icom_net import write_scope_record
+from wav import parse_wav_title
 
 SR = 16000
 PITCH = 600.0
 
-_MORSE_INV = {v: k for k, v in cv.MORSE.items()}
+_MORSE_INV = {v: k for k, v in cw_decode.MORSE.items()}
 
 
 def _write_wav_with_title(path: str, title: str) -> None:
@@ -886,7 +889,7 @@ class TestWebcamDriftCorrection:
             cam_bursts = [padding_s - true_correction + b for b in radio_bursts]
             return _burst_signal(sr, dur, cam_bursts, seed=1), sr
 
-        monkeypatch.setattr(cv, "_read_wav_range", fake_read_wav_range)
+        monkeypatch.setattr(cv, "read_wav_range", fake_read_wav_range)
         monkeypatch.setattr(
             cv, "_read_webcam_audio_range", fake_read_webcam_audio_range
         )
@@ -911,7 +914,7 @@ class TestWebcamDriftCorrection:
         def fake_read_webcam_audio_range(webcam_path, src_start, dur, sr=16000):
             return _silence_signal(sr, dur), sr  # no matching speech at all
 
-        monkeypatch.setattr(cv, "_read_wav_range", fake_read_wav_range)
+        monkeypatch.setattr(cv, "read_wav_range", fake_read_wav_range)
         monkeypatch.setattr(
             cv, "_read_webcam_audio_range", fake_read_webcam_audio_range
         )
@@ -2750,7 +2753,7 @@ class TestHudMatrixFont:
         # MORSE is the complete set the CW decoder can ever produce, so the
         # font is finite and fully determined -- nothing can arrive that the
         # ticker has no glyph for.
-        assert set(cv.MORSE.values()) <= set(cv._FONT_5X7)
+        assert set(cw_decode.MORSE.values()) <= set(cv._FONT_5X7)
 
     def test_every_glyph_is_exactly_five_by_seven_bits(self):
         # A mistyped row is a plausible-looking glyph rather than an error, so
