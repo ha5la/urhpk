@@ -10,7 +10,6 @@ Commands: !undo  !help
 Ctrl-D at empty prompt → save EDI files and exit
 """
 
-import json
 import netrc
 import os
 import re
@@ -34,11 +33,12 @@ from prompt_toolkit.styles import DynamicStyle, Style
 
 import edi
 import icom_net
+import loc_cache
+import rotator
 from geo import is_locator
 from logbook import (
     BANDS,
     MODES,
-    MY_LOGS_DIR,
     QSO,
     LogBook,
     _is_dup_in_log,
@@ -57,18 +57,13 @@ from recorders import (
     telemetry_meter_record,
     telemetry_open,
     telemetry_rig_record,
-    telemetry_rot_record,
     telemetry_write,
     webcam_recording,
     webcam_stop_if_running,
     webcam_toggle,
 )
 from wiring import (
-    ON4KST_SEEN,
     RIG_SERVER_PORT,
-    ROTCTLD_HOST,
-    ROTCTLD_PORT,
-    SEEN_STATIONS,
     require_round_directory,
 )
 
@@ -79,7 +74,6 @@ RADIO_HOST = "icom9700"  # credentials in ~/.netrc under this machine name
 RADIO_CONNECT_TIMEOUT_S = 5.0
 RADIO_STALE_S = 5.0  # no CI-V-socket traffic for this long = session dead
 RADIO_RECONNECT_S = 15.0  # quiet time the radio needs before accepting a new session
-ROTCTLD_POLL_S = 1
 
 
 _BEARING_ARROWS = "↑↗→↘↓↙←↖"
@@ -95,93 +89,6 @@ def _format_combos(by_band: dict[str, list[str]]) -> str:
     return " ".join(f"{b}:{','.join(ms)}" for b, ms in by_band.items())
 
 
-# ──────────────────────────────────────────────────────────────
-# Locator cache
-# ──────────────────────────────────────────────────────────────
-
-
-def _parse_edi_files() -> dict[str, str]:
-    cache: dict[str, str] = {}
-    if not MY_LOGS_DIR.exists():
-        return cache
-    for path in sorted(MY_LOGS_DIR.glob("*.[Ee][Dd][Ii]")):
-        try:
-            in_qso = False
-            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-                if line.startswith("[QSORecords"):
-                    in_qso = True
-                    continue
-                if not in_qso:
-                    continue
-                f = line.split(";")
-                if len(f) >= 10:
-                    callsign = f[2].strip().upper()
-                    loc = f[9].strip().upper()
-                    if callsign and is_locator(loc):
-                        cache[callsign] = loc
-        except Exception:
-            pass
-    return cache
-
-
-def _parse_seen_file(path: Path) -> dict[str, list[str]]:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    result: dict[str, list[str]] = {}
-    for callsign, v in data.items():
-        wwls = v.get("wwls") or ([v["wwl"]] if v.get("wwl") else [])
-        if wwls:
-            result[callsign] = list(wwls)
-    return result
-
-
-def _merge_loc_sources(*sources: dict[str, list[str]]) -> dict[str, list[str]]:
-    """Merge locator sources in priority order (highest-priority source first).
-
-    Each locator appears at most once, at the position of the highest-priority
-    source that contains it.  Sources listed later only contribute locs not
-    already present from an earlier (higher-priority) source.
-    """
-    result: dict[str, list[str]] = {}
-    for source in sources:
-        for callsign, locs in source.items():
-            existing = result.setdefault(callsign, [])
-            for loc in locs:
-                if loc not in existing:
-                    existing.append(loc)
-    return result
-
-
-def load_loc_cache() -> dict[str, list[str]]:
-    # Priority order, highest first: edi > on4kst > puskas.
-    # QSO-entered locs are inserted at the front later via _update_loc_cache.
-    edi_raw = _parse_edi_files()
-    edi: dict[str, list[str]] = {callsign: [loc] for callsign, loc in edi_raw.items()}
-    if edi:
-        print(f"  {len(edi)} stations from my-logs/")
-
-    on4kst: dict[str, list[str]] = {}
-    if ON4KST_SEEN.exists():
-        try:
-            on4kst = _parse_seen_file(ON4KST_SEEN)
-            print(f"  {len(on4kst)} stations from {ON4KST_SEEN.name}")
-        except Exception:
-            pass
-
-    puskas: dict[str, list[str]] = {}
-    if SEEN_STATIONS.exists():
-        try:
-            puskas = _parse_seen_file(SEEN_STATIONS)
-            print(f"  {len(puskas)} stations from {SEEN_STATIONS.name}")
-        except Exception:
-            pass
-
-    cache = _merge_loc_sources(edi, on4kst, puskas)
-    if not cache:
-        print("  No locator cache (run puskas_harvester.py to build one)")
-    return cache
-
-
-# ──────────────────────────────────────────────────────────────
 # Radio — direct Ethernet CI-V (icom_net), replaces rigctld entirely.
 # freq/mode arrive as CI-V Transceive pushes the instant they change on
 # the radio, not up to a poll interval late.
@@ -379,69 +286,6 @@ def _rig_server_thread(srv: socket.socket) -> None:
         except OSError:
             return
         threading.Thread(target=_serve_rig_client, args=(conn,), daemon=True).start()
-
-
-# ──────────────────────────────────────────────────────────────
-# rotctld — background daemon thread
-# ──────────────────────────────────────────────────────────────
-_rot: dict = {"az": 0.0, "online": False}
-_rot_lock = threading.Lock()
-
-
-def _read_rot() -> float | None:
-    with socket.create_connection((ROTCTLD_HOST, ROTCTLD_PORT), timeout=2.0) as s:
-        s.sendall(b"p\n")
-        buf = b""
-        t0 = time.monotonic()
-        while time.monotonic() - t0 < 2.0:
-            s.settimeout(2.0 - (time.monotonic() - t0))
-            chunk = s.recv(64)
-            if not chunk:
-                break
-            buf += chunk
-            if len(buf.splitlines()) >= 1:
-                break
-        return float(buf.decode(errors="replace").splitlines()[0])
-
-
-def _rot_thread():
-    # Last azimuth written to telemetry (None = offline/never seen). Plain
-    # inequality, no deadband: the rotator reports whole degrees, so there is
-    # no sub-degree jitter to suppress -- checked against the real August
-    # round, where every one of the 756 azimuth changes was >= 1.0°.
-    logged_az = None
-    while True:
-        try:
-            az = _read_rot()
-            with _rot_lock:
-                _rot.update(az=az, online=True)
-        except Exception:
-            az = None
-            with _rot_lock:
-                _rot.update(az=0.0, online=False)
-        if az != logged_az:
-            telemetry_write(telemetry_rot_record(datetime.now(timezone.utc), az))
-            logged_az = az
-        time.sleep(ROTCTLD_POLL_S)
-
-
-def current_rot() -> tuple[float, bool]:
-    """(azimuth_degrees, online)."""
-    with _rot_lock:
-        return _rot["az"], _rot["online"]
-
-
-def _rot_set(az: int) -> None:
-    def _do():
-        try:
-            with socket.create_connection(
-                (ROTCTLD_HOST, ROTCTLD_PORT), timeout=2.0
-            ) as s:
-                s.sendall(f"P {az:.1f} 0\n".encode())
-        except Exception:
-            pass
-
-    threading.Thread(target=_do, daemon=True).start()
 
 
 _clock_sync_notice: dict = {"msg": "", "until": 0.0}
@@ -723,16 +567,6 @@ def _handle_command(line: str, lb: LogBook, tname: str):
     input("  [Enter to continue]")
 
 
-def _update_loc_cache(loc_cache: dict[str, list[str]], callsign: str, loc: str) -> None:
-    """Insert loc at the front of loc_cache[call], maintaining most-recent-first order."""
-    if not loc:
-        return
-    locs = loc_cache.setdefault(callsign, [])
-    if loc in locs:
-        locs.remove(loc)
-    locs.insert(0, loc)
-
-
 # ──────────────────────────────────────────────────────────────
 # Offline setup wizard
 # ──────────────────────────────────────────────────────────────
@@ -838,7 +672,7 @@ def run(lb: LogBook, tname: str):
         else:
             parts.append(("", "  offline  │  "))
 
-        rot_az, rot_online = current_rot()
+        rot_az, rot_online = rotator.current()
         rot_str = f"{rot_az:.0f}°" if rot_online else "---"
         parts.append(("", f"  ROT: {rot_str}  │  "))
 
@@ -869,7 +703,7 @@ def run(lb: LogBook, tname: str):
         (see the comment there), never from this background thread."""
         band, mode, qrg, online = current_rig()
         now = datetime.now(timezone.utc)
-        rot_az, rot_online = current_rot()
+        rot_az, rot_online = rotator.current()
 
         mismatch = False
         if _state["edit_idx"] is not None and band:
@@ -936,7 +770,7 @@ def run(lb: LogBook, tname: str):
         return " ".join(parts)
 
     def _cache_loc(callsign: str, loc: str) -> None:
-        _update_loc_cache(lb.loc_cache, callsign, loc)
+        loc_cache.remember(lb.loc_cache, callsign, loc)
 
     def _enter_edit(idx: int) -> None:
         """Set edit_idx and queue a REDRAW with the QSO's data in the buffer."""
@@ -1127,7 +961,7 @@ def run(lb: LogBook, tname: str):
 
     @kb.add("escape", "r")
     def _on_alt_r(event):
-        _, rot_online = current_rot()
+        _, rot_online = rotator.current()
         if not rot_online:
             return
         loc = None
@@ -1149,7 +983,7 @@ def run(lb: LogBook, tname: str):
             except Exception:
                 pass
         if loc:
-            _rot_set(lb.bearing(loc))
+            rotator.point_at(lb.bearing(loc))
 
     @kb.add("escape", "t")
     def _on_alt_t(_event):
@@ -1376,12 +1210,12 @@ def main():
         ans = input("Resume? [Y/n]: ").strip().lower()
         if ans in ("", "y", "yes"):
             print("Building locator cache...")
-            loc_cache = load_loc_cache()
+            loc_cache = loc_cache.load()
             result = load_from_edi(edi_files, loc_cache)
             if result:
                 lb, tname = result
                 for q in lb.qsos:
-                    _update_loc_cache(lb.loc_cache, q.callsign, q.loc)
+                    loc_cache.remember(lb.loc_cache, q.callsign, q.loc)
                 print(f"Callsign: {lb.my_callsign}")
                 print(f"Locator:  {lb.my_loc}")
                 print(f"Contest:  {tname}")
@@ -1397,7 +1231,7 @@ def main():
         default_tname = tname_for(now)
         tname = input(f"Contest name [{default_tname}]: ").strip() or default_tname
         print("Building locator cache...")
-        loc_cache = load_loc_cache()
+        loc_cache = loc_cache.load()
         lb = LogBook(my_callsign, my_loc, loc_cache)
 
     # Opened before the radio/rotator threads start: both write to it the
@@ -1412,7 +1246,7 @@ def main():
     t = threading.Thread(target=_radio_thread, daemon=True)
     _radio["thread"] = t
     t.start()
-    threading.Thread(target=_rot_thread, daemon=True).start()
+    threading.Thread(target=rotator.poll_thread, daemon=True).start()
     _rig_srv = _rig_server_bind(RIG_SERVER_PORT)
     if _rig_srv is not None:
         threading.Thread(

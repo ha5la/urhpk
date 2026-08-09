@@ -6,8 +6,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import loc_cache
 import puskas_logger as pl
 import recorders
+import rotator
 from geo import haversine_km, initial_bearing, is_locator, maidenhead_to_latlon
 from logbook import (
     QSO,
@@ -23,15 +25,10 @@ from puskas_logger import (
     _edi_qso_count,
     _format_combos,
     _is_contest_time,
-    _merge_loc_sources,
     _predict_nr,
     _print_recent,
     _rig,
     _rig_lock,
-    _rot,
-    _rot_lock,
-    _update_loc_cache,
-    current_rot,
     parse_input,
 )
 from recorders import (
@@ -860,83 +857,139 @@ class TestPredictNr:
 
 
 # ──────────────────────────────────────────────────────────────
-# _merge_loc_sources
+# loc_cache.merge_sources
 # ──────────────────────────────────────────────────────────────
+
+
+class TestFromMyLogs:
+    """The operator's own past EDI logs are the highest-trust locator source.
+
+    Read through edi.read rather than by splitting the line here — this used
+    to hand-parse `[QSORecords` and field 9 itself, a third copy of what
+    edi.py owns. Verified equal to the old parser on four real round logs
+    before the change; these pin the behaviour that matters.
+    """
+
+    def _write(self, tmp_path, name, body):
+        d = tmp_path / "my-logs"
+        d.mkdir(exist_ok=True)
+        (d / name).write_text(
+            "[REG1TEST;1]\nPCall=HA5LA\nPWWLo=JN97TF\n[QSORecords;1]\n" + body,
+            encoding="utf-8",
+        )
+
+    def test_reads_callsign_and_locator_from_a_log(self, tmp_path, monkeypatch):
+        self._write(
+            tmp_path, "a.edi", "260803;1704;ha7ns;2;599;001;599;001;;jn97wm;37;;;;\n"
+        )
+        monkeypatch.setattr(loc_cache, "MY_LOGS_DIR", tmp_path / "my-logs")
+        assert loc_cache._from_my_logs() == {"HA7NS": "JN97WM"}
+
+    def test_a_later_file_wins(self, tmp_path, monkeypatch):
+        self._write(
+            tmp_path, "a.edi", "260803;1704;HA7NS;2;599;001;599;001;;JN97WM;37;;;;\n"
+        )
+        self._write(
+            tmp_path, "b.edi", "260901;1704;HA7NS;2;599;001;599;001;;JN88AA;37;;;;\n"
+        )
+        monkeypatch.setattr(loc_cache, "MY_LOGS_DIR", tmp_path / "my-logs")
+        assert loc_cache._from_my_logs() == {"HA7NS": "JN88AA"}
+
+    def test_a_record_without_a_locator_is_skipped(self, tmp_path, monkeypatch):
+        self._write(tmp_path, "a.edi", "260803;1704;HA7NS;2;599;001;599;001;;;0;;;;\n")
+        monkeypatch.setattr(loc_cache, "MY_LOGS_DIR", tmp_path / "my-logs")
+        assert loc_cache._from_my_logs() == {}
+
+    def test_a_record_with_an_unparseable_date_is_dropped(self, tmp_path, monkeypatch):
+        # The one behaviour that genuinely changed with the move to edi.read:
+        # the old hand-parser accepted any line with 10+ fields and never
+        # looked at the date, so a corrupt row still seeded the cache. The
+        # strict variant wins, as elsewhere in this effort. Confirmed against
+        # the old parser, which returns {"HA7NS": "JN97WM"} for this input.
+        self._write(
+            tmp_path, "a.edi", "NOTADATE;xxxx;HA7NS;2;599;001;599;001;;JN97WM;37;;;;\n"
+        )
+        monkeypatch.setattr(loc_cache, "MY_LOGS_DIR", tmp_path / "my-logs")
+        assert loc_cache._from_my_logs() == {}
+
+    def test_no_my_logs_directory_is_not_an_error(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(loc_cache, "MY_LOGS_DIR", tmp_path / "nothing-here")
+        assert loc_cache._from_my_logs() == {}
 
 
 class TestMergeLocSources:
     def test_single_source_returned_unchanged(self):
         src = {"HA7NS": ["JN97WM", "JN97AB"]}
-        assert _merge_loc_sources(src) == {"HA7NS": ["JN97WM", "JN97AB"]}
+        assert loc_cache.merge_sources(src) == {"HA7NS": ["JN97WM", "JN97AB"]}
 
     def test_high_priority_loc_appears_first(self):
         # edi (high) > puskas (low)
         edi = {"HA7NS": ["JN97TF"]}
         puskas = {"HA7NS": ["JN97MM"]}
-        result = _merge_loc_sources(edi, puskas)
+        result = loc_cache.merge_sources(edi, puskas)
         assert result["HA7NS"] == ["JN97TF", "JN97MM"]
 
     def test_three_sources_correct_order(self):
         edi = {"HA7NS": ["JN97TF"]}
         on4kst = {"HA7NS": ["JN97WM"]}
         puskas = {"HA7NS": ["JN97MM"]}
-        result = _merge_loc_sources(edi, on4kst, puskas)
+        result = loc_cache.merge_sources(edi, on4kst, puskas)
         assert result["HA7NS"] == ["JN97TF", "JN97WM", "JN97MM"]
 
     def test_duplicate_loc_kept_at_high_priority_position(self):
         # JN97TF appears in both edi and puskas; edi wins the position
         edi = {"HA7NS": ["JN97TF"]}
         puskas = {"HA7NS": ["JN97TF", "JN97MM"]}
-        result = _merge_loc_sources(edi, puskas)
+        result = loc_cache.merge_sources(edi, puskas)
         assert result["HA7NS"] == ["JN97TF", "JN97MM"]
 
     def test_call_only_in_low_priority_source_is_included(self):
         edi = {"HA7NS": ["JN97TF"]}
         puskas = {"DL2ABC": ["JO50XY"]}
-        result = _merge_loc_sources(edi, puskas)
+        result = loc_cache.merge_sources(edi, puskas)
         assert result["HA7NS"] == ["JN97TF"]
         assert result["DL2ABC"] == ["JO50XY"]
 
     def test_empty_sources_return_empty(self):
-        assert _merge_loc_sources({}, {}, {}) == {}
+        assert loc_cache.merge_sources({}, {}, {}) == {}
 
     def test_multi_loc_stations_preserve_internal_order(self):
         # on4kst has two locs for a station; both appear before puskas loc
         on4kst = {"HA7NS": ["JN97WM", "JN97AB"]}
         puskas = {"HA7NS": ["JN97MM"]}
-        result = _merge_loc_sources(on4kst, puskas)
+        result = loc_cache.merge_sources(on4kst, puskas)
         assert result["HA7NS"] == ["JN97WM", "JN97AB", "JN97MM"]
 
 
 # ──────────────────────────────────────────────────────────────
-# _update_loc_cache
+# loc_cache.remember
 # ──────────────────────────────────────────────────────────────
 
 
 class TestUpdateLocCache:
     def test_new_call_is_added(self):
         cache: dict = {}
-        _update_loc_cache(cache, "HA7NS", "JN97WM")
+        loc_cache.remember(cache, "HA7NS", "JN97WM")
         assert cache == {"HA7NS": ["JN97WM"]}
 
     def test_new_loc_inserted_at_front(self):
         cache = {"HA7NS": ["JN97WM"]}
-        _update_loc_cache(cache, "HA7NS", "JN97TF")
+        loc_cache.remember(cache, "HA7NS", "JN97TF")
         assert cache["HA7NS"] == ["JN97TF", "JN97WM"]
 
     def test_existing_loc_moved_to_front(self):
         cache = {"HA7NS": ["JN97WM", "JN97TF"]}
-        _update_loc_cache(cache, "HA7NS", "JN97TF")
+        loc_cache.remember(cache, "HA7NS", "JN97TF")
         assert cache["HA7NS"] == ["JN97TF", "JN97WM"]
 
     def test_loc_already_at_front_unchanged(self):
         cache = {"HA7NS": ["JN97WM", "JN97TF"]}
-        _update_loc_cache(cache, "HA7NS", "JN97WM")
+        loc_cache.remember(cache, "HA7NS", "JN97WM")
         assert cache["HA7NS"] == ["JN97WM", "JN97TF"]
 
     def test_empty_loc_ignored(self):
         cache = {"HA7NS": ["JN97WM"]}
-        _update_loc_cache(cache, "HA7NS", "")
+        loc_cache.remember(cache, "HA7NS", "")
         assert cache["HA7NS"] == ["JN97WM"]
 
 
@@ -1186,40 +1239,40 @@ class TestWebcamToggleRename:
 
 
 # ──────────────────────────────────────────────────────────────
-# current_rot
+# rotator.current
 # ──────────────────────────────────────────────────────────────
 
 
 class TestCurrentRot:
-    """current_rot() reflects _rot state; drives the ROT: toolbar segment."""
+    """rotator.current() reflects rotator._rot state; drives the ROT: toolbar segment."""
 
     def setup_method(self):
-        with _rot_lock:
-            self._saved = dict(_rot)
+        with rotator._rot_lock:
+            self._saved = dict(rotator._rot)
 
     def teardown_method(self):
-        with _rot_lock:
-            _rot.update(self._saved)
+        with rotator._rot_lock:
+            rotator._rot.update(self._saved)
 
     def test_offline_when_not_connected(self):
-        with _rot_lock:
-            _rot.update(az=0.0, online=False)
-        _, online = current_rot()
+        with rotator._rot_lock:
+            rotator._rot.update(az=0.0, online=False)
+        _, online = rotator.current()
         assert online is False
 
     def test_returns_azimuth_when_online(self):
-        with _rot_lock:
-            _rot.update(az=123.0, online=True)
-        az, online = current_rot()
+        with rotator._rot_lock:
+            rotator._rot.update(az=123.0, online=True)
+        az, online = rotator.current()
         assert online is True
         assert az == pytest.approx(123.0)
 
     def test_azimuth_not_exposed_when_offline(self):
         # Toolbar shows ROT: --- when offline; az value must not be trusted.
-        # current_rot() signals this via online=False regardless of az content.
-        with _rot_lock:
-            _rot.update(az=270.0, online=False)
-        _, online = current_rot()
+        # rotator.current() signals this via online=False regardless of az content.
+        with rotator._rot_lock:
+            rotator._rot.update(az=270.0, online=False)
+        _, online = rotator.current()
         assert online is False
 
 
