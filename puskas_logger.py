@@ -16,7 +16,6 @@ import os
 import re
 import signal
 import socket
-import subprocess
 import sys
 import threading
 import time
@@ -47,6 +46,23 @@ from logbook import (
     save_all,
     tname_for,
 )
+from recorders import (
+    forget_meters,
+    input_log_open,
+    log_input_event,
+    on_buffer_changed,
+    on_radio_meters,
+    on_scope,
+    scope_open,
+    telemetry_meter_record,
+    telemetry_open,
+    telemetry_rig_record,
+    telemetry_rot_record,
+    telemetry_write,
+    webcam_recording,
+    webcam_stop_if_running,
+    webcam_toggle,
+)
 from wiring import (
     ON4KST_SEEN,
     RIG_SERVER_PORT,
@@ -64,8 +80,6 @@ RADIO_CONNECT_TIMEOUT_S = 5.0
 RADIO_STALE_S = 5.0  # no CI-V-socket traffic for this long = session dead
 RADIO_RECONNECT_S = 15.0  # quiet time the radio needs before accepting a new session
 ROTCTLD_POLL_S = 1
-WEBCAM_DEVICE = "/dev/video0"  # find with: v4l2-ctl --list-devices
-WEBCAM_AUDIO_SOURCE = "default"  # find with: pactl list short sources
 
 
 _BEARING_ARROWS = "↑↗→↘↓↙←↖"
@@ -197,8 +211,8 @@ def _on_radio_update(freq_hz, mode, band) -> None:
         )
     # Outside the lock: this flushes to disk, and _apply_update has already
     # filtered out no-op updates, so every call here is a real change.
-    _telemetry_write(
-        _telemetry_rig_record(
+    telemetry_write(
+        telemetry_rig_record(
             datetime.now(timezone.utc), freq_hz, edi.mode_from_radio(mode)
         )
     )
@@ -223,9 +237,9 @@ def _radio_thread():
             # costs one frame (the radio actually remembers the setting across
             # sessions -- see icom_net's notes -- but relying on that would make
             # recording depend on whatever the previous session left behind).
-            rig.on_scope(_on_scope)
+            rig.on_scope(on_scope)
             rig.enable_scope()
-            rig.on_meters(_on_radio_meters)
+            rig.on_meters(on_radio_meters)
             rig.enable_meters()
             with _rig_lock:
                 _radio["rig"] = rig
@@ -242,7 +256,7 @@ def _radio_thread():
         # RADIO_RECONNECT_S would say nothing new.
         if was_online:
             now = datetime.now(timezone.utc)
-            _telemetry_write(_telemetry_rig_record(now, None, None))
+            telemetry_write(telemetry_rig_record(now, None, None))
             # The meters go with it. Without an explicit null a consumer keeps
             # carrying the last reading forward -- and since it has no reason
             # to expect a supply voltage to change, it would show the voltage
@@ -250,11 +264,9 @@ def _radio_thread():
             # change-detector too guarantees the first reading after a
             # reconnect is written even if it happens to match the last one
             # before the drop.
-            _telem_meters["last"] = None
-            _telemetry_write(
-                _telemetry_meter_record(
-                    now, dict.fromkeys(icom_net.CIV_METERS.values())
-                )
+            forget_meters()
+            telemetry_write(
+                telemetry_meter_record(now, dict.fromkeys(icom_net.CIV_METERS.values()))
             )
         if rig is not None:
             try:
@@ -301,7 +313,7 @@ def _install_signal_handlers() -> None:
     nothing."""
 
     def _terminate(signum, _frame):
-        _webcam_stop_if_running()
+        webcam_stop_if_running()
         _radio_close_if_connected()
         os._exit(128 + signum)
 
@@ -370,28 +382,6 @@ def _rig_server_thread(srv: socket.socket) -> None:
 
 
 # ──────────────────────────────────────────────────────────────
-# Scope recorder — the radio's own sweeps to a .scope file
-# (contest_video.py --scope). Lives here because the logger owns the
-# radio's single network session; the icom_net CLI harness can't run
-# alongside it.
-# ──────────────────────────────────────────────────────────────
-_scope_rec: dict = {"path": None, "file": None}
-_scope_rec_lock = threading.Lock()
-
-
-def _on_scope(start_hz: int, end_hz: int, pixels: bytes) -> None:
-    with _scope_rec_lock:
-        if _scope_rec["path"] is None:
-            return
-        if _scope_rec["file"] is None:
-            _scope_rec["file"] = open(_scope_rec["path"], "ab")
-        icom_net.write_scope_record(
-            _scope_rec["file"], time.time(), start_hz, end_hz, pixels
-        )
-        _scope_rec["file"].flush()
-
-
-# ──────────────────────────────────────────────────────────────
 # rotctld — background daemon thread
 # ──────────────────────────────────────────────────────────────
 _rot: dict = {"az": 0.0, "online": False}
@@ -430,7 +420,7 @@ def _rot_thread():
             with _rot_lock:
                 _rot.update(az=0.0, online=False)
         if az != logged_az:
-            _telemetry_write(_telemetry_rot_record(datetime.now(timezone.utc), az))
+            telemetry_write(telemetry_rot_record(datetime.now(timezone.utc), az))
             logged_az = az
         time.sleep(ROTCTLD_POLL_S)
 
@@ -512,309 +502,6 @@ def _clock_sync() -> None:
             _clock_sync_notice["until"] = time.monotonic() + 5.0
 
     threading.Thread(target=_do, daemon=True).start()
-
-
-# ──────────────────────────────────────────────────────────────
-# Telemetry recorder — one JSON line per actual change, to CWD.
-#
-# Records are partial: a rig event carries freq_hz/mode, a rotator event
-# carries az. A field a line doesn't mention simply didn't change, and
-# contest_video.py's build_state_events carries each one forward.
-#
-# This was a 1 Hz sampler of current_rig()/current_rot() while the rig was
-# behind rigctld and had to be polled anyway. freq/mode now arrive as
-# icom_net CI-V Transceive pushes -- and IcomNetRig._apply_update already
-# suppresses no-op updates, so the callback *is* the change stream. Sampling
-# it on a timer put back onto a lag-free source the very latency icom_net
-# exists to remove, blurred any retune shorter than the poll interval, and
-# wrote overwhelmingly duplicate lines: on the real July round only 616 of
-# 9313 lines carried anything new.
-#
-# az has no push source at all -- Hamlib's rotator API never defined the
-# async hook, for any backend (see hamlib_supervisor.py's notes) -- so it
-# stays polled, but only writes when the reading actually moves.
-#
-# No ptt field: the WAV recordings' own IC-9700 metadata already carries it
-# straight from the rig with zero lag (see contest_video.py's
-# read_wav_metadata).
-# ──────────────────────────────────────────────────────────────
-
-_telem: dict = {"fh": None}
-_telem_lock = threading.Lock()
-_telem_meters: dict = {"last": None}
-
-
-def _utc_stamp(now: datetime) -> str:
-    return now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-
-
-def _telemetry_open(path: Path) -> None:
-    with _telem_lock:
-        _telem["fh"] = open(path, "a")
-
-
-def _telemetry_write(rec: dict) -> None:
-    """Two threads write here — the radio's CI-V receive thread and the
-    rotator poller — so the lock guards a genuine race, not a theoretical one."""
-    with _telem_lock:
-        fh = _telem["fh"]
-        if fh is None:
-            return
-        try:
-            fh.write(json.dumps(rec) + "\n")
-            fh.flush()
-        except Exception:
-            pass
-
-
-def _telemetry_rig_record(now: datetime, freq_hz: int | None, mode: str | None) -> dict:
-    """freq_hz is the radio's own exact value, not the toolbar's kHz-rounded
-    `qrg` string the 1 Hz sampler used to re-parse. That rounding is where
-    contest_video's documented 160/250/300/310 Hz "WAV vs telemetry
-    disagreement" came from — it was this logger quantizing, not two sources
-    reading the rig differently."""
-    return {"t": _utc_stamp(now), "freq_hz": freq_hz, "mode": mode}
-
-
-def _telemetry_meter_record(now: datetime, meters: dict) -> dict:
-    """Raw meter readings, 0-255 exactly as the radio reports them.
-
-    Deliberately not converted to volts/amps/SWR here. The calibration is the
-    least trustworthy part of this data -- the IC-7300's published Id curve
-    reads ~1.5x high against a measured 12 A on this radio -- so the raw
-    numbers are recorded and contest_video.py converts at render time, which
-    makes a better curve a one-line change instead of a ruined recording."""
-    rec = {"t": _utc_stamp(now)}
-    rec.update({name: meters[name] for name in sorted(meters)})
-    return rec
-
-
-def _on_radio_meters(meters: dict) -> None:
-    """One line per *change*, matching the rest of the telemetry stream.
-
-    Unlike freq/mode this genuinely has to be sampled -- the radio only
-    reports meters when asked (confirmed on the wire) -- so there is no
-    lag-free source being needlessly re-sampled here, which was the objection
-    to the old 1 Hz rig sampler. While receiving, Po/SWR/Id sit at a flat zero
-    and Vd barely moves, so change-only keeps an idle hour nearly silent."""
-    if meters == _telem_meters["last"]:
-        return
-    _telem_meters["last"] = dict(meters)
-    _telemetry_write(_telemetry_meter_record(datetime.now(timezone.utc), meters))
-
-
-def _telemetry_rot_record(now: datetime, az: float | None) -> dict:
-    return {"t": _utc_stamp(now), "az": round(az, 1) if az is not None else None}
-
-
-# ──────────────────────────────────────────────────────────────
-# Input-box recorder — event-triggered (one line per keystroke), not
-# polled: a 1 Hz sample like telemetry would blur or entirely miss fast
-# typing, and the buffer only changes on a keypress in the first place, so
-# there's nothing to poll. Feeds contest_video.py's typewriter overlay.
-#
-# Two event kinds share the file: "text" (one per keystroke, the full
-# current buffer contents) and "qso" (one per QSO actually appended to the
-# log, microsecond-precise). The EDI format only stores QSO time to the
-# minute, which is what makes contest_video.py's QSO-panel timing an
-# audio-structure-snapping guess rather than exact — this file's "qso"
-# events give it an exact submit timestamp to use instead, when available.
-# Note this deliberately does *not* try to distinguish a submit from an
-# abort (Enter vs Ctrl+U/Escape) at the "text" level — both just clear the
-# buffer the same way, and even Enter's own clear only happens at the start
-# of the *next* prompt, not at keypress time. Trying to infer "QSO logged"
-# from that stream is unreliable; the explicit "qso" event below, written
-# from the one place in the code that actually knows a QSO was appended, is
-# the unambiguous alternative.
-# ──────────────────────────────────────────────────────────────
-
-_input_log_fh = None
-
-
-def _input_log_open(path: Path) -> None:
-    global _input_log_fh
-    _input_log_fh = open(path, "a")
-
-
-def _log_input_event(rec: dict) -> None:
-    if _input_log_fh is None:
-        return
-    try:
-        _input_log_fh.write(json.dumps(rec) + "\n")
-        _input_log_fh.flush()
-    except Exception:
-        pass
-
-
-def _on_buffer_changed(buf) -> None:
-    _log_input_event(
-        {
-            "t": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-            "event": "text",
-            "text": buf.text,
-        }
-    )
-
-
-# ──────────────────────────────────────────────────────────────
-# Webcam capture (Alt+V toggles start/stop) -- unlike the phone recording
-# contest_video.py had to sync via audio cross-correlation (two independent,
-# unrelated clocks), this runs on the same machine as the logger: start/stop
-# is logged through the exact same _log_input_event/datetime.now(timezone.utc)
-# used for QSOs and keystrokes, so the recording's real start time is known
-# precisely with no separate device clock to reconcile at all.
-# ──────────────────────────────────────────────────────────────
-
-_webcam_proc = None
-_webcam_log_fh = None
-_webcam_out_path = None
-_webcam_log_path = None
-
-_WEBCAM_LOG_INPUT_RE = re.compile(r"^Input #\d+, ([^,]+)")
-_WEBCAM_LOG_START_RE = re.compile(r"start:\s*([0-9]+\.[0-9]+)")
-
-
-def _webcam_precise_start(log_path: str) -> datetime | None:
-    """Parse the ffmpeg capture log for the v4l2 input's real wallclock
-    frame-0 start (mirrors contest_video.py's webcam_start_from_log). Used
-    to rename the finished file with a precise timestamp once capture
-    stops -- ffmpeg can't be told this value up front via -metadata, since
-    it isn't known until the camera has actually opened (~1s, variable,
-    after the process spawns)."""
-    video_epoch = audio_epoch = None
-    cur = None
-    try:
-        for line in open(log_path, encoding="utf-8", errors="replace"):
-            m = _WEBCAM_LOG_INPUT_RE.match(line.strip())
-            if m:
-                cur = m.group(1)
-                continue
-            if cur and "start:" in line:
-                sm = _WEBCAM_LOG_START_RE.search(line)
-                if sm and float(sm.group(1)) > 1e9:  # a Unix epoch, not uptime
-                    val = float(sm.group(1))
-                    if ("v4l2" in cur or "video4linux" in cur) and video_epoch is None:
-                        video_epoch = val
-                    elif "pulse" in cur and audio_epoch is None:
-                        audio_epoch = val
-                cur = None
-    except OSError:
-        return None
-    epoch = video_epoch if video_epoch is not None else audio_epoch
-    if epoch is None:
-        return None
-    return datetime.fromtimestamp(epoch, tz=timezone.utc).replace(tzinfo=None)
-
-
-def _webcam_precise_name(out_path: str, start: datetime) -> str:
-    """Insert a precise, filesystem-safe UTC timestamp before the extension,
-    e.g. `foo-webcam.mp4` -> `foo-webcam-20260722T121101.868307Z.mp4`. A
-    rename is an instant, zero-extra-disk-space metadata operation on the
-    same filesystem -- unlike tagging the file's own container metadata,
-    which needs a full second copy of the video data (see CLAUDE.md)."""
-    stem, ext = os.path.splitext(out_path)
-    return f"{stem}-{start.strftime('%Y%m%dT%H%M%S.%fZ')}{ext}"
-
-
-def _webcam_capture_cmd(device: str, audio_source: str, out_path: str) -> list[str]:
-    """The ffmpeg command to capture the local webcam + mic to `out_path`.
-    -preset ultrafast keeps this cheap enough to run alongside the logger
-    for a multi-hour session without competing for CPU with the radio/rotator
-    threads or the UI itself.
-
-    -use_wallclock_as_timestamps 1 on the v4l2 input stamps every captured
-    frame with the real gettimeofday wallclock, so ffmpeg logs an exact
-    frame-0 UTC start in the *-webcam.log. _webcam_toggle's stop branch reads
-    it back (_webcam_precise_start) to rename the finished file with that
-    exact timestamp -- contest_video.py's webcam_start_from_log parsing the
-    same log is only a fallback now, for recordings made before this existed
-    or where the rename didn't happen. Without the flag, v4l2 timestamps are
-    CLOCK_MONOTONIC (uptime), useless as an absolute time -- and the
-    logger's own webcam_start event is stamped *before* this subprocess even
-    spawns, so it leads real frame 0 by the ffmpeg + camera warmup latency
-    (~1s, variable) -- which is exactly why that log line, not the event, is
-    the source of truth."""
-    return [
-        "ffmpeg",
-        "-y",
-        "-f",
-        "v4l2",
-        "-use_wallclock_as_timestamps",
-        "1",
-        "-i",
-        device,
-        "-f",
-        "pulse",
-        "-i",
-        audio_source,
-        "-c:v",
-        "libx264",
-        "-preset",
-        "ultrafast",
-        "-crf",
-        "23",
-        "-c:a",
-        "aac",
-        out_path,
-    ]
-
-
-def _webcam_toggle(path_prefix: str) -> str | None:
-    """Start or stop webcam capture; returns a status message for the
-    toolbar/notice area, or None if nothing changed (e.g. ffmpeg missing)."""
-    global _webcam_proc, _webcam_log_fh, _webcam_out_path, _webcam_log_path
-    now = datetime.now(timezone.utc)
-    if _webcam_proc is None:
-        out_path = f"{path_prefix}-webcam.mp4"
-        log_path = f"{path_prefix}-webcam.log"
-        try:
-            _webcam_log_fh = open(log_path, "a")
-            _webcam_proc = subprocess.Popen(
-                _webcam_capture_cmd(WEBCAM_DEVICE, WEBCAM_AUDIO_SOURCE, out_path),
-                stdin=subprocess.DEVNULL,
-                stdout=_webcam_log_fh,
-                stderr=subprocess.STDOUT,
-            )
-        except Exception as e:
-            _webcam_proc = None
-            return f"webcam start failed: {e}"
-        _webcam_out_path = out_path
-        _webcam_log_path = log_path
-        _log_input_event(
-            {"t": now.strftime("%Y-%m-%dT%H:%M:%S.%fZ"), "event": "webcam_start"}
-        )
-        return f"recording {out_path}"
-    else:
-        _webcam_proc.send_signal(signal.SIGINT)
-        try:
-            _webcam_proc.wait(timeout=5.0)
-        except subprocess.TimeoutExpired:
-            _webcam_proc.terminate()
-        _webcam_proc = None
-        if _webcam_log_fh:
-            _webcam_log_fh.close()
-            _webcam_log_fh = None
-        if _webcam_out_path and _webcam_log_path:
-            start = _webcam_precise_start(_webcam_log_path)
-            if start is not None:
-                renamed = _webcam_precise_name(_webcam_out_path, start)
-                try:
-                    Path(_webcam_out_path).rename(renamed)
-                except OSError:
-                    pass  # leave it at its original name -- not fatal
-        _webcam_out_path = None
-        _webcam_log_path = None
-        _log_input_event(
-            {"t": now.strftime("%Y-%m-%dT%H:%M:%S.%fZ"), "event": "webcam_stop"}
-        )
-        return "recording stopped"
-
-
-def _webcam_stop_if_running() -> None:
-    """Called on exit so a still-running capture is stopped cleanly (SIGINT,
-    not killed) rather than left orphaned or the mp4 left unfinalized."""
-    if _webcam_proc is not None:
-        _webcam_toggle("")  # path_prefix unused on the stop branch
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1155,7 +842,7 @@ def run(lb: LogBook, tname: str):
         rot_str = f"{rot_az:.0f}°" if rot_online else "---"
         parts.append(("", f"  ROT: {rot_str}  │  "))
 
-        if _webcam_proc is not None:
+        if webcam_recording():
             parts.append(("bg:ansired fg:white", "  ● REC  │  "))
 
         with _clock_sync_lock:
@@ -1207,7 +894,7 @@ def run(lb: LogBook, tname: str):
             time.monotonic() < _state["warn_until"],
             round(rot_az, 1) if rot_online else None,
             rot_online,
-            _webcam_proc is not None,
+            webcam_recording(),
             sync_active,
             sync_msg,
             webcam_active,
@@ -1470,7 +1157,7 @@ def run(lb: LogBook, tname: str):
 
     @kb.add("escape", "v")
     def _on_alt_v(_event):
-        msg = _webcam_toggle(_webcam_path_prefix)
+        msg = webcam_toggle(_webcam_path_prefix)
         if msg:
             _state["webcam_notice"] = (msg, time.monotonic() + 5.0)
 
@@ -1489,7 +1176,7 @@ def run(lb: LogBook, tname: str):
         complete_while_typing=False,
         enable_history_search=False,
     )
-    session.default_buffer.on_text_changed += _on_buffer_changed
+    session.default_buffer.on_text_changed += on_buffer_changed
     threading.Thread(target=_toolbar_watcher, args=(session.app,), daemon=True).start()
 
     try:
@@ -1627,7 +1314,7 @@ def run(lb: LogBook, tname: str):
             )
             input("  [Enter to continue]")
 
-        _log_input_event(
+        log_input_event(
             {
                 "t": now.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
                 "event": "qso",
@@ -1719,7 +1406,7 @@ def main():
     _telem_path = Path(
         f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{lb.my_callsign}-telemetry.jsonl"
     )
-    _telemetry_open(_telem_path)
+    telemetry_open(_telem_path)
 
     _install_signal_handlers()
     t = threading.Thread(target=_radio_thread, daemon=True)
@@ -1731,15 +1418,16 @@ def main():
         threading.Thread(
             target=_rig_server_thread, args=(_rig_srv,), daemon=True
         ).start()
-    _scope_rec["path"] = Path(
+    _scope_path = Path(
         f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{lb.my_callsign}.scope"
     )
-    print(f"Scope:     {_scope_rec['path']} (written once the radio connects)")
+    scope_open(_scope_path)
+    print(f"Scope:     {_scope_path} (written once the radio connects)")
     print(f"Telemetry: {_telem_path}")
     _input_log_path = Path(
         f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{lb.my_callsign}-input.jsonl"
     )
-    _input_log_open(_input_log_path)
+    input_log_open(_input_log_path)
     print(f"Input log: {_input_log_path}")
     print("Webcam:    Alt+V to start/stop recording")
 
@@ -1762,7 +1450,7 @@ def main():
         # One owner for teardown, covering every way run() can end: normal
         # Ctrl-D exit, an early return from the offline wizard, a crash, or
         # Ctrl-C. Signals go through _install_signal_handlers instead.
-        _webcam_stop_if_running()
+        webcam_stop_if_running()
         _radio_close_if_connected()
 
 

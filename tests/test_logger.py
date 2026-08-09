@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import puskas_logger as pl
+import recorders
 from geo import haversine_km, initial_bearing, is_locator, maidenhead_to_latlon
 from logbook import (
     QSO,
@@ -21,25 +22,27 @@ from puskas_logger import (
     _bearing_arrow,
     _edi_qso_count,
     _format_combos,
-    _input_log_open,
     _is_contest_time,
     _merge_loc_sources,
-    _on_buffer_changed,
     _predict_nr,
     _print_recent,
     _rig,
     _rig_lock,
     _rot,
     _rot_lock,
-    _telemetry_rig_record,
-    _telemetry_rot_record,
     _update_loc_cache,
+    current_rot,
+    parse_input,
+)
+from recorders import (
     _webcam_capture_cmd,
     _webcam_precise_name,
     _webcam_precise_start,
-    _webcam_toggle,
-    current_rot,
-    parse_input,
+    input_log_open,
+    on_buffer_changed,
+    telemetry_rig_record,
+    telemetry_rot_record,
+    webcam_toggle,
 )
 
 # ──────────────────────────────────────────────────────────────
@@ -1138,23 +1141,23 @@ class TestWebcamPreciseName:
 
 
 class TestWebcamToggleRename:
-    """_webcam_toggle's stop branch, with a mocked ffmpeg process so this
+    """webcam_toggle's stop branch, with a mocked ffmpeg process so this
     doesn't need real webcam hardware -- only the rename logic (the part
     this feature actually added) is under test."""
 
     def _run_stop(self, out_path, log_path):
         fake_proc = MagicMock()
         fake_proc.wait.return_value = 0
-        pl._webcam_proc = fake_proc
-        pl._webcam_out_path = str(out_path)
-        pl._webcam_log_path = str(log_path)
-        pl._webcam_log_fh = None
+        recorders._webcam_proc = fake_proc
+        recorders._webcam_out_path = str(out_path)
+        recorders._webcam_log_path = str(log_path)
+        recorders._webcam_log_fh = None
         try:
-            return _webcam_toggle("")
+            return webcam_toggle("")
         finally:
-            pl._webcam_proc = None
-            pl._webcam_out_path = None
-            pl._webcam_log_path = None
+            recorders._webcam_proc = None
+            recorders._webcam_out_path = None
+            recorders._webcam_log_path = None
 
     def test_renames_file_using_precise_log_timestamp(self, tmp_path):
         out_path = tmp_path / "prefix-webcam.mp4"
@@ -1264,7 +1267,7 @@ class TestTelemetryRecord:
     _T = datetime(2026, 7, 4, 9, 8, 15, 123456, tzinfo=timezone.utc)
 
     def test_rig_record(self):
-        rec = _telemetry_rig_record(self._T, 144174000, "CW")
+        rec = telemetry_rig_record(self._T, 144174000, "CW")
         assert rec["t"] == "2026-07-04T09:08:15.123456Z"
         assert rec["freq_hz"] == 144174000
         assert rec["mode"] == "CW"
@@ -1277,22 +1280,22 @@ class TestTelemetryRecord:
         # documented 160 Hz "WAV vs telemetry disagreement" came from
         # (144299840 -> "144.300" -> 144300000), so it was this logger
         # quantizing, not two sources reading the rig differently.
-        assert _telemetry_rig_record(self._T, 144299840, "SSB")["freq_hz"] == 144299840
+        assert telemetry_rig_record(self._T, 144299840, "SSB")["freq_hz"] == 144299840
 
     def test_rig_offline_record_is_null_fields(self):
-        rec = _telemetry_rig_record(self._T, None, None)
+        rec = telemetry_rig_record(self._T, None, None)
         assert rec["freq_hz"] is None
         assert rec["mode"] is None
 
     def test_rot_record(self):
-        rec = _telemetry_rot_record(self._T, 135.04)
+        rec = telemetry_rot_record(self._T, 135.04)
         assert rec["t"] == "2026-07-04T09:08:15.123456Z"
         assert rec["az"] == 135.0
         assert "freq_hz" not in rec  # nor a rotator event about the rig
         assert "mode" not in rec
 
     def test_rot_offline_record_is_null(self):
-        assert _telemetry_rot_record(self._T, None)["az"] is None
+        assert telemetry_rot_record(self._T, None)["az"] is None
 
 
 class TestInputLog:
@@ -1302,9 +1305,9 @@ class TestInputLog:
     @pytest.fixture(autouse=True)
     def _reset_fh(self):
         yield
-        if pl._input_log_fh is not None:
-            pl._input_log_fh.close()
-        pl._input_log_fh = None
+        if recorders._input_log_fh is not None:
+            recorders._input_log_fh.close()
+        recorders._input_log_fh = None
 
     class _Buf:
         def __init__(self, text):
@@ -1314,23 +1317,23 @@ class TestInputLog:
         import json
 
         path = tmp_path / "input.jsonl"
-        _input_log_open(path)
-        _on_buffer_changed(self._Buf("H"))
-        _on_buffer_changed(self._Buf("HA"))
-        _on_buffer_changed(self._Buf(""))  # Enter/Escape clears the buffer
-        pl._input_log_fh.close()
+        input_log_open(path)
+        on_buffer_changed(self._Buf("H"))
+        on_buffer_changed(self._Buf("HA"))
+        on_buffer_changed(self._Buf(""))  # Enter/Escape clears the buffer
+        recorders._input_log_fh.close()
         lines = path.read_text().splitlines()
         assert [json.loads(line)["text"] for line in lines] == ["H", "HA", ""]
 
     def test_noop_before_a_log_is_opened(self):
-        _on_buffer_changed(self._Buf("X"))  # must not raise with no file open
+        on_buffer_changed(self._Buf("X"))  # must not raise with no file open
 
     def test_record_has_microsecond_timestamp(self, tmp_path):
         import json
 
         path = tmp_path / "input.jsonl"
-        _input_log_open(path)
-        _on_buffer_changed(self._Buf("HA7NS"))
+        input_log_open(path)
+        on_buffer_changed(self._Buf("HA7NS"))
         rec = json.loads(path.read_text().splitlines()[0])
         assert rec["t"].endswith("Z")
         datetime.strptime(rec["t"], "%Y-%m-%dT%H:%M:%S.%fZ")  # doesn't raise
@@ -1339,8 +1342,8 @@ class TestInputLog:
         import json
 
         path = tmp_path / "input.jsonl"
-        _input_log_open(path)
-        _on_buffer_changed(self._Buf("HA7NS"))
+        input_log_open(path)
+        on_buffer_changed(self._Buf("HA7NS"))
         rec = json.loads(path.read_text().splitlines()[0])
         assert rec["event"] == "text"
 
@@ -1351,8 +1354,8 @@ class TestInputLog:
         import json
 
         path = tmp_path / "input.jsonl"
-        _input_log_open(path)
-        pl._log_input_event(
+        input_log_open(path)
+        recorders.log_input_event(
             {
                 "t": "2026-07-06T16:01:02.345678Z",
                 "event": "qso",
@@ -1363,7 +1366,7 @@ class TestInputLog:
                 "dup": False,
             }
         )
-        pl._input_log_fh.close()
+        recorders._input_log_fh.close()
         rec = json.loads(path.read_text().splitlines()[0])
         assert rec == {
             "t": "2026-07-06T16:01:02.345678Z",
@@ -1475,10 +1478,10 @@ class TestScopeRecorder:
         import icom_net
 
         path = tmp_path / "test.scope"
-        pl._scope_rec["path"] = path
+        recorders._scope_rec["path"] = path
         try:
-            pl._on_scope(145_000_000, 146_000_000, bytes(range(100)))
-            pl._on_scope(432_000_000, 433_000_000, bytes(100))
+            recorders.on_scope(145_000_000, 146_000_000, bytes(range(100)))
+            recorders.on_scope(432_000_000, 433_000_000, bytes(100))
             records = icom_net.read_scope_records(path)
             assert len(records) == 2
             ts0, start0, end0, px0 = records[0]
@@ -1487,13 +1490,13 @@ class TestScopeRecorder:
             assert (start1, end1, px1) == (432_000_000, 433_000_000, bytes(100))
             assert ts0 > 0
         finally:
-            if pl._scope_rec["file"] is not None:
-                pl._scope_rec["file"].close()
-            pl._scope_rec.update(path=None, file=None)
+            if recorders._scope_rec["file"] is not None:
+                recorders._scope_rec["file"].close()
+            recorders._scope_rec.update(path=None, file=None)
 
     def test_on_scope_is_a_noop_without_a_configured_path(self):
-        pl._on_scope(145_000_000, 146_000_000, b"\x01\x02")
-        assert pl._scope_rec["file"] is None
+        recorders.on_scope(145_000_000, 146_000_000, b"\x01\x02")
+        assert recorders._scope_rec["file"] is None
 
 
 def test_radio_close_if_connected_closes_and_clears_the_session():
