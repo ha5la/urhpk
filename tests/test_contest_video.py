@@ -17,6 +17,8 @@ from PIL import Image, ImageDraw, ImageFont
 import cast_render
 import contest_video as cv
 import cw_decode
+import timeline as tl
+import webcam_sync
 from cast_render import (
     CAST_BG,
     _cast_color,
@@ -27,42 +29,23 @@ from cast_render import (
 )
 from contest_video import (
     CAPTION_DUR_S,
-    GAP_KEEP_S,
     SCOPE_AMP_MAX,
     InputLogEvent,
-    Qso,
-    Segment,
     SegState,
     TelemetrySample,
-    _eff,
-    _find_offset_correction,
     _resize_scope_row,
-    _rms_envelope,
     _scope_colormap,
     _srt_time,
     _yt_time,
-    audio_time_for,
     build_chapters,
     build_srt,
     build_state_events,
     cluster_starts,
-    derive_utc_offset,
     load_input_log,
     load_telemetry,
     match_qso_times,
-    merge_edi,
-    parse_edi,
-    parse_webcam_precise_filename,
-    parse_webcam_wall,
     qso_windows,
-    read_wav_metadata,
-    refine_webcam_start,
-    remap_audio_t,
     render_scope_video,
-    sync_webcam_start,
-    trim_to_duration,
-    webcam_start_from_log,
-    webcam_start_wall,
 )
 from cw_decode import (
     MAX_OVER_S,
@@ -75,7 +58,30 @@ from cw_decode import (
     gate_events,
 )
 from icom_net import write_scope_record
+from timeline import (
+    GAP_KEEP_S,
+    Qso,
+    Segment,
+    _eff,
+    audio_time_for,
+    derive_utc_offset,
+    merge_edi,
+    parse_edi,
+    read_wav_metadata,
+    remap_audio_t,
+    trim_to_duration,
+)
 from wav import parse_wav_title
+from webcam_sync import (
+    _find_offset_correction,
+    _rms_envelope,
+    parse_webcam_precise_filename,
+    parse_webcam_wall,
+    refine_webcam_start,
+    sync_webcam_start,
+    webcam_start_from_log,
+    webcam_start_wall,
+)
 
 SR = 16000
 PITCH = 600.0
@@ -892,9 +898,9 @@ class TestWebcamDriftCorrection:
             cam_bursts = [padding_s - true_correction + b for b in radio_bursts]
             return _burst_signal(sr, dur, cam_bursts, seed=1), sr
 
-        monkeypatch.setattr(cv, "read_wav_range", fake_read_wav_range)
+        monkeypatch.setattr(webcam_sync, "read_wav_range", fake_read_wav_range)
         monkeypatch.setattr(
-            cv, "_read_webcam_audio_range", fake_read_webcam_audio_range
+            webcam_sync, "_read_webcam_audio_range", fake_read_webcam_audio_range
         )
 
         refined, rate, n = refine_webcam_start(
@@ -917,9 +923,9 @@ class TestWebcamDriftCorrection:
         def fake_read_webcam_audio_range(webcam_path, src_start, dur, sr=16000):
             return _silence_signal(sr, dur), sr  # no matching speech at all
 
-        monkeypatch.setattr(cv, "read_wav_range", fake_read_wav_range)
+        monkeypatch.setattr(webcam_sync, "read_wav_range", fake_read_wav_range)
         monkeypatch.setattr(
-            cv, "_read_webcam_audio_range", fake_read_webcam_audio_range
+            webcam_sync, "_read_webcam_audio_range", fake_read_webcam_audio_range
         )
 
         refined, rate, n = refine_webcam_start("fake_cam.mp4", segs, 100.0)
@@ -1151,7 +1157,7 @@ class TestTimeline:
     def test_derive_utc_offset(self):
         segs = self._segs()  # wall 11:00-11:02 local
         qsos = [
-            cv.Qso(
+            tl.Qso(
                 datetime(2026, 7, 4, 9, 0),
                 "A",
                 "599",
@@ -1162,7 +1168,7 @@ class TestTimeline:
                 10,
                 False,
             ),
-            cv.Qso(
+            tl.Qso(
                 datetime(2026, 7, 4, 9, 2),
                 "B",
                 "599",
@@ -2244,15 +2250,15 @@ class TestStreamPrecedesAudio:
     guarantees this ordering: asciinema starts before the radio recorder."""
 
     def _segs(self):
-        return [cv.Segment("a.wav", datetime(2026, 8, 6, 19, 16, 0), 330.0, 0.0)]
+        return [tl.Segment("a.wav", datetime(2026, 8, 6, 19, 16, 0), 330.0, 0.0)]
 
     def test_stream_start_is_negative_before_first_segment(self):
-        assert cv.stream_start(datetime(2026, 8, 6, 19, 15, 35), self._segs()) == -25.0
+        assert tl.stream_start(datetime(2026, 8, 6, 19, 15, 35), self._segs()) == -25.0
 
     def test_stream_start_matches_audio_time_for_inside_the_recording(self):
         wall = datetime(2026, 8, 6, 19, 17, 0)
         segs = self._segs()
-        assert cv.stream_start(wall, segs) == cv.audio_time_for(wall, segs)
+        assert tl.stream_start(wall, segs) == tl.audio_time_for(wall, segs)
 
     def test_render_enters_cast_partway_on_negative_start(self, monkeypatch, tmp_path):
         captured = {}
@@ -2525,7 +2531,7 @@ class TestHudSources:
             Segment("b", datetime(2026, 8, 3, 20, 1, 0), 60.0, 60.0),
         ]
         for t in (0.0, 30.0, 59.0, 60.0, 90.0):
-            assert cv.audio_time_for(cv.wall_time_at(t, segs), segs) == t
+            assert tl.audio_time_for(cv.wall_time_at(t, segs), segs) == t
 
 
 _ART = None
