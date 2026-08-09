@@ -162,6 +162,32 @@ A time correspondence between the audio and the log that is confident enough to
 fit a drift correction against.
 _Avoid_: sync point, marker
 
+**Over**:
+One transmission — the amateur-radio word, used here in its exact sense,
+because it is what a **segment** contains and what `MAX_OVER_S` gates on. A
+real over is short; a segment that runs long is a listening period, not an
+over.
+_Avoid_: transmission, over-the-air turn
+
+**Burst**:
+A run of consecutive overs separated only by short gaps, with a genuine
+listening gap either side. One QSO is worked in one burst, and sometimes two
+QSOs are.
+_Avoid_: group, run, cluster
+
+**Window**:
+The span of finished video a QSO occupies, `(start, end)` in audio time. The
+chapters, the captions and the HUD's QSO marks are all placed against the same
+windows, so they agree with each other by construction.
+_Avoid_: range, span, slot
+
+**Trust gate**:
+The check that decides whether a CW decode is shown at all. A single-tone
+decoder turns band noise into plausible-looking letters, so a decode has to
+look like a real **over** — short enough, loud enough, varied enough — before
+it reaches the ticker.
+_Avoid_: filter, validation, quality check
+
 **Recess**:
 A cut-out in the HUD artwork that a live reading is drawn into. Sized by its
 widest possible reading.

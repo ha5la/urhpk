@@ -165,12 +165,12 @@ late for the same reason (verified against a real recording: QSO 2's over
 started at t=520.03s in the audio, but the EDI-time calculation landed at
 t=527.31s, 7.3s in).
 
-The fix doesn't need a better clock at all: `cluster_starts()` scans the
+The fix doesn't need a better clock at all: `burst_starts()` scans the
 already-decoded WAV segments and finds every real over that immediately
 follows a genuine listening gap (no trusted events, `dur > MAX_OVER_S`) —
 that's the true, sub-second-precise start of a fresh burst of activity,
 straight from the audio. `qso_windows()` snaps each QSO's approximate
-EDI-derived position onto one of those bursts via `_snap_to_cluster`, so
+EDI-derived position onto one of those bursts via `_snap_to_burst`, so
 chapters and captions land on the real over. (The CW ticker no longer takes
 part in any of this: it scrolls on a clock, so a character's position comes
 from when it was keyed and nothing can go stale on it.)
@@ -195,7 +195,7 @@ Two follow-up bugs turned up once this was checked against real recordings
   chaptered at 9:28, because that round is mostly voice and the first CW
   ever decoded doesn't happen until minutes in.
 
-That last point led to a fourth bug, also fixed: **`cluster_starts()`
+That last point led to a fourth bug, also fixed: **`burst_starts()`
 originally required a segment to have decoded CW events to count as a burst
 start.** A voice-mode over never carries decodable CW, so on the "mix"
 round (27 voice QSOs, 3 CW) this found only 5 bursts across the whole
@@ -254,7 +254,7 @@ clock** (the IC-9700 records straight to its SD card; the WAVs are copied
 off after the contest), while the EDI timestamp comes from the **PC's**
 clock, via `puskas_logger` — two independent clocks, which is exactly why
 `Alt+T` (radio clock sync, see below) exists. Snapping to the nearest
-`cluster_starts()` burst only needs the EDI time to land closer to the
+`burst_starts()` burst only needs the EDI time to land closer to the
 *right* real over than to any other one — comfortably true even with
 several seconds, or low tens of seconds, of drift, since QSOs in a contest
 are normally well over a minute apart. `Alt+T` is still worth pressing
@@ -269,7 +269,7 @@ event per logged QSO to `*-input.jsonl`, timestamped at the exact moment
 the operator hit Enter — `match_qso_times` pairs each EDI QSO to its event
 by callsign, in chronological order rather than by minute, so a log whose
 timestamps disagree with the EDI's still matches. `qso_windows()` then uses that exact time instead of the EDI's
-minute-truncated one as the anchor into `_snap_to_cluster`, and uses it
+minute-truncated one as the anchor into `_snap_to_burst`, and uses it
 directly (not the next QSO's start) as the window's *end* wherever known —
 the moment logging finished, not whenever the next over happens to begin.
 Falls back to the plain audio-structure heuristics above wherever a QSO has

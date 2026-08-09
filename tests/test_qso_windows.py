@@ -6,7 +6,7 @@ from cw_decode import (
     MAX_OVER_S,
     CharEvent,
 )
-from qso_windows import cluster_starts, qso_windows
+from qso_windows import burst_starts, qso_windows
 from timeline import (
     Qso,
     Segment,
@@ -22,7 +22,7 @@ class TestAss:
                 texts.append(line.rsplit(",", 1)[-1])
         return texts
 
-    def test_cluster_starts_marks_first_segment_and_after_long_gap_only(self):
+    def test_burst_starts_marks_first_segment_and_after_long_gap_only(self):
         segs = [
             Segment(
                 "a",
@@ -52,14 +52,14 @@ class TestAss:
                 events=[CharEvent(0.0, "C")],
             ),  # new burst
         ]
-        assert cluster_starts(segs) == [0.0, 50.0]
+        assert burst_starts(segs) == [0.0, 50.0]
 
-    def test_cluster_starts_counts_voice_segments_too(self):
+    def test_burst_starts_counts_voice_segments_too(self):
         # Regression test for a real bug found by the user: a WAV segment
         # boundary is a precise real-world RX/TX transition regardless of
         # what's actually being transmitted. A voice-mode QSO's segments
         # never carry decoded CW events (there's no CW there to decode), so
-        # requiring `s.events` made cluster_starts blind to every voice
+        # requiring `s.events` made burst_starts blind to every voice
         # over -- on a mostly-voice recording this meant almost no QSO ever
         # got the audio-precise snap at all. Duration alone (a real over is
         # short; a genuine gap is long) works identically for voice and CW.
@@ -71,9 +71,9 @@ class TestAss:
                 "b", datetime(2026, 7, 4, 13, 0, 40), 5.0, 40.0
             ),  # voice over, no CW events
         ]
-        assert cluster_starts(segs) == [40.0]
+        assert burst_starts(segs) == [40.0]
 
-    def test_cluster_starts_skips_leading_rx_to_find_the_tx_start(self):
+    def test_burst_starts_skips_leading_rx_to_find_the_tx_start(self):
         # Regression test for the user's own RX/TX heuristic, verified
         # against this exact real burst from the "mix" recording: when a
         # recording/burst begins with the operator listening (RX) rather
@@ -99,7 +99,7 @@ class TestAss:
                 "d", datetime(2026, 7, 4, 13, 0, 34), 5.41, 33.78
             ),  # TX: continuing
         ]
-        assert cluster_starts(segs) == [26.11]
+        assert burst_starts(segs) == [26.11]
 
     def test_qso_window_snaps_to_real_burst_not_edi_minute(self, tmp_path):
         # EDI only has minute precision, so audio_time_for(qso.dt) lands
@@ -139,7 +139,7 @@ class TestAss:
         # while to complete (calling, retries) before being logged, its
         # EDI-derived approximate time can end up numerically *closer* to
         # the following contact's real burst than to its own. Picking the
-        # nearest cluster then wrongly snaps QSO N onto QSO N+1's burst. The
+        # nearest burst then wrongly snaps QSO N onto QSO N+1's burst. The
         # correct rule is the *latest* burst that started at or before the
         # approximate time, since a QSO's own over must have begun before it
         # was logged.
@@ -169,12 +169,12 @@ class TestAss:
         [(start, _end)] = qso_windows(qsos, segs, offset_h=0, total=210.0)
         assert start == 100.0  # not 205.0 (the next burst, numerically closer)
 
-    def test_qso_window_before_any_cluster_uses_approx_time(self, tmp_path):
+    def test_qso_window_before_any_burst_uses_approx_time(self, tmp_path):
         # Regression test for a real bug found by the user on a mostly-voice
         # ("mix" mode) recording: a QSO logged before any CW was ever
         # decoded (e.g. an early SSB contact, or simply the very first QSO)
-        # has no earlier cluster to snap to. Falling back to the *first*
-        # cluster in the whole recording pulled the panel far into the
+        # has no earlier burst to snap to. Falling back to the *first*
+        # burst in the whole recording pulled the panel far into the
         # future (minutes off in the real case) instead of just using the
         # coarse EDI-derived time, which -- while not audio-precise -- is at
         # least in the right neighbourhood.
@@ -197,14 +197,14 @@ class TestAss:
             ),  # first-ever CW burst
         ]
         [(start, _end)] = qso_windows(qsos, segs, offset_h=0, total=305.0)
-        assert start == 0.0  # not 300.0 (the first cluster, minutes away)
+        assert start == 0.0  # not 300.0 (the first burst, minutes away)
 
 
 class TestQsoWindowsPreciseAnchor:
     def test_precise_time_used_as_snap_anchor_instead_of_edi_minute(self):
         # Burst starts at 26.0s; the EDI-minute-derived approx time would
         # map to audio_t=0 (wall-clock rounds down to the segment start),
-        # landing _snap_to_cluster on the wrong (or no) earlier cluster. An
+        # landing _snap_to_burst on the wrong (or no) earlier burst. An
         # exact submit time mapping into the real burst fixes the anchor.
         segs = [
             Segment("a", datetime(2026, 7, 6, 16, 1, 0), 26.0, 0.0),  # gap
@@ -315,9 +315,9 @@ class TestQsoWindowsPreciseAnchor:
         # Regression test for a real reported bug: the same station worked
         # on multiple modes back-to-back (e.g. SSB then FM then CW) with no
         # real listening gap between them is *one* burst as far as
-        # cluster_starts is concerned -- there's no audio structure to tell
+        # burst_starts is concerned -- there's no audio structure to tell
         # the individual overs apart. Snapping every one of those QSOs onto
-        # that single shared cluster start collapsed their panels onto the
+        # that single shared burst start collapsed their panels onto the
         # same instant; the old minimum-1-second window then showed two
         # panels on screen simultaneously for that one second, and the
         # first one vanished before its own real submit time.

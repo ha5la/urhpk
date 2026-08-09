@@ -83,20 +83,14 @@ DEBOUNCE_DIT_FRAC = 0.5  # on/off runs shorter than this fraction of the segment
 # own preliminary dit estimate are noise, not real keying
 # -- merged into their neighbour (see _debounce_on)
 
-# A segment's decode is trusted (shown in the ticker) only if it looks like a
-# real over rather than band noise. The long "listening / calling CQ" stretches
-# between QSOs carry many overlapping signals and noise at the CW pitch, which a
-# single-tone decoder turns into gibberish; these three gates reject them while
-# keeping every genuine exchange.
-MAX_OVER_S = 35.0  # a real over is short; long segments are listening periods.
-# No clean statistical gap here (unlike e.g.
-# FREQ_MATCH_TOLERANCE_HZ) -- real segment durations form
-# a continuum from 30s up past 100s, so this is a modest,
-# evidence-backed nudge (was 30.0) to capture one confirmed
-# real 32.5s exchange with a full locator exchange, not a
-# broad guess. The other three gates (SNR/quality/dominance)
-# still guard against genuine long listening periods that
-# happen to fall in the 30-35s range.
+# The trust gate's four thresholds.
+MAX_OVER_S = 35.0  # a real over is short; longer is a listening period.
+# Unlike FREQ_MATCH_TOLERANCE_HZ there is no clean statistical
+# gap to sit in -- real segment durations run continuously from
+# 30s past 100s -- so this is an evidence-backed nudge (was
+# 30.0) for one confirmed 32.5s exchange with a full locator,
+# not a broad guess. The other three gates still cover a
+# listening period that happens to land in 30-35s.
 MIN_SNR_DB = 20.0  # reject weak noise-only segments
 MIN_QUALITY = 0.5  # reject text dominated by isolated single letters (noise)
 MAX_DOMINANCE = 0.4  # reject text where one letter dominates (chopped carrier)

@@ -336,8 +336,8 @@ intermediate wav.
 
 The EDI format stores time only to the minute, so it can never say when an over
 actually began. `qso_windows()` snaps each QSO onto real audio structure —
-`cluster_starts` finds every burst of activity, `_tx_start` finds the operator's own
-first transmission within it, `_snap_to_cluster` takes the *latest* burst at or
+`burst_starts` finds every burst of activity, `_tx_start` finds the operator's own
+first transmission within it, `_snap_to_burst` takes the *latest* burst at or
 before the anchor. `--input-log` supplies an exact anchor where available
 (`match_qso_times` pairs EDI QSOs to logged `'qso'` events **by callsign in
 chronological order**, never by minute — a hand-edited seed log is expected to move
@@ -862,7 +862,7 @@ one forward across the events that don't mention it.
   truncation with no possible race at a minute boundary. This is what lets
   `contest_video.py`'s `match_qso_times` line them up exactly; it is the fix for
   "weird QSO timing" in a preview, where the EDI's minute-only precision let
-  `_snap_to_cluster` occasionally pick the wrong neighbouring burst.
+  `_snap_to_burst` occasionally pick the wrong neighbouring burst.
 
 **Webcam capture** (`YYMMDD-CALL-webcam.mp4` while recording, renamed on stop — see
 below — Alt+V to start/stop, off by default):
