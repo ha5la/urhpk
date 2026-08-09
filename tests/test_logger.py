@@ -9,6 +9,7 @@ import pytest
 import loc_cache
 import puskas_logger as pl
 import recorders
+import rig_server
 import rotator
 from geo import haversine_km, initial_bearing, is_locator, maidenhead_to_latlon
 from logbook import (
@@ -1475,9 +1476,11 @@ class TestRigServer:
     def _serve(self):
         import threading
 
-        srv = pl._rig_server_bind(0)
+        srv = rig_server.bind(0)
         assert srv is not None
-        threading.Thread(target=pl._rig_server_thread, args=(srv,), daemon=True).start()
+        threading.Thread(
+            target=rig_server.serve, args=(srv, pl.rig_snapshot), daemon=True
+        ).start()
         return srv, srv.getsockname()[1]
 
     def test_serves_f_and_m_like_rigctld(self):
@@ -1518,10 +1521,10 @@ class TestRigServer:
             srv.close()
 
     def test_bind_yields_none_when_port_taken(self):
-        srv = pl._rig_server_bind(0)
+        srv = rig_server.bind(0)
         assert srv is not None
         try:
-            assert pl._rig_server_bind(srv.getsockname()[1]) is None
+            assert rig_server.bind(srv.getsockname()[1]) is None
         finally:
             srv.close()
 

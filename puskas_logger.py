@@ -14,7 +14,6 @@ import netrc
 import os
 import re
 import signal
-import socket
 import sys
 import threading
 import time
@@ -34,6 +33,7 @@ from prompt_toolkit.styles import DynamicStyle, Style
 import edi
 import icom_net
 import loc_cache
+import rig_server
 import rotator
 from geo import is_locator
 from logbook import (
@@ -228,64 +228,18 @@ def _install_signal_handlers() -> None:
         signal.signal(sig, _terminate)
 
 
+def rig_snapshot() -> tuple[bool, int, str]:
+    """(online, freq_hz, raw_mode) — what rig_server answers a query with."""
+    with _rig_lock:
+        return _rig["online"], _rig.get("freq_hz", 0), _rig.get("raw_mode", "")
+
+
 def current_rig() -> tuple[str, str, str, bool]:
     """(band, mode, qrg, online) — falls back to manual override if offline."""
     with _rig_lock:
         if _rig["online"]:
             return _rig["band"], _rig["mode"], _rig["qrg"], True
     return _rig_manual["band"], _rig_manual["mode"], "", False
-
-
-# ──────────────────────────────────────────────────────────────
-# Rig server — rigctld dialect on 4532, for on4kst_irc_bridge.py.
-# The radio holds only ONE network session (a second connect silently
-# kills the first — verified live), so the logger owns it and serves
-# other local consumers from its push-fresh cache. Replies are answered
-# from memory, so a live query costs microseconds — the bridge queries
-# at sked time instead of relying on a poll cache.
-# ──────────────────────────────────────────────────────────────
-
-
-def _rig_server_bind(port: int) -> socket.socket | None:
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        srv.bind(("127.0.0.1", port))
-    except OSError:
-        srv.close()
-        return None  # port taken (e.g. a real rigctld) — serve nothing
-    srv.listen(4)
-    return srv
-
-
-def _serve_rig_client(conn: socket.socket) -> None:
-    try:
-        with conn, conn.makefile("rb") as r:
-            for line in r:
-                cmd = line.strip()
-                with _rig_lock:
-                    online = _rig["online"]
-                    freq_hz = _rig.get("freq_hz", 0)
-                    raw_mode = _rig.get("raw_mode", "")
-                if cmd == b"f" and online:
-                    conn.sendall(f"{freq_hz}\n".encode())
-                elif cmd == b"m" and online:
-                    conn.sendall(f"{raw_mode}\n0\n".encode())
-                elif cmd == b"q":
-                    break
-                else:
-                    conn.sendall(b"RPRT -1\n")
-    except Exception:
-        pass
-
-
-def _rig_server_thread(srv: socket.socket) -> None:
-    while True:
-        try:
-            conn, _ = srv.accept()
-        except OSError:
-            return
-        threading.Thread(target=_serve_rig_client, args=(conn,), daemon=True).start()
 
 
 _clock_sync_notice: dict = {"msg": "", "until": 0.0}
@@ -1210,8 +1164,8 @@ def main():
         ans = input("Resume? [Y/n]: ").strip().lower()
         if ans in ("", "y", "yes"):
             print("Building locator cache...")
-            loc_cache = loc_cache.load()
-            result = load_from_edi(edi_files, loc_cache)
+            cache = loc_cache.load()
+            result = load_from_edi(edi_files, cache)
             if result:
                 lb, tname = result
                 for q in lb.qsos:
@@ -1231,8 +1185,8 @@ def main():
         default_tname = tname_for(now)
         tname = input(f"Contest name [{default_tname}]: ").strip() or default_tname
         print("Building locator cache...")
-        loc_cache = loc_cache.load()
-        lb = LogBook(my_callsign, my_loc, loc_cache)
+        cache = loc_cache.load()
+        lb = LogBook(my_callsign, my_loc, cache)
 
     # Opened before the radio/rotator threads start: both write to it the
     # moment they have something, and the radio's first push arrives within
@@ -1247,10 +1201,10 @@ def main():
     _radio["thread"] = t
     t.start()
     threading.Thread(target=rotator.poll_thread, daemon=True).start()
-    _rig_srv = _rig_server_bind(RIG_SERVER_PORT)
+    _rig_srv = rig_server.bind(RIG_SERVER_PORT)
     if _rig_srv is not None:
         threading.Thread(
-            target=_rig_server_thread, args=(_rig_srv,), daemon=True
+            target=rig_server.serve, args=(_rig_srv, rig_snapshot), daemon=True
         ).start()
     _scope_path = Path(
         f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{lb.my_callsign}.scope"
