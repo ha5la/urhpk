@@ -1,8 +1,4 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["numpy", "pyte", "pillow"]
-# ///
+#!/usr/bin/env -S uv run
 """Produce an annotated CW contest video from a recording + EDI log.
 
 Given a directory of timestamped WAV segments (split on RX/TX switches, as

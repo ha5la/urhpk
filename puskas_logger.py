@@ -1,9 +1,4 @@
-#!/usr/bin/env -S uv run --script
-#
-# /// script
-# requires-python = ">=3.12"
-# dependencies = ["prompt_toolkit"]
-# ///
+#!/usr/bin/env -S uv run
 """
 Puskás URH Kupa – Contest QSO Logger
 =====================================

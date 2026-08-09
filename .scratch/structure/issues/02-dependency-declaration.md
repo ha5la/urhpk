@@ -1,6 +1,6 @@
 # 02 — One dependency declaration, or two
 
-Status: needs-info
+Status: resolved
 
 Blocks: 03
 
@@ -49,3 +49,25 @@ was rejected.
 advertised since it was one script. The deciding fact is that the drift is
 already possible today and would be invisible when it bites, which is during a
 round.
+
+## Answer
+
+**(a) — full uv project.** Approved by the user.
+
+Runtime deps moved to `[project] dependencies`; dev-dependencies keep only the
+test tooling; PEP 723 headers removed from all six scripts; shebangs are now
+`#!/usr/bin/env -S uv run`.
+
+Verified rather than assumed, in a scratch project with a round subdirectory:
+
+- a script launched by shebang from a round subdir finds the project (uv walks
+  up from the CWD), installs from the lock, and runs
+- `sys.path[0]` is still the script's own directory, so issue 03's shared
+  library can be a plain sibling module with no packaging
+- launched from outside the project it fails with `ModuleNotFoundError` — the
+  accepted cost, and acceptable because a round directory is always inside the
+  project
+
+Unification also settled a discrepancy nobody had noticed: `contest_video.py`
+asked for `requires-python = ">=3.11"` while every other script and
+`pyproject.toml` said `>=3.12`.

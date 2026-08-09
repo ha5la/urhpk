@@ -1,8 +1,4 @@
-#!/usr/bin/env -S uv run --script
-#
-# /// script
-# requires-python = ">=3.12"
-# ///
+#!/usr/bin/env -S uv run
 """
 Puskás URH Kupa – Pre-contest station harvester
 ================================================

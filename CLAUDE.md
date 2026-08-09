@@ -109,10 +109,19 @@ exactly one round:
 | `.puskas_cache/` | API response cache (CWD; delete to force a fresh fetch) |
 | `*.edi`, `*.jsonl`, `*.scope`, `*.cast`, `*.mp4` | one round's own files (CWD) |
 
-**Running**: every component is a `uv run` script with its dependencies declared
-in its own header — there is no shared requirements file and no virtualenv to
-activate. PIPELINE.md has the order they are actually used in; each also runs
-standalone outside a contest round.
+**Running**: this is one `uv` project, not a set of standalone scripts.
+Dependencies are declared once in `pyproject.toml` and locked in `uv.lock`;
+there is still no virtualenv to activate. Every component runs either as
+`uv run <script>.py` or directly by its `#!/usr/bin/env -S uv run` shebang —
+`uv` finds the project by walking up from the current directory, so a script
+launched from a round directory inside the project works, and one launched
+from outside the project does not. PIPELINE.md has the order they are actually
+used in.
+
+The scripts carried their own PEP 723 headers until the same four packages
+were *also* listed in `pyproject.toml` with a different version policy and
+only that side locked — so the test suite could resolve differently from a
+contest round, and nothing would say so.
 
 ## Testing
 
