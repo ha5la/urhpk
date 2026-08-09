@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import puskas_logger as pl
+from geo import haversine_km, initial_bearing, maidenhead_to_latlon
 from puskas_logger import (
     QSO,
     RE_LOC,
@@ -34,10 +35,7 @@ from puskas_logger import (
     _webcam_precise_start,
     _webcam_toggle,
     current_rot,
-    haversine_km,
-    initial_bearing,
     load_from_edi,
-    maidenhead_to_latlon,
     parse_input,
     tname_for,
     write_edi,

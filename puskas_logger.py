@@ -11,7 +11,6 @@ Ctrl-D at empty prompt → save EDI files and exit
 """
 
 import json
-import math
 import netrc
 import os
 import re
@@ -36,6 +35,7 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import DynamicStyle, Style
 
 import icom_net
+from geo import bearing_between, distance_between
 
 # ──────────────────────────────────────────────────────────────
 # Configuration
@@ -56,43 +56,6 @@ _BANDS = ("2M", "70CM", "23CM")
 _MODES = ("SSB", "CW", "FM")
 WEBCAM_DEVICE = "/dev/video0"  # find with: v4l2-ctl --list-devices
 WEBCAM_AUDIO_SOURCE = "default"  # find with: pactl list short sources
-
-
-# ──────────────────────────────────────────────────────────────
-# Geo helpers
-# ──────────────────────────────────────────────────────────────
-def maidenhead_to_latlon(loc: str) -> tuple[float, float]:
-    loc = loc.upper()
-    lon = (ord(loc[0]) - 65) * 20 - 180
-    lat = (ord(loc[1]) - 65) * 10 - 90
-    lon += int(loc[2]) * 2
-    lat += int(loc[3])
-    if len(loc) >= 6:
-        lon += (ord(loc[4]) - 65) * (5 / 60)
-        lat += (ord(loc[5]) - 65) * (2.5 / 60)
-        lon += 2.5 / 60
-        lat += 1.25 / 60
-    else:
-        lon += 1.0
-        lat += 0.5
-    return lat, lon
-
-
-def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    R = 6371.0
-    φ1, λ1, φ2, λ2 = map(math.radians, (lat1, lon1, lat2, lon2))
-    a = (
-        math.sin((φ2 - φ1) / 2) ** 2
-        + math.cos(φ1) * math.cos(φ2) * math.sin((λ2 - λ1) / 2) ** 2
-    )
-    return R * 2 * math.asin(math.sqrt(a))
-
-
-def initial_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    φ1, λ1, φ2, λ2 = map(math.radians, (lat1, lon1, lat2, lon2))
-    x = math.sin(λ2 - λ1) * math.cos(φ2)
-    y = math.cos(φ1) * math.sin(φ2) - math.sin(φ1) * math.cos(φ2) * math.cos(λ2 - λ1)
-    return math.degrees(math.atan2(x, y)) % 360
 
 
 _BEARING_ARROWS = "↑↗→↘↓↙←↖"
@@ -918,28 +881,12 @@ class LogBook:
         return q
 
     def dist(self, loc: str) -> int:
-        if not (self.my_loc and loc):
-            return 0
-        try:
-            return int(
-                haversine_km(
-                    *maidenhead_to_latlon(self.my_loc), *maidenhead_to_latlon(loc)
-                )
-            )
-        except Exception:
-            return 0
+        km = distance_between(self.my_loc, loc)
+        return 0 if km is None else int(km)
 
     def bearing(self, loc: str) -> int:
-        if not (self.my_loc and loc):
-            return 0
-        try:
-            return int(
-                initial_bearing(
-                    *maidenhead_to_latlon(self.my_loc), *maidenhead_to_latlon(loc)
-                )
-            )
-        except Exception:
-            return 0
+        deg = bearing_between(self.my_loc, loc)
+        return 0 if deg is None else int(deg)
 
     def bands(self) -> list[str]:
         seen: list[str] = []

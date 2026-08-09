@@ -41,6 +41,15 @@ import time
 import urllib.request
 from pathlib import Path
 
+from geo import (
+    bearing_between,
+    distance_between,
+    haversine_km,
+    initial_bearing,
+    latlon_to_maidenhead,
+    maidenhead_to_latlon,
+)
+
 # ============================================================
 # Configuration
 # ============================================================
@@ -86,49 +95,13 @@ def load_credentials() -> tuple[str, str]:
 # ============================================================
 
 
-def maidenhead_to_latlon(loc: str) -> tuple[float, float]:
-    loc = loc.upper().strip()
-    lon = (ord(loc[0]) - ord("A")) * 20 - 180 + int(loc[2]) * 2
-    lat = (ord(loc[1]) - ord("A")) * 10 - 90 + int(loc[3]) * 1
-    if len(loc) >= 6:
-        lon += (ord(loc[4]) - ord("A")) * (2 / 24) + (1 / 24)
-        lat += (ord(loc[5]) - ord("A")) * (1 / 24) + (1 / 48)
-    else:
-        lon += 1.0
-        lat += 0.5
-    return lat, lon
-
-
-def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    p = math.pi / 180
-    a = (
-        math.sin((lat2 - lat1) * p / 2) ** 2
-        + math.cos(lat1 * p) * math.cos(lat2 * p) * math.sin((lon2 - lon1) * p / 2) ** 2
-    )
-    return 2 * 6371.0 * math.asin(math.sqrt(a))
-
-
-def initial_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    p = math.pi / 180
-    la1, la2 = lat1 * p, lat2 * p
-    dlon = (lon2 - lon1) * p
-    x = math.sin(dlon) * math.cos(la2)
-    y = math.cos(la1) * math.sin(la2) - math.sin(la1) * math.cos(la2) * math.cos(dlon)
-    return (math.degrees(math.atan2(x, y)) + 360) % 360
-
-
 def _loc_distance_str(my_loc: str, their_loc: str) -> str:
     """Returns ' | dist km bear°' or '' if either locator is missing/invalid."""
-    if not my_loc or not their_loc:
+    dist = distance_between(my_loc, their_loc)
+    bear = bearing_between(my_loc, their_loc)
+    if dist is None or bear is None:
         return ""
-    try:
-        lat1, lon1 = maidenhead_to_latlon(my_loc)
-        lat2, lon2 = maidenhead_to_latlon(their_loc)
-        dist = int(haversine_km(lat1, lon1, lat2, lon2))
-        bear = int(initial_bearing(lat1, lon1, lat2, lon2))
-        return f" | {dist} km {bear}°"
-    except Exception:
-        return ""
+    return f" | {int(dist)} km {int(bear)}°"
 
 
 # ============================================================
@@ -139,18 +112,6 @@ SCATTER_MIN_KM = 200
 SCATTER_MAX_KM = 1500
 SCATTER_RADIUS_KM = 50  # aircraft search radius around path midpoint
 OPENSKY_URL = "https://opensky-network.org/api/states/all"
-
-
-def latlon_to_maidenhead(lat: float, lon: float) -> str:
-    lon += 180
-    lat += 90
-    loc = chr(ord("A") + int(lon / 20))
-    loc += chr(ord("A") + int(lat / 10))
-    loc += str(int((lon % 20) / 2))
-    loc += str(int(lat % 10))
-    loc += chr(ord("A") + int((lon % 2) / (2 / 24)))
-    loc += chr(ord("A") + int((lat % 1) / (1 / 24)))
-    return loc
 
 
 def great_circle_midpoint(
@@ -207,18 +168,17 @@ def fetch_aircraft_near(lat: float, lon: float, radius_km: float) -> list[dict]:
 
 async def scatter_candidates(my_loc: str, online_users: dict[str, dict]) -> list[dict]:
     """Return scatter-feasible online stations with nearest aircraft info."""
-    if not my_loc:
+    me = maidenhead_to_latlon(my_loc)
+    if me is None:
         return []
-    my_lat, my_lon = maidenhead_to_latlon(my_loc)
+    my_lat, my_lon = me
     candidates = []
     for callsign, user in online_users.items():
         loc = user.get("loc", "")
-        if not loc:
+        them = maidenhead_to_latlon(loc)
+        if them is None:
             continue
-        try:
-            th_lat, th_lon = maidenhead_to_latlon(loc)
-        except Exception:
-            continue
+        th_lat, th_lon = them
         dist = haversine_km(my_lat, my_lon, th_lat, th_lon)
         if not (SCATTER_MIN_KM <= dist <= SCATTER_MAX_KM):
             continue
@@ -280,15 +240,10 @@ def sked_text(
     mode: str = "",
 ) -> str:
     msg = f"Hi {callsign}, sked? Puskás URH Kupa"
-    if my_loc and their_loc:
-        try:
-            lat1, lon1 = maidenhead_to_latlon(my_loc)
-            lat2, lon2 = maidenhead_to_latlon(their_loc)
-            dist = int(haversine_km(lat1, lon1, lat2, lon2))
-            bear = int(initial_bearing(lat1, lon1, lat2, lon2))
-            msg += f" – {dist} km, {bear}°"
-        except Exception:
-            pass
+    dist = distance_between(my_loc, their_loc)
+    bear = bearing_between(my_loc, their_loc)
+    if dist is not None and bear is not None:
+        msg += f" – {int(dist)} km, {int(bear)}°"
     if qrg:
         msg += f" – {qrg} MHz"
         if mode:
@@ -469,21 +424,21 @@ class Bridge:
         if not self.my_locator:
             await self._notify("Own locator not yet known, try again in a moment.")
             return
-        my_lat, my_lon = maidenhead_to_latlon(self.my_locator)
+        me = maidenhead_to_latlon(self.my_locator)
+        if me is None:
+            await self._notify("Own locator not yet known, try again in a moment.")
+            return
         rows = []
         for callsign, user in self.kst.online_users.items():
             if callsign == self.my_callsign:
                 continue
             loc = user.get("loc", "")
-            if not loc:
+            them = maidenhead_to_latlon(loc)
+            if them is None:
                 continue
-            try:
-                th_lat, th_lon = maidenhead_to_latlon(loc)
-                dist = haversine_km(my_lat, my_lon, th_lat, th_lon)
-                bear = initial_bearing(my_lat, my_lon, th_lat, th_lon)
-                rows.append((callsign, loc, dist, bear, user.get("away", False)))
-            except Exception:
-                continue
+            dist = haversine_km(*me, *them)
+            bear = initial_bearing(*me, *them)
+            rows.append((callsign, loc, dist, bear, user.get("away", False)))
         rows.sort(key=lambda r: r[2])
         if not rows:
             await self._notify("No other stations online.")

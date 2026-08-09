@@ -47,6 +47,7 @@ import numpy as np
 import pyte
 from PIL import Image, ImageDraw, ImageFont
 
+from geo import initial_bearing, maidenhead_to_latlon
 from icom_net import band_from_hz, read_scope_records
 
 # ---------------------------------------------------------------------------
@@ -2172,32 +2173,6 @@ HUD_RATE_WINDOW_S = 600.0  # trailing window behind the QSOs/hour readout
 HUD_SCORE_ANIM_S = 0.6  # score count-up + panel flash after each QSO
 HUD_S_CENTRE_BINS = 3  # scope bins taken as "the tuned frequency"
 HUD_S_HOLD_S = 1.0  # no sweep for this long = no signal reading at all
-
-
-def maidenhead_to_latlon(loc: str) -> tuple[float, float] | None:
-    """Centre of a 4- or 6-character Maidenhead locator, or None if it isn't
-    one. Same formula as puskas_logger, which carries its own copy of these two
-    tiny helpers; None rather than an exception because EDI fields come from an
-    external file."""
-    loc = (loc or "").strip().upper()
-    if not re.fullmatch(r"[A-R]{2}[0-9]{2}([A-X]{2})?", loc):
-        return None
-    lon = (ord(loc[0]) - 65) * 20 - 180 + int(loc[2]) * 2
-    lat = (ord(loc[1]) - 65) * 10 - 90 + int(loc[3])
-    if len(loc) >= 6:
-        lon += (ord(loc[4]) - 65) * (5 / 60) + 2.5 / 60
-        lat += (ord(loc[5]) - 65) * (2.5 / 60) + 1.25 / 60
-    else:
-        lon += 1.0
-        lat += 0.5
-    return lat, lon
-
-
-def initial_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    f1, l1, f2, l2 = map(math.radians, (lat1, lon1, lat2, lon2))
-    x = math.sin(l2 - l1) * math.cos(f2)
-    y = math.cos(f1) * math.sin(f2) - math.sin(f1) * math.cos(f2) * math.cos(l2 - l1)
-    return math.degrees(math.atan2(x, y)) % 360
 
 
 @dataclass
