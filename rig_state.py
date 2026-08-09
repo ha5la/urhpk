@@ -107,7 +107,7 @@ class InputLogEvent:
 
 def load_input_log(path: str) -> list[InputLogEvent]:
     """Parse a puskas_logger `*-input.jsonl` log. Two event kinds share the
-    file (see puskas_logger.py's own comment on why): 'text' is one line per
+    file (see recorders.py's own comment on why): 'text' is one line per
     keystroke feeding the typewriter overlay, microsecond-precise but with
     no reliable way to tell a submit from an abort. 'qso' is one line per
     QSO actually appended to the log, written from the one place that

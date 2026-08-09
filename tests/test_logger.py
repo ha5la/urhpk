@@ -11,6 +11,7 @@ import puskas_logger as pl
 import recorders
 import rig_server
 import rotator
+import webcam_log
 from geo import haversine_km, initial_bearing, is_locator, maidenhead_to_latlon
 from logbook import (
     QSO,
@@ -35,7 +36,6 @@ from puskas_logger import (
 from recorders import (
     _webcam_capture_cmd,
     _webcam_precise_name,
-    _webcam_precise_start,
     input_log_open,
     on_buffer_changed,
     telemetry_rig_record,
@@ -1144,7 +1144,7 @@ class TestWebcamPreciseStart:
             "Input #1, pulse, from 'default':\n"
             "  Duration: N/A, start: 1784722261.854603, bitrate: 1536 kb/s\n"
         )
-        assert _webcam_precise_start(str(log)) == datetime(
+        assert webcam_log.frame_zero_utc(str(log)) == datetime(
             2026, 7, 22, 12, 11, 1, 868307
         )
 
@@ -1154,17 +1154,17 @@ class TestWebcamPreciseStart:
             "Input #0, pulse, from 'default':\n"
             "  Duration: N/A, start: 1784722261.854603, bitrate: 1536 kb/s\n"
         )
-        assert _webcam_precise_start(str(log)) == datetime(
+        assert webcam_log.frame_zero_utc(str(log)) == datetime(
             2026, 7, 22, 12, 11, 1, 854603
         )
 
     def test_returns_none_when_no_start_line(self, tmp_path):
         log = tmp_path / "x.log"
         log.write_text("ffmpeg version 7.1.5\nsome unrelated output\n")
-        assert _webcam_precise_start(str(log)) is None
+        assert webcam_log.frame_zero_utc(str(log)) is None
 
     def test_returns_none_for_missing_file(self, tmp_path):
-        assert _webcam_precise_start(str(tmp_path / "nope.log")) is None
+        assert webcam_log.frame_zero_utc(str(tmp_path / "nope.log")) is None
 
     def test_ignores_uptime_style_start_not_a_real_epoch(self, tmp_path):
         # Without -use_wallclock_as_timestamps, v4l2 reports CLOCK_MONOTONIC
@@ -1175,7 +1175,7 @@ class TestWebcamPreciseStart:
             "Input #0, video4linux2,v4l2, from '/dev/video0':\n"
             "  Duration: N/A, start: 123.456789, bitrate: 147456 kb/s\n"
         )
-        assert _webcam_precise_start(str(log)) is None
+        assert webcam_log.frame_zero_utc(str(log)) is None
 
 
 class TestWebcamPreciseName:

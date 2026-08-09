@@ -10,7 +10,7 @@ Sync is exact and needs no cross-correlation at all, unlike the webcam:
 asciinema's own cast v2 format embeds a Unix-epoch "timestamp" in its header,
 recorded by the same machine's clock that (if the logger is also running
 there) already drives every other precise timestamp in the pipeline -- see
-puskas_logger.py's webcam capture for the same reasoning.
+recorders.py's webcam capture for the same reasoning.
 """
 
 from __future__ import annotations

@@ -842,8 +842,8 @@ class IcomNetRig:
         ctrl_addr = (self.host, self._radio_control_port)
         ctrl_local_id = os.urandom(4)
         ctrl_remote_id = _rendezvous(self._ctrl_sock, ctrl_addr, ctrl_local_id, timeout)
-        # Stashed early (not just at the end) so _best_effort_logout can send a
-        # deregister if a later step in this method fails.
+        # Stashed early (not just at the end) so close() can send a deregister
+        # if a later step in this method fails.
         self._ctrl_local_id, self._ctrl_remote_id, self._ctrl_addr = (
             ctrl_local_id,
             ctrl_remote_id,

@@ -125,7 +125,7 @@ def _dominance(text: str) -> float:
     contest word ("TU", "R", "K"...). Found from a real reported case:
     correctly-decoded "TU" and "73EE" were being silently dropped from
     the ticker. The "chopped carrier" pattern this guards against only
-    shows up over many characters in practice anyway (see test_contest_video)."""
+    shows up over many characters in practice anyway (see tests/test_cw_decode.py)."""
     chars = [c for c in text if c != " "]
     if len(chars) < MIN_CHARS_FOR_DOMINANCE:
         return 0.0

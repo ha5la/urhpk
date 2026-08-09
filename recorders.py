@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import signal
 import subprocess
 import threading
@@ -22,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import icom_net
+import webcam_log
 
 WEBCAM_DEVICE = "/dev/video0"  # find with: v4l2-ctl --list-devices
 WEBCAM_AUDIO_SOURCE = "default"  # find with: pactl list short sources
@@ -61,9 +61,9 @@ def on_scope(start_hz: int, end_hz: int, pixels: bytes) -> None:
 #
 # Records are partial: a rig event carries freq_hz/mode, a rotator event
 # carries az. A field a line doesn't mention simply didn't change, and
-# contest_video.py's build_state_events carries each one forward.
+# rig_state.build_state_events carries each one forward.
 #
-# This was a 1 Hz sampler of current_rig()/current_rot() while the rig was
+# This was a 1 Hz sampler of current_rig()/rotator.current() while the rig was
 # behind rigctld and had to be polled anyway. freq/mode now arrive as
 # icom_net CI-V Transceive pushes -- and IcomNetRig._apply_update already
 # suppresses no-op updates, so the callback *is* the change stream. Sampling
@@ -164,7 +164,7 @@ def telemetry_rot_record(now: datetime, az: float | None) -> dict:
 # Two event kinds share the file: "text" (one per keystroke, the full
 # current buffer contents) and "qso" (one per QSO actually appended to the
 # log, microsecond-precise). The EDI format only stores QSO time to the
-# minute, which is what makes contest_video.py's QSO-panel timing an
+# minute, which is what makes qso_windows.py's QSO timing an
 # audio-structure-snapping guess rather than exact — this file's "qso"
 # events give it an exact submit timestamp to use instead, when available.
 # Note this deliberately does *not* try to distinguish a submit from an
@@ -218,41 +218,6 @@ _webcam_log_fh = None
 _webcam_out_path = None
 _webcam_log_path = None
 
-_WEBCAM_LOG_INPUT_RE = re.compile(r"^Input #\d+, ([^,]+)")
-_WEBCAM_LOG_START_RE = re.compile(r"start:\s*([0-9]+\.[0-9]+)")
-
-
-def _webcam_precise_start(log_path: str) -> datetime | None:
-    """Parse the ffmpeg capture log for the v4l2 input's real wallclock
-    frame-0 start (mirrors contest_video.py's webcam_start_from_log). Used
-    to rename the finished file with a precise timestamp once capture
-    stops -- ffmpeg can't be told this value up front via -metadata, since
-    it isn't known until the camera has actually opened (~1s, variable,
-    after the process spawns)."""
-    video_epoch = audio_epoch = None
-    cur = None
-    try:
-        for line in open(log_path, encoding="utf-8", errors="replace"):
-            m = _WEBCAM_LOG_INPUT_RE.match(line.strip())
-            if m:
-                cur = m.group(1)
-                continue
-            if cur and "start:" in line:
-                sm = _WEBCAM_LOG_START_RE.search(line)
-                if sm and float(sm.group(1)) > 1e9:  # a Unix epoch, not uptime
-                    val = float(sm.group(1))
-                    if ("v4l2" in cur or "video4linux" in cur) and video_epoch is None:
-                        video_epoch = val
-                    elif "pulse" in cur and audio_epoch is None:
-                        audio_epoch = val
-                cur = None
-    except OSError:
-        return None
-    epoch = video_epoch if video_epoch is not None else audio_epoch
-    if epoch is None:
-        return None
-    return datetime.fromtimestamp(epoch, tz=timezone.utc).replace(tzinfo=None)
-
 
 def _webcam_precise_name(out_path: str, start: datetime) -> str:
     """Insert a precise, filesystem-safe UTC timestamp before the extension,
@@ -273,8 +238,8 @@ def _webcam_capture_cmd(device: str, audio_source: str, out_path: str) -> list[s
     -use_wallclock_as_timestamps 1 on the v4l2 input stamps every captured
     frame with the real gettimeofday wallclock, so ffmpeg logs an exact
     frame-0 UTC start in the *-webcam.log. webcam_toggle's stop branch reads
-    it back (_webcam_precise_start) to rename the finished file with that
-    exact timestamp -- contest_video.py's webcam_start_from_log parsing the
+    it back (webcam_log.frame_zero_utc) to rename the finished file with that
+    exact timestamp -- webcam_sync.webcam_start_from_log parsing the
     same log is only a fallback now, for recordings made before this existed
     or where the rename didn't happen. Without the flag, v4l2 timestamps are
     CLOCK_MONOTONIC (uptime), useless as an absolute time -- and the
@@ -343,7 +308,7 @@ def webcam_toggle(path_prefix: str) -> str | None:
             _webcam_log_fh.close()
             _webcam_log_fh = None
         if _webcam_out_path and _webcam_log_path:
-            start = _webcam_precise_start(_webcam_log_path)
+            start = webcam_log.frame_zero_utc(_webcam_log_path)
             if start is not None:
                 renamed = _webcam_precise_name(_webcam_out_path, start)
                 try:
