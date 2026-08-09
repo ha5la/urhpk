@@ -17,6 +17,8 @@ from PIL import Image, ImageDraw, ImageFont
 import cast_render
 import contest_video as cv
 import cw_decode
+import hud
+import hud_draw
 import rig_state
 import timeline as tl
 import video_format
@@ -40,6 +42,7 @@ from cw_decode import (
     decode_segment,
     gate_events,
 )
+from geo import initial_bearing, maidenhead_to_latlon
 from icom_net import write_scope_record
 from qso_windows import cluster_starts, qso_windows
 from rig_state import (
@@ -1005,13 +1008,13 @@ class TestTerminalCast:
         px_w, px_h = int(cw * W) + 4, lh * H + 4
         crop_h = min(px_h, lh + 5)  # a margin below row 0's own rectangle
 
-        canvas_alone = cv.Image.new("RGB", (px_w, px_h), CAST_BG)
+        canvas_alone = Image.new("RGB", (px_w, px_h), CAST_BG)
         _draw_cast_row(
             ImageDraw.Draw(canvas_alone), screen.buffer[0], 0, W, font, font_b, cw, lh
         )
         row0_alone = np.array(canvas_alone.crop((0, 0, px_w, crop_h)))
 
-        canvas_after = cv.Image.new("RGB", (px_w, px_h), CAST_BG)
+        canvas_after = Image.new("RGB", (px_w, px_h), CAST_BG)
         draw_after = ImageDraw.Draw(canvas_after)
         _draw_cast_row(draw_after, screen.buffer[0], 0, W, font, font_b, cw, lh)
         _draw_cast_row(draw_after, screen.buffer[1], 1, W, font, font_b, cw, lh)
@@ -2320,21 +2323,21 @@ def _hud_qso(callsign, pts, loc="JN97TF", dup=False):
 
 class TestHudGeo:
     def test_rejects_anything_that_is_not_a_locator(self):
-        assert cv.maidenhead_to_latlon("") is None
-        assert cv.maidenhead_to_latlon("ZZ99") is None  # field letters stop at R
-        assert cv.maidenhead_to_latlon("JN9") is None
-        assert cv.maidenhead_to_latlon("JN97TF") is not None
+        assert maidenhead_to_latlon("") is None
+        assert maidenhead_to_latlon("ZZ99") is None  # field letters stop at R
+        assert maidenhead_to_latlon("JN9") is None
+        assert maidenhead_to_latlon("JN97TF") is not None
 
     def test_six_character_locator_sits_inside_its_own_four_character_square(self):
-        lat4, lon4 = cv.maidenhead_to_latlon("JN97")
-        lat6, lon6 = cv.maidenhead_to_latlon("JN97TF")
+        lat4, lon4 = maidenhead_to_latlon("JN97")
+        lat6, lon6 = maidenhead_to_latlon("JN97TF")
         assert abs(lat6 - lat4) < 0.5
         assert abs(lon6 - lon4) < 1.0
 
     def test_initial_bearing_matches_the_cardinal_directions(self):
-        assert abs(cv.initial_bearing(0, 0, 10, 0) - 0) < 0.1  # due north
-        assert abs(cv.initial_bearing(0, 0, 0, 10) - 90) < 0.1  # due east
-        assert abs(cv.initial_bearing(0, 0, -10, 0) - 180) < 0.1  # due south
+        assert abs(initial_bearing(0, 0, 10, 0) - 0) < 0.1  # due north
+        assert abs(initial_bearing(0, 0, 0, 10) - 90) < 0.1  # due east
+        assert abs(initial_bearing(0, 0, -10, 0) - 180) < 0.1  # due south
 
 
 class TestHudQsoMarks:
@@ -2345,7 +2348,7 @@ class TestHudQsoMarks:
             _hud_qso("HA3C", 0, dup=True),
         ]
         windows = [(0.0, 10.0), (20.0, 30.0), (40.0, 50.0)]
-        assert cv.hud_qso_marks(qsos, windows) == [
+        assert hud.hud_qso_marks(qsos, windows) == [
             (10.0, 100, 1, 100),
             (30.0, 400, 2, 300),
             (50.0, 400, 3, 300),  # a dup adds a QSO but no score and no best DX
@@ -2356,31 +2359,31 @@ class TestHudQsoMarks:
         # relative to the EDI's minute-precision sort.
         qsos = [_hud_qso("HA1A", 100), _hud_qso("HA2B", 300)]
         windows = [(30.0, 40.0), (0.0, 10.0)]
-        assert [m[0] for m in cv.hud_qso_marks(qsos, windows)] == [10.0, 40.0]
+        assert [m[0] for m in hud.hud_qso_marks(qsos, windows)] == [10.0, 40.0]
 
 
 class TestHudTimeline:
     def test_score_counts_up_over_the_animation_window_then_holds(self):
-        tl = cv.HudTimeline(
+        tl = hud.HudTimeline(
             segs=[_hud_seg()], qso_marks=[(10.0, 100, 1, 100), (20.0, 400, 2, 300)]
         )
         assert tl.at(9.9).score == 0
         assert tl.at(10.0).score == 0  # the count-up starts from the old total
-        midway = tl.at(10.0 + cv.HUD_SCORE_ANIM_S / 2).score
+        midway = tl.at(10.0 + hud.HUD_SCORE_ANIM_S / 2).score
         assert 0 < midway < 100
-        assert tl.at(10.0 + cv.HUD_SCORE_ANIM_S).score == 100
+        assert tl.at(10.0 + hud.HUD_SCORE_ANIM_S).score == 100
         assert tl.at(19.0).score == 100  # holds until the next QSO
-        assert tl.at(20.0 + cv.HUD_SCORE_ANIM_S).score == 400
+        assert tl.at(20.0 + hud.HUD_SCORE_ANIM_S).score == 400
 
     def test_score_flash_decays_to_zero_over_the_same_window(self):
-        tl = cv.HudTimeline(segs=[_hud_seg()], qso_marks=[(10.0, 100, 1, 100)])
+        tl = hud.HudTimeline(segs=[_hud_seg()], qso_marks=[(10.0, 100, 1, 100)])
         assert tl.at(10.0).score_flash == 1.0
-        assert tl.at(10.0 + cv.HUD_SCORE_ANIM_S).score_flash < 1e-6
+        assert tl.at(10.0 + hud.HUD_SCORE_ANIM_S).score_flash < 1e-6
         assert tl.at(30.0).score_flash == 0.0
 
     def test_rate_counts_only_qsos_inside_the_trailing_window(self):
-        window = cv.HUD_RATE_WINDOW_S
-        tl = cv.HudTimeline(
+        window = hud.HUD_RATE_WINDOW_S
+        tl = hud.HudTimeline(
             segs=[_hud_seg(dur=window * 2)],
             qso_marks=[(0.0, 1, 1, 1), (100.0, 2, 2, 1), (window + 50.0, 3, 3, 1)],
         )
@@ -2388,32 +2391,32 @@ class TestHudTimeline:
         assert tl.at(window + 60.0).rate_per_h == 2 * 3600.0 / window
 
     def test_target_bearing_only_shows_inside_its_own_qso_window(self):
-        tl = cv.HudTimeline(segs=[_hud_seg()], target_spans=[(10.0, 20.0, 271.0)])
+        tl = hud.HudTimeline(segs=[_hud_seg()], target_spans=[(10.0, 20.0, 271.0)])
         assert tl.at(9.0).target_az is None
         assert tl.at(15.0).target_az == 271.0
         assert tl.at(20.0).target_az is None
 
     def test_rig_state_supplies_band_from_the_frequency(self):
         events = [(0.0, 10.0, SegState(ptt=True, freq_hz=432_200_000, mode="CW"))]
-        tl = cv.HudTimeline(segs=[_hud_seg()], state_events=events)
+        tl = hud.HudTimeline(segs=[_hud_seg()], state_events=events)
         state = tl.at(5.0)
         assert (state.ptt, state.mode, state.band) == (True, "CW", "70CM")
         assert tl.at(15.0).band is None  # past the run, nothing carries over
 
     def test_signal_level_clears_when_the_scope_recording_stops(self):
-        tl = cv.HudTimeline(segs=[_hud_seg()], s_marks=[(5.0, 0.5)])
+        tl = hud.HudTimeline(segs=[_hud_seg()], s_marks=[(5.0, 0.5)])
         assert tl.at(5.0).s_level == 0.5
-        assert tl.at(5.0 + cv.HUD_S_HOLD_S).s_level == 0.5
-        assert tl.at(5.0 + cv.HUD_S_HOLD_S + 0.1).s_level is None
+        assert tl.at(5.0 + hud.HUD_S_HOLD_S).s_level == 0.5
+        assert tl.at(5.0 + hud.HUD_S_HOLD_S + 0.1).s_level is None
 
     def test_utc_is_the_local_wall_clock_less_the_derived_offset(self):
-        tl = cv.HudTimeline(segs=[_hud_seg()], offset_h=2)
+        tl = hud.HudTimeline(segs=[_hud_seg()], offset_h=2)
         assert tl.at(30.0).utc == datetime(2026, 8, 3, 18, 0, 30)
 
 
 class TestHudCompass:
     def _tl(self, marks):
-        return cv.HudTimeline(segs=[_hud_seg()], az_marks=marks)
+        return hud.HudTimeline(segs=[_hud_seg()], az_marks=marks)
 
     def test_the_needle_sweeps_between_samples_instead_of_stepping(self):
         # The real bug, from the August round: the operator turned 250 -> 31
@@ -2450,7 +2453,7 @@ class TestHudCompass:
         # so a long gap between samples is not a slow movement -- interpolating
         # across it would creep the needle for minutes through a period when
         # the rotator did not move at all, then it would move instantly.
-        tl = self._tl([(10.0, 90.0), (10.0 + cv.HUD_AZ_INTERP_S + 1, 270.0)])
+        tl = self._tl([(10.0, 90.0), (10.0 + hud.HUD_AZ_INTERP_S + 1, 270.0)])
         assert tl.at(10.5).rot_az == 90.0
         assert tl.at(11.9).rot_az == 90.0
 
@@ -2484,7 +2487,7 @@ class TestHudSources:
                 datetime(2026, 8, 3, 18, 0, 9), None, None, None, az_offline=True
             ),
         ]
-        assert cv.hud_az_marks(telemetry, segs, offset_h=2) == [
+        assert hud.hud_az_marks(telemetry, segs, offset_h=2) == [
             (5.0, 135.0),
             (9.0, None),
         ]
@@ -2495,7 +2498,7 @@ class TestHudSources:
         quiet = bytes([10] * 475)
         loud = bytearray([10] * 475)
         loud[475 // 2] = SCOPE_AMP_MAX
-        marks = cv.hud_s_marks(
+        marks = hud.hud_s_marks(
             [(ts, 0, 0, quiet), (ts + 1, 0, 0, bytes(loud))], segs, offset_h=2
         )
         assert marks[0] == (30.0, 10 / SCOPE_AMP_MAX)
@@ -2508,13 +2511,13 @@ class TestHudSources:
         ts = datetime(2026, 8, 3, 18, 0, 0, tzinfo=timezone.utc).timestamp()
         pixels = bytearray([0] * 475)
         pixels[475 // 2] = 80
-        marks = cv.hud_s_marks([(ts, 0, 0, bytes(pixels))], segs, offset_h=2)
+        marks = hud.hud_s_marks([(ts, 0, 0, bytes(pixels))], segs, offset_h=2)
         assert marks[0][1] == 80 / SCOPE_AMP_MAX
 
     def test_target_spans_give_the_bearing_to_each_worked_station(self):
         # JN87 sits west-north-west of JN97TF (2.6 degrees of longitude
         # west, a quarter degree north), i.e. a bearing just short of 280.
-        spans = cv.hud_target_spans(
+        spans = hud.hud_target_spans(
             [_hud_qso("HA1A", 100, loc="JN87")], [(0.0, 10.0)], "JN97TF"
         )
         assert len(spans) == 1
@@ -2523,7 +2526,7 @@ class TestHudSources:
         assert 275 < az < 285
 
     def test_target_spans_skip_a_qso_whose_locator_will_not_parse(self):
-        spans = cv.hud_target_spans(
+        spans = hud.hud_target_spans(
             [_hud_qso("HA1A", 100, loc="?????")], [(0.0, 10.0)], "JN97TF"
         )
         assert spans == []
@@ -2534,7 +2537,7 @@ class TestHudSources:
             Segment("b", datetime(2026, 8, 3, 20, 1, 0), 60.0, 60.0),
         ]
         for t in (0.0, 30.0, 59.0, 60.0, 90.0):
-            assert tl.audio_time_for(cv.wall_time_at(t, segs), segs) == t
+            assert tl.audio_time_for(hud.wall_time_at(t, segs), segs) == t
 
 
 _ART = None
@@ -2545,15 +2548,15 @@ def _art():
     its sprites for every test would dominate the suite's runtime."""
     global _ART
     if _ART is None:
-        _ART = cv.hud_art(cv.load_hud_theme())
+        _ART = hud_draw.hud_art(hud_draw.load_hud_theme())
     return _ART
 
 
 def _drawn(**over):
-    state = cv.hud_demo_state()
+    state = hud_draw.hud_demo_state()
     for k, v in over.items():
         setattr(state, k, v)
-    return np.asarray(cv.draw_hud_frame(state, _art())).astype(int)
+    return np.asarray(hud_draw.draw_hud_frame(state, _art())).astype(int)
 
 
 def _magenta(rgb):
@@ -2568,17 +2571,17 @@ class TestHudTheme_Geometry:
         # turns its compass into an ellipse, which is the specific reason this
         # artwork was chosen. Every supported resolution has to land on the
         # artwork's ratio, not just the 1080p reference.
-        _, _, bw, bh = cv.load_hud_theme()["bar"]
+        _, _, bw, bh = hud_draw.load_hud_theme()["bar"]
         art_aspect = bw / bh
-        assert abs(cv.HUD_W / cv.HUD_H - art_aspect) / art_aspect < 0.01
+        assert abs(hud_draw.HUD_W / hud_draw.HUD_H - art_aspect) / art_aspect < 0.01
         for W, H in video_format.RESOLUTIONS.values():
-            assert abs(W / cv.hud_height(H) - art_aspect) / art_aspect < 0.01
+            assert abs(W / hud_draw.hud_height(H) - art_aspect) / art_aspect < 0.01
 
     def test_every_rect_stays_inside_the_bar_and_they_never_overlap(self):
         # theme.json is hand-edited data, so this checks the data, not code.
-        theme = cv.load_hud_theme()
+        theme = hud_draw.load_hud_theme()
         bx, by, bw, bh = theme["bar"]
-        rects = [(n, r) for n, _, r in cv.hud_theme_rects(theme)
+        rects = [(n, r) for n, _, r in hud_draw.hud_theme_rects(theme)
                  if not n.startswith("sprites.")]  # fmt: skip
         for name, (x, y, w, h) in rects:
             assert bx <= x and by <= y, name
@@ -2622,17 +2625,19 @@ class TestHudTheme_Geometry:
                 }
             )
         )
-        a = cv.hud_art(cv.load_hud_theme(str(tmp_path)), 200, 100)
+        a = hud_draw.hud_art(hud_draw.load_hud_theme(str(tmp_path)), 200, 100)
         assert a.bar.size == (200, 100)
         assert a.slots["score"] == (40, 20, 40, 20)  # 2x scale, bar origin off
         assert a.chips["band"] == [(100, 20, 20, 20)]
         assert a.stats == [(140, 20, 20, 20)]
 
     def test_sprites_are_cut_out_of_the_magenta_sheet(self):
-        theme = cv.load_hud_theme()
+        theme = hud_draw.load_hud_theme()
         for name, sp in theme["sprites"].items():
             x, y, w, h = sp["box"]
-            cut = np.asarray(cv._key_magenta(theme["image"].crop((x, y, x + w, y + h))))
+            cut = np.asarray(
+                hud_draw._key_magenta(theme["image"].crop((x, y, x + w, y + h)))
+            )
             alpha = cut[:, :, 3]
             assert set(np.unique(alpha)) <= {0, 255}, name  # a hard key
             assert alpha.mean() > 20, name  # the sprite itself survived
@@ -2658,15 +2663,18 @@ class TestHudTheme_Geometry:
 
 class TestHudDrawing:
     def test_frame_has_the_bar_size(self):
-        art = cv.hud_art(cv.load_hud_theme(), 1280, 226)
-        assert cv.draw_hud_frame(cv.hud_demo_state(), art).size == (1280, 226)
+        art = hud_draw.hud_art(hud_draw.load_hud_theme(), 1280, 226)
+        assert hud_draw.draw_hud_frame(hud_draw.hud_demo_state(), art).size == (
+            1280,
+            226,
+        )
 
     def test_an_empty_state_renders_placeholders_rather_than_crashing(self):
         # Every recording made before the meter recorder existed looks like
         # this for the PWR panel, and a --duration cut before the first QSO
         # looks like it for the rest.
-        img = cv.draw_hud_frame(cv.HudState(), _art())
-        assert img.size == (cv.HUD_W, cv.HUD_H)
+        img = hud_draw.draw_hud_frame(hud.HudState(), _art())
+        assert img.size == (hud_draw.HUD_W, hud_draw.HUD_H)
 
     def test_no_readout_paints_outside_its_own_recess(self):
         # The artwork carries every label and frame, so anything drawn outside
@@ -2679,7 +2687,7 @@ class TestHudDrawing:
             + [c for row in art.chips.values() for c in row]
             + art.stats
         )
-        allowed = np.zeros((cv.HUD_H, cv.HUD_W), bool)
+        allowed = np.zeros((hud_draw.HUD_H, hud_draw.HUD_W), bool)
         for x, y, w, h in boxes:
             allowed[y : y + h, x : x + w] = True
         changed = (_drawn() != np.asarray(art.bar).astype(int)).any(axis=2)
@@ -2734,8 +2742,8 @@ class TestHudDrawing:
             return img[y : y + h, x : x + w].mean()
 
         for row, names, active in (
-            ("band", cv._HUD_BANDS, "2M"),
-            ("mode", cv._HUD_MODES, "CW"),
+            ("band", hud_draw._HUD_BANDS, "2M"),
+            ("mode", hud_draw._HUD_MODES, "CW"),
         ):
             lit = [brightness(r) for r, n in zip(art.chips[row], names) if n == active]
             unlit = [
@@ -2769,58 +2777,58 @@ class TestHudMatrixFont:
         # MORSE is the complete set the CW decoder can ever produce, so the
         # font is finite and fully determined -- nothing can arrive that the
         # ticker has no glyph for.
-        assert set(cw_decode.MORSE.values()) <= set(cv._FONT_5X7)
+        assert set(cw_decode.MORSE.values()) <= set(hud_draw._FONT_5X7)
 
     def test_every_glyph_is_exactly_five_by_seven_bits(self):
         # A mistyped row is a plausible-looking glyph rather than an error, so
         # the shape of the table is checked here and the glyphs themselves were
         # verified by rendering the whole set as a sheet and reading it.
-        for ch, bits in cv._FONT_5X7.items():
+        for ch, bits in hud_draw._FONT_5X7.items():
             rows = bits.split()
-            assert len(rows) == cv.HUD_MATRIX_ROWS, ch
-            assert all(len(r) == cv.HUD_MATRIX_COLS for r in rows), ch
+            assert len(rows) == hud.HUD_MATRIX_ROWS, ch
+            assert all(len(r) == hud.HUD_MATRIX_COLS for r in rows), ch
             assert set("".join(rows)) <= {"0", "1"}, ch
 
     def test_an_unknown_character_falls_back_to_a_question_mark(self):
-        assert cv._matrix_rows("\u00e9") == cv._matrix_rows("?")
+        assert hud_draw._matrix_rows("\u00e9") == hud_draw._matrix_rows("?")
 
 
 class TestMeterCalibration:
     def test_vd_matches_the_multimeter_reading_it_was_checked_against(self):
         # Raw 152 was measured on the real radio while a multimeter read
         # 13.78 V -- Icom's own Vd curve lands within 1%.
-        assert abs(cv.vd_volts(152) - 13.78) < 0.15
+        assert abs(hud.vd_volts(152) - 13.78) < 0.15
 
     def test_po_and_swr_hit_their_published_calibration_points(self):
-        assert cv.po_percent(213) == 100.0
-        assert cv.po_percent(143) == 50.0
-        assert cv.swr_ratio(0) == 1.0
-        assert cv.swr_ratio(48) == 1.5
-        assert cv.swr_ratio(120) == 3.0
+        assert hud.po_percent(213) == 100.0
+        assert hud.po_percent(143) == 50.0
+        assert hud.swr_ratio(0) == 1.0
+        assert hud.swr_ratio(48) == 1.5
+        assert hud.swr_ratio(120) == 3.0
 
     def test_id_uses_the_measured_line_not_icoms_curve(self):
         # Icom's IC-7300 curve gives 17.6 A for raw 171. Measured against a
         # multimeter in series, PA drain fits a line through the origin at
         # 0.0741 A/raw -- ~12.7 A there, and ~17.9 A full scale, not 25 A.
-        assert cv.id_amps(0) == 0.0
-        assert abs(cv.id_amps(171) - 12.67) < 0.1
+        assert hud.id_amps(0) == 0.0
+        assert abs(hud.id_amps(171) - 12.67) < 0.1
         # The low-current cluster the line was fitted through. The bound is
         # 6% because the lowest point sits 5.3% off: a 20 A meter range
         # resolves ~5 A poorly, and the constant-receive-baseline assumption
         # is least safe there.
         for raw, amps in ((55, 3.87), (61, 4.48), (64, 4.71)):
-            assert abs(cv.id_amps(raw) - amps) / amps < 0.06
+            assert abs(hud.id_amps(raw) - amps) / amps < 0.06
 
     def test_id_stays_linear_through_zero(self):
         # Two points a factor of three apart in current agreed to 1% on the
         # same through-origin slope, so a curve that bends is a regression.
-        assert abs(cv.id_amps(120) - 2 * cv.id_amps(60)) < 0.01
+        assert abs(hud.id_amps(120) - 2 * hud.id_amps(60)) < 0.01
 
     def test_a_missing_reading_stays_missing_rather_than_becoming_zero(self):
         # An old recording has no meter data at all; the PWR panel must show
         # its placeholder rather than a confident 0.0 V.
-        assert cv.vd_volts(None) is None
-        assert cv.id_amps(None) is None
+        assert hud.vd_volts(None) is None
+        assert hud.id_amps(None) is None
 
     def test_meters_reach_the_hud_state(self, tmp_path):
         f = tmp_path / "t.jsonl"
@@ -2830,10 +2838,10 @@ class TestMeterCalibration:
         )
         telemetry = rig_state.load_telemetry(str(f))
         assert (telemetry[0].vd, telemetry[0].id_raw) == (152, 171)
-        tl = cv.HudTimeline(
+        tl = hud.HudTimeline(
             segs=[_hud_seg()],
             offset_h=2,
-            meter_marks=cv.hud_meter_marks(telemetry, [_hud_seg()], 2),
+            meter_marks=hud.hud_meter_marks(telemetry, [_hud_seg()], 2),
         )
         assert tl.at(20.0).vd is None  # before the first reading
         assert abs(tl.at(60.0).vd - 13.78) < 0.15
@@ -2856,8 +2864,8 @@ class TestMeterCalibration:
         telemetry = rig_state.load_telemetry(str(f))
         assert telemetry[1].meters_offline
         segs = [_hud_seg()]
-        tl = cv.HudTimeline(
-            segs=segs, offset_h=2, meter_marks=cv.hud_meter_marks(telemetry, segs, 2)
+        tl = hud.HudTimeline(
+            segs=segs, offset_h=2, meter_marks=hud.hud_meter_marks(telemetry, segs, 2)
         )
         assert tl.at(45.0).vd is not None  # while the radio was there
         assert tl.at(120.0).vd is None  # and gone once it dropped
@@ -2886,31 +2894,33 @@ def _render_cmd(**kw):
 
 class TestHudRender:
     def test_frame_key_ignores_time_but_tracks_everything_drawn(self):
-        a = cv.hud_demo_state()
-        b = cv.hud_demo_state()
+        a = hud_draw.hud_demo_state()
+        b = hud_draw.hud_demo_state()
         b.t = a.t + 5.0
-        assert cv.hud_frame_key(a) == cv.hud_frame_key(b)  # t alone changes nothing
+        assert hud_draw.hud_frame_key(a) == hud_draw.hud_frame_key(
+            b
+        )  # t alone changes nothing
         b.score = a.score + 1
-        assert cv.hud_frame_key(a) != cv.hud_frame_key(b)
+        assert hud_draw.hud_frame_key(a) != hud_draw.hud_frame_key(b)
 
     def test_frame_key_quantises_the_continuously_varying_values(self):
         # The meter is 18 discrete segments and a needle rounded to a degree
         # moves under a pixel; without this the scope-derived signal level
         # would force a fresh draw ~30 times a second for no visible gain.
-        a = cv.hud_demo_state()
-        b = cv.hud_demo_state()
+        a = hud_draw.hud_demo_state()
+        b = hud_draw.hud_demo_state()
         b.s_level = a.s_level + 0.001
         b.rot_az = a.rot_az + 0.2
-        assert cv.hud_frame_key(a) == cv.hud_frame_key(b)
+        assert hud_draw.hud_frame_key(a) == hud_draw.hud_frame_key(b)
         b.s_level = a.s_level + 0.2
-        assert cv.hud_frame_key(a) != cv.hud_frame_key(b)
+        assert hud_draw.hud_frame_key(a) != hud_draw.hud_frame_key(b)
 
     def test_bar_height_is_even_at_every_supported_resolution(self):
         # libx264 refuses an odd dimension and 720p rounds to 173. Found by
         # rendering a real 720p clip, not by any string-level assertion --
         # the 1080p reference height is already even.
         for _, H in video_format.RESOLUTIONS.values():
-            assert cv.hud_height(H) % 2 == 0
+            assert hud_draw.hud_height(H) % 2 == 0
 
     def test_render_places_the_hud_bar_along_the_bottom(self):
         cmd = _render_cmd(hud="h.mp4")
@@ -2920,7 +2930,9 @@ class TestHudRender:
     def test_the_webcam_goes_into_the_artworks_face_recess(self):
         # Its own crop and position come from the theme, so this pins that the
         # rect render() is handed is the rect it actually uses.
-        face = cv.hud_art(cv.load_hud_theme(), 1920, cv.hud_height(1080)).slots["face"]
+        face = hud_draw.hud_art(
+            hud_draw.load_hud_theme(), 1920, hud_draw.hud_height(1080)
+        ).slots["face"]
         cmd = _render_cmd(hud="h.mp4", webcam="w.mp4", hud_face=face)
         graph = cmd[cmd.index("-filter_complex") + 1]
         assert f"scale={face[2]}:{face[3]}" in graph
@@ -2937,9 +2949,9 @@ def _cw_segs():
 
 
 def _ticker_at(t, segs, state_events=None, long_cw_spans=None):
-    tl = cv.HudTimeline(
+    tl = hud.HudTimeline(
         segs=segs,
-        stream=cv.ticker_stream(cv.ticker_chunks(segs, state_events, long_cw_spans)),
+        stream=hud.ticker_stream(hud.ticker_chunks(segs, state_events, long_cw_spans)),
     )
     return "".join(ch for _, ch in tl.at(t).ticker)
 
@@ -2952,7 +2964,7 @@ class TestTickerScrolling:
         # the old static transcript needed guarding against cannot occur.
         segs = _cw_segs()
         assert "H" in _ticker_at(1.0, segs)
-        assert _ticker_at(cv.HUD_TICKER_SPAN_S + 2.0, segs) == ""
+        assert _ticker_at(hud.HUD_TICKER_SPAN_S + 2.0, segs) == ""
 
     def test_a_later_burst_never_shares_the_display_with_an_earlier_one(self):
         segs = [
@@ -2974,8 +2986,8 @@ class TestTickerScrolling:
             "a", datetime(2026, 7, 4, 13, 0, 0), dur, 0.0,
             events=[CharEvent(t, c) for t, c in keyed],
         )  # fmt: skip
-        return cv.HudTimeline(
-            segs=[seg], stream=cv.ticker_stream(cv.ticker_chunks([seg], None, None))
+        return hud.HudTimeline(
+            segs=[seg], stream=hud.ticker_stream(hud.ticker_chunks([seg], None, None))
         )
 
     def _spacing(self, tl, t):
@@ -2988,29 +3000,29 @@ class TestTickerScrolling:
         # by fractions of a cell, for no reason a viewer could see. The
         # spacing is the display's own; the timing drives the scroll instead.
         tl = self._tl([(0.1, "T"), (0.35, "0"), (2.0, "A")])
-        assert self._spacing(tl, 2.5) == [cv.HUD_TICKER_CELL_COLS] * 2
+        assert self._spacing(tl, 2.5) == [hud.HUD_TICKER_CELL_COLS] * 2
 
     def test_a_character_reaches_the_right_hand_cell_as_it_is_keyed(self):
         # Which is what makes the scroll rate follow the keying: each
         # character is a pin at the right edge, and the strip covers exactly
         # one cell between consecutive pins however long that takes.
         tl = self._tl([(0.1, "T"), (0.35, "0"), (2.0, "A")])
-        width = cv.HUD_TICKER_CHARS * cv.HUD_TICKER_CELL_COLS
+        width = hud.HUD_TICKER_CHARS * hud.HUD_TICKER_CELL_COLS
         for t, ch in ((0.1, "T"), (0.35, "0"), (2.0, "A")):
             newest = tl.at(t).ticker[-1]
-            assert newest == (width - cv.HUD_TICKER_CELL_COLS, ch)
+            assert newest == (width - hud.HUD_TICKER_CELL_COLS, ch)
 
     def test_a_real_pause_still_takes_its_real_width(self):
         # Constant spacing only holds within an over. Past
         # HUD_TICKER_BURST_S the operator has stopped sending, and that gap
         # keeps its real duration -- which is what drains the display between
         # overs and makes staleness structurally impossible.
-        tl = self._tl([(0.1, "A"), (0.1 + cv.HUD_TICKER_BURST_S + 1.0, "B")])
-        assert self._spacing(tl, 4.2)[0] > cv.HUD_TICKER_CELL_COLS
+        tl = self._tl([(0.1, "A"), (0.1 + hud.HUD_TICKER_BURST_S + 1.0, "B")])
+        assert self._spacing(tl, 4.2)[0] > hud.HUD_TICKER_CELL_COLS
 
     def test_fast_keying_never_overlaps(self):
         tl = self._tl([(i * 0.01, c) for i, c in enumerate("ABCDE")])
-        assert self._spacing(tl, 0.2) == [cv.HUD_TICKER_CELL_COLS] * 4
+        assert self._spacing(tl, 0.2) == [hud.HUD_TICKER_CELL_COLS] * 4
 
 
 class TestTickerModeGating:
@@ -3037,25 +3049,29 @@ class TestTickerModeGating:
 class TestMatrixDisplay:
     def _render(self, cells, chars=4):
         img = Image.new("RGB", (chars * 24, 40), (0, 0, 0))
-        cv._draw_matrix_text(
-            ImageDraw.Draw(img), cells, (0, 0, chars * 24, 40), cv.HUD_GREEN, chars
+        hud_draw._draw_matrix_text(
+            ImageDraw.Draw(img),
+            cells,
+            (0, 0, chars * 24, 40),
+            hud_draw.HUD_GREEN,
+            chars,
         )
         return np.asarray(img)[:, :, 1]
 
     def test_unlit_dots_are_still_drawn_so_an_idle_display_reads_as_one(self):
         green = self._render([])
         assert green.max() > 0  # the dot grid is there
-        assert green.max() < cv.HUD_GREEN[1]  # but nothing is lit
+        assert green.max() < hud_draw.HUD_GREEN[1]  # but nothing is lit
 
     def test_a_lit_glyph_reaches_full_brightness(self):
-        assert self._render([(0, "8")]).max() == cv.HUD_GREEN[1]
+        assert self._render([(0, "8")]).max() == hud_draw.HUD_GREEN[1]
 
     def test_a_character_scrolling_off_the_edge_is_clipped_not_wrapped(self):
         # Partly past the left edge: some columns drawn, nothing appearing on
         # the far right.
         green = self._render([(-2, "8")])
-        assert green[:, -10:].max() < cv.HUD_GREEN[1]
-        assert green.max() == cv.HUD_GREEN[1]
+        assert green[:, -10:].max() < hud_draw.HUD_GREEN[1]
+        assert green.max() == hud_draw.HUD_GREEN[1]
 
 
 class TestSideStreamTrimming:
@@ -3181,7 +3197,7 @@ class TestHudLayering:
         # Height-constrained with a HUD: a width fraction picked before the
         # bar existed overran the space and had to be clipped by the bar.
         H = 1080
-        expect = H - cv.hud_height(H) - 2 * round(H * cv.CAST_PIP_MARGIN_FRAC)
+        expect = H - hud_draw.hud_height(H) - 2 * round(H * cv.CAST_PIP_MARGIN_FRAC)
         assert f"scale=-2:{expect}" in self._graph(cast="c.mp4", hud="h.mp4")
 
 
@@ -3202,7 +3218,7 @@ class TestHudTheme:
         return str(tmp_path)
 
     def test_load_reads_the_json_and_its_artwork(self, tmp_path):
-        theme = cv.load_hud_theme(self._theme(tmp_path))
+        theme = hud_draw.load_hud_theme(self._theme(tmp_path))
         assert theme["image"].size == (200, 100)
         assert theme["slots"]["score"] == [5, 5, 40, 30]
 
@@ -3210,7 +3226,9 @@ class TestHudTheme:
         # One score slot, two chips, one stats row, one sprite.
         names = [
             n
-            for n, _, _ in cv.hud_theme_rects(cv.load_hud_theme(self._theme(tmp_path)))
+            for n, _, _ in hud_draw.hud_theme_rects(
+                hud_draw.load_hud_theme(self._theme(tmp_path))
+            )
         ]
         assert names == [
             "slots.score", "chips.band[0]", "chips.band[1]",
@@ -3218,8 +3236,8 @@ class TestHudTheme:
         ]  # fmt: skip
 
     def test_overlay_marks_every_rect_and_the_needle_pivot(self, tmp_path):
-        theme = cv.load_hud_theme(self._theme(tmp_path))
-        a = np.asarray(cv.hud_theme_overlay(theme))
+        theme = hud_draw.load_hud_theme(self._theme(tmp_path))
+        a = np.asarray(hud_draw.hud_theme_overlay(theme))
         # cyan slot outline, orange chip, yellow stats row, green sprite, red pivot
         for colour in ((0, 255, 255), (255, 140, 0), (255, 255, 0), (0, 255, 0)):
             assert (a == np.array(colour)).all(axis=2).any(), colour
@@ -3229,4 +3247,7 @@ class TestHudTheme:
         # A hand-edited theme mid-edit may be missing whole groups; the check
         # tool has to survive that or it is useless exactly when needed.
         path = self._theme(tmp_path, chips={}, stats=[], sprites={})
-        assert cv.hud_theme_overlay(cv.load_hud_theme(path)).size == (200, 100)
+        assert hud_draw.hud_theme_overlay(hud_draw.load_hud_theme(path)).size == (
+            200,
+            100,
+        )
