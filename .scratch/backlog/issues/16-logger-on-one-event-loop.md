@@ -1,6 +1,6 @@
 # 16 — Put the logger on one event loop
 
-Status: ready-for-human
+Status: in-progress
 
 Blocked by: 01 (end-to-end test)
 
@@ -59,3 +59,67 @@ behaviour, so it goes last, behind the parts that can be verified offline:
 - **Does anything still want `asyncio.to_thread`?** Nothing found in the audit,
   which is worth re-checking rather than trusting: if the answer really is
   nothing, the logger ends with no threads at all.
+
+## Progress
+
+Done, each verified by the suite and by the pty smoke test:
+
+1. **The UI runs on one event loop.** `run()` is a coroutine, `main()` drives it
+   with `asyncio.run`, and the prompt is `prompt_async()`. The startup wizard's
+   `input()` goes through `asyncio.to_thread`, because it polls `current_rig()`
+   between prompts and blocking the loop would starve the radio it waits for.
+2. **`_toolbar_watcher` is a task**, and the contextvars trap it carried is gone.
+3. **`rig_server` is `asyncio.start_server`** — the accept loop and the
+   thread-per-client are one handler coroutine. A test for two clients at once,
+   awkward enough with threads that nobody had written it, now exists.
+4. **`rotator` is two coroutines**, `_rot_lock` deleted. The rotctld wire format
+   got its first tests, against a stand-in daemon.
+
+The smoke test grew a probe that asks the running logger for the frequency on
+4532, which is the only check that the server is served by the loop drawing the
+UI.
+
+## What is left: icom_net.py, and the radio thread that drives it
+
+Everything still threaded is here — three threads (`_ctrl_loop`, `_civ_loop`,
+`_meter_loop`), `_lock`, `_send_lock`, `_stop`, `_civ_ready` — plus the
+logger's `_radio_thread`, `_rig_lock` and `_clock_sync_lock`, which cannot go
+until the callbacks that write `_rig` and telemetry arrive on the loop.
+`recorders`' two locks are in the same position.
+
+Stopped here deliberately: this is the one part with hardware behaviour that
+cannot be checked without the radio, and it is the logger's core function.
+
+The design is worked out, and the shape is friendlier than it looks:
+
+- **One `_UdpChannel(asyncio.DatagramProtocol)` per socket**, holding the
+  transport and an `asyncio.Queue` of received datagrams, with
+  `expect(match, timeout)` for the handshake. Open with
+  `loop.create_datagram_endpoint(..., remote_addr=(host, port))` so sends need
+  no address.
+- **The handshake and the receive loop share that one queue and never
+  overlap**, because the loop task only starts once the handshake returns —
+  the same ordering the threaded version already has, minus the thread.
+- **Every current `recvfrom`-with-timeout is `await chan.expect(...)`**, and
+  both `_ctrl_loop` and `_civ_loop` have the identical shape:
+  `await asyncio.wait_for(queue.get(), IDLE_PERIOD_S)`, handle, then the
+  periodic idle/re-auth housekeeping — a direct translation.
+- **Sends stay synchronous.** `transport.sendto()` never blocks, so `send_cw`,
+  `stop_cw`, `set_clock` and `enable_scope` keep their current signatures and
+  can still be called straight from a key binding. `_send_lock` goes away
+  because the sequence-number increments stop being concurrent.
+- `_stop` becomes task cancellation; `_civ_ready` becomes an `asyncio.Event`;
+  `close()` becomes a coroutine that cancels the tasks and then says goodbye,
+  preserving the ordering the comment on `enable_meters` insists on (no meter
+  query may reach the wire after the goodbye).
+- The CLI at the bottom gets an `asyncio.run`.
+
+The 7 integration tests drive the real handshake against an in-process fake
+radio, which is what makes this checkable without hardware — but they call
+`connect()` synchronously and will convert with it. Expect them to be red
+through the middle of the change; there is no useful intermediate green.
+
+**Before a round**: this one needs a real session with the IC-9700, not just a
+green suite. The abandoned-session behaviour (a half-registered session blocks
+reconnecting for tens of seconds) is exactly the kind of thing the fake radio
+does not model.
