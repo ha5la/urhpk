@@ -31,7 +31,10 @@ ignore = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["."]
-addopts = "--cov=. --cov-report=term-missing --cov-report=html"
+# Smoke tests start a real logger on a pty and cost ~20s; they are opt-in with
+# `-m smoke` so the default run and pre-commit stay fast.
+addopts = "--cov=. --cov-report=term-missing --cov-report=html -m 'not smoke'"
+markers = ["smoke: drives a real process end to end; opt in with -m smoke"]
 
 [tool.coverage.run]
 omit = ["tests/*"]
