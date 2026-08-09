@@ -3,7 +3,7 @@
 Four files, all of them consumed later by contest_video.py -- telemetry, the
 input box, the radio's own scope sweeps, and the webcam. They are together
 because they are the same kind of thing: a per-round file this process opens,
-appends to from whichever thread has news, and closes when the round ends.
+appends to from whichever task has news, and closes when the round ends.
 
 Each recorder is inert until its `*_open` is called, so a round that does not
 want one simply never opens it.
@@ -15,7 +15,6 @@ import json
 import os
 import signal
 import subprocess
-import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,26 +33,23 @@ WEBCAM_AUDIO_SOURCE = "default"  # find with: pactl list short sources
 # alongside it.
 # ──────────────────────────────────────────────────────────────
 _scope_rec: dict = {"path": None, "file": None}
-_scope_rec_lock = threading.Lock()
 
 
 def scope_open(path: Path) -> None:
     """Arm the scope recorder. The file itself is opened by the first sweep,
     so a round where the radio never connects leaves no empty .scope behind."""
-    with _scope_rec_lock:
-        _scope_rec["path"] = path
+    _scope_rec["path"] = path
 
 
 def on_scope(start_hz: int, end_hz: int, pixels: bytes) -> None:
-    with _scope_rec_lock:
-        if _scope_rec["path"] is None:
-            return
-        if _scope_rec["file"] is None:
-            _scope_rec["file"] = open(_scope_rec["path"], "ab")
-        icom_net.write_scope_record(
-            _scope_rec["file"], time.time(), start_hz, end_hz, pixels
-        )
-        _scope_rec["file"].flush()
+    if _scope_rec["path"] is None:
+        return
+    if _scope_rec["file"] is None:
+        _scope_rec["file"] = open(_scope_rec["path"], "ab")
+    icom_net.write_scope_record(
+        _scope_rec["file"], time.time(), start_hz, end_hz, pixels
+    )
+    _scope_rec["file"].flush()
 
 
 # ──────────────────────────────────────────────────────────────
@@ -82,7 +78,6 @@ def on_scope(start_hz: int, end_hz: int, pixels: bytes) -> None:
 # ──────────────────────────────────────────────────────────────
 
 _telem: dict = {"fh": None}
-_telem_lock = threading.Lock()
 _telem_meters: dict = {"last": None}
 
 
@@ -91,22 +86,18 @@ def _utc_stamp(now: datetime) -> str:
 
 
 def telemetry_open(path: Path) -> None:
-    with _telem_lock:
-        _telem["fh"] = open(path, "a")
+    _telem["fh"] = open(path, "a")
 
 
 def telemetry_write(rec: dict) -> None:
-    """Two threads write here — the radio's CI-V receive thread and the
-    rotator poller — so the lock guards a genuine race, not a theoretical one."""
-    with _telem_lock:
-        fh = _telem["fh"]
-        if fh is None:
-            return
-        try:
-            fh.write(json.dumps(rec) + "\n")
-            fh.flush()
-        except Exception:
-            pass
+    fh = _telem["fh"]
+    if fh is None:
+        return
+    try:
+        fh.write(json.dumps(rec) + "\n")
+        fh.flush()
+    except Exception:
+        pass
 
 
 def telemetry_rig_record(now: datetime, freq_hz: int | None, mode: str | None) -> dict:

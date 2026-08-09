@@ -1,6 +1,6 @@
 # 16 — Put the logger on one event loop
 
-Status: in-progress
+Status: done — pending one real session with the IC-9700 (see the bottom)
 
 Blocked by: 01 (end-to-end test)
 
@@ -45,24 +45,23 @@ behaviour, so it goes last, behind the parts that can be verified offline:
    `_toolbar_watcher` becomes a task
 5. `icom_net` — the two UDP loops and the meter poller, against the real radio
 
-## Open questions
+## Open questions — answered
 
-- **Does `icom_net.py` keep a synchronous face?** It has a standalone CLI and
-  its own integration tests with a mock radio. Either it goes async throughout
-  and the CLI gets an `asyncio.run`, or it keeps a thin sync wrapper. Prefer the
-  former; a sync wrapper over an async core is how the two-worlds problem
-  starts.
-- **What blocks the loop that we have not noticed?** The recorders' `write` +
-  `flush` per event, and `open()` on first use. These are small local appends
-  and are probably fine, but "probably fine" on the loop that draws the UI is
-  worth measuring once rather than assuming.
-- **Does anything still want `asyncio.to_thread`?** Nothing found in the audit,
-  which is worth re-checking rather than trusting: if the answer really is
-  nothing, the logger ends with no threads at all.
+- **Does `icom_net.py` keep a synchronous face?** No. It went async throughout
+  and the CLI got an `asyncio.run`. Sends stayed synchronous, which is not a
+  sync face over an async core but a property of UDP: `transport.sendto()`
+  never blocks.
+- **What blocks the loop that we have not noticed?** One thing, and it was not
+  on the list: `webcam_toggle`'s stop branch waits up to 5 s for ffmpeg to
+  finalize the mp4. It stays — see below.
+- **Does anything still want `asyncio.to_thread`?** Only the startup wizard's
+  `input()`, which was already the documented exception. Measured on a running
+  logger: four OS threads, one event loop and three idle executor workers that
+  wizard left behind.
 
 ## Progress
 
-Done, each verified by the suite and by the pty smoke test:
+All five steps done, each verified by the suite and by the pty smoke test:
 
 1. **The UI runs on one event loop.** `run()` is a coroutine, `main()` drives it
    with `asyncio.run`, and the prompt is `prompt_async()`. The startup wizard's
@@ -74,52 +73,56 @@ Done, each verified by the suite and by the pty smoke test:
    awkward enough with threads that nobody had written it, now exists.
 4. **`rotator` is two coroutines**, `_rot_lock` deleted. The rotctld wire format
    got its first tests, against a stand-in daemon.
+5. **`icom_net` is async throughout**, and with it the logger's radio task and
+   the last four locks — see below.
 
 The smoke test grew a probe that asks the running logger for the frequency on
 4532, which is the only check that the server is served by the loop drawing the
 UI.
 
-## What is left: icom_net.py, and the radio thread that drives it
+## Step 5: icom_net.py, and the radio thread that drove it
 
-Everything still threaded is here — three threads (`_ctrl_loop`, `_civ_loop`,
-`_meter_loop`), `_lock`, `_send_lock`, `_stop`, `_civ_ready` — plus the
-logger's `_radio_thread`, `_rig_lock` and `_clock_sync_lock`, which cannot go
-until the callbacks that write `_rig` and telemetry arrive on the loop.
-`recorders`' two locks are in the same position.
+Done as designed. `_UdpChannel(asyncio.DatagramProtocol)` per socket, holding
+the transport and an `asyncio.Queue`, with `expect(match, timeout)` doing the
+work every `recvfrom`-with-timeout used to. `_ctrl_loop` and `_civ_loop` are
+tasks with the same shape they had; `_stop` is cancellation, `_civ_ready` is an
+`asyncio.Event`, `connect()` and `close()` are coroutines, and the CLI got an
+`asyncio.run`. Sends stayed synchronous, so the key bindings did not change.
 
-Stopped here deliberately: this is the one part with hardware behaviour that
-cannot be checked without the radio, and it is the logger's core function.
+The 7 integration tests converted with it — the fake radio moved onto the loop
+too, since a threaded one waiting on `threading.Event` would have blocked the
+loop the client under test needs.
 
-The design is worked out, and the shape is friendlier than it looks:
+Three things the design did not predict:
 
-- **One `_UdpChannel(asyncio.DatagramProtocol)` per socket**, holding the
-  transport and an `asyncio.Queue` of received datagrams, with
-  `expect(match, timeout)` for the handshake. Open with
-  `loop.create_datagram_endpoint(..., remote_addr=(host, port))` so sends need
-  no address.
-- **The handshake and the receive loop share that one queue and never
-  overlap**, because the loop task only starts once the handshake returns —
-  the same ordering the threaded version already has, minus the thread.
-- **Every current `recvfrom`-with-timeout is `await chan.expect(...)`**, and
-  both `_ctrl_loop` and `_civ_loop` have the identical shape:
-  `await asyncio.wait_for(queue.get(), IDLE_PERIOD_S)`, handle, then the
-  periodic idle/re-auth housekeeping — a direct translation.
-- **Sends stay synchronous.** `transport.sendto()` never blocks, so `send_cw`,
-  `stop_cw`, `set_clock` and `enable_scope` keep their current signatures and
-  can still be called straight from a key binding. `_send_lock` goes away
-  because the sequence-number increments stop being concurrent.
-- `_stop` becomes task cancellation; `_civ_ready` becomes an `asyncio.Event`;
-  `close()` becomes a coroutine that cancels the tasks and then says goodbye,
-  preserving the ordering the comment on `enable_meters` insists on (no meter
-  query may reach the wire after the goodbye).
-- The CLI at the bottom gets an `asyncio.run`.
+- **The throwaway-port trick went away.** `_local_udp_port()` existed only
+  because conninfo names the CI-V port before that socket is opened. Opening
+  the endpoint first and reading its port off the transport is the same
+  sequence on the wire, one function shorter, and has no window for another
+  process to take the port.
+- **Cancelling the meter poller is not enough — awaiting it is.** Its four
+  queries per cycle have no `await` between them, so the burst is atomic;
+  `close()` awaits the cancelled tasks before the first goodbye packet.
+- **The signal handler moved to `loop.add_signal_handler`**, which is what
+  makes it safe for the teardown to touch the same state the UI touches. As a
+  `signal.signal` handler it ran between two bytecodes of whatever the main
+  thread was doing, which is half of the deadlock FINDINGS.md records.
 
-The 7 integration tests drive the real handshake against an in-process fake
-radio, which is what makes this checkable without hardware — but they call
-`connect()` synchronously and will convert with it. Expect them to be red
-through the middle of the change; there is no useful intermediate green.
+## Also done: the logger side
 
-**Before a round**: this one needs a real session with the IC-9700, not just a
-green suite. The abandoned-session behaviour (a half-registered session blocks
+`_radio_thread` is `_radio_task`; `_rig_lock`, `_clock_sync_lock` and
+`recorders`' two locks are gone. Cancelling the radio task is now the whole
+shutdown: its `finally` closes whatever session it reached, including one still
+inside `connect()`, which is exactly the case `_radio_close_if_connected` needed
+a thread join for.
+
+**Not converted, deliberately**: the webcam `subprocess.Popen`. On Python 3.12
+the default child watcher is `ThreadedChildWatcher`, which spawns a thread per
+child — `asyncio.create_subprocess_exec` would have added the thread it was
+meant to remove. Cost of leaving it: `proc.wait(timeout=5.0)` on the loop when
+a recording is stopped, once per recording.
+
+**Before a round**: this still needs a real session with the IC-9700, not just
+a green suite. The abandoned-session behaviour (a half-registered session blocks
 reconnecting for tens of seconds) is exactly the kind of thing the fake radio
 does not model.

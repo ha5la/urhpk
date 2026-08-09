@@ -110,6 +110,12 @@ RS-BA1 and wfview speak) — UDP, authenticated, stateful. This is a minimal cli
 for it in pure stdlib Python. `puskas_logger.py` uses it as its **only** rig
 interface; it is also usable standalone (`uv run icom_net.py <radio-ip>`).
 
+**Asynchronous throughout**: `connect()` and `close()` are coroutines, the two
+receive loops are tasks over `loop.create_datagram_endpoint`, and there is no thread
+and no lock. Sends stay synchronous — `transport.sendto()` never blocks — so
+`send_cw`/`stop_cw`/`set_clock`/`enable_scope` can still be called straight from a
+key binding.
+
 **Why it beats polling**: with `SET > CONNECTORS > CI-V > CI-V Transceive: ON` the
 radio pushes frequency/mode changes the instant they happen, front-panel included.
 Hamlib's IC-9700 backend doesn't use that, so the logger on rigctld only ever saw
@@ -132,7 +138,9 @@ real radio; the evidence is in FINDINGS.md.
   handshake is a separate counter.
 - `_ctrl_loop` (control-socket idle/reauth) must start **immediately after conninfo
   succeeds**, before any CI-V-socket work, or the radio drops the session mid-open.
-- `IcomNetRig` uses `threading.RLock`, not `Lock` — the CI-V thread re-enters it.
+- `close()` **cancels and awaits** its tasks before any goodbye packet: a query burst
+  between two awaits is uninterruptible, so an un-awaited cancel can still put a meter
+  query on the wire after the disconnect.
 - CI-V "open" retries are spaced at `CIV_STALE_S`, deliberately far slower than
   wfview's 100 ms, or the radio's receive-sequence tracker desyncs.
 - Every open attempt sends a real CI-V query alongside it: the radio never speaks
@@ -159,8 +167,7 @@ distinguish direction by the address bytes.
 **Test coverage**: `tests/test_icom_net.py` covers the pure functions (passcode, BCD,
 frame parsing) with no mocking; `tests/test_icom_net_integration.py` runs the full
 `connect()` handshake against an in-process fake radio and injects an unsolicited
-Transceive frame to assert push updates with no polling — that is what caught the
-`RLock` deadlock in CI. What it *cannot* catch: anything about the real radio's own
+Transceive frame to assert push updates with no polling. What it *cannot* catch: anything about the real radio's own
 session/sequence tracking, since a fake that mirrors the client's assumptions back
 can't contradict them.
 
@@ -205,7 +212,7 @@ demodulated, not the RF passband the operator was watching.
 reports one snapshot per cycle via `on_meters`, rather than firing per reply — that
 keeps the four values in a record genuinely simultaneous and lets a recorder write
 one line per cycle instead of four. Off unless asked for, like `enable_scope`, and
-re-armed on every reconnect since the poll thread belongs to its session.
+re-armed on every reconnect since the poll task belongs to its session.
 
 Polling is unavoidable here: the radio only reports meters when asked. **The
 S-meter (`15 02`) is deliberately not polled** — `contest_video.py` derives signal
@@ -547,17 +554,11 @@ These requirements must be preserved across all future changes:
   first place) but only calls `app.invalidate()` when the signature actually differs
   from the last poll, cutting typical redraw frequency to roughly once a second.
   `app` here is `session.app`, captured directly once (right after constructing
-  `session`) rather than fetched via `get_app()` inside the watcher thread — verified
-  experimentally that `get_app()` from a plain `threading.Thread` sees a fresh,
-  isolated contextvars context and returns a `DummyApplication` whose `invalidate()`
-  is a silent no-op, so the redraw would simply never happen. Holding the real
-  `Application` object directly sidesteps this: `Application.invalidate()` is
-  documented as thread-safe (`loop.call_soon_threadsafe` internally) and works
-  correctly called this way, confirmed with a standalone `PromptSession` test before
-  wiring it into the real code. `_toolbar_watcher` never mutates state and never calls
-  `_toolbar()` itself, so the band/mode-change `_REDRAW` logic above still only ever
-  executes on the event-loop thread, inside the real `_toolbar()` call that a
-  triggered redraw causes.
+  `session`) rather than fetched via `get_app()` inside the watcher — the watcher is
+  created before `prompt_async()` runs, so the application is not the current one in
+  its context yet. `_toolbar_watcher` never mutates state and never calls `_toolbar()`
+  itself, so the band/mode-change `_REDRAW` logic above still only ever executes
+  inside the real `_toolbar()` call that a triggered redraw causes.
 - **Dup warning before Enter**: as soon as the callsign token is recognisable, the entire
   input line background turns red (`DynamicStyle({'': 'bg:ansired fg:white'})`) and the
   right prompt shows a red `DUP` label followed by the geo info (distance + bearing + arrow)
@@ -575,7 +576,7 @@ These requirements must be preserved across all future changes:
 - **Rig read at Enter time**: band and mode for a new QSO are captured by a fresh
   `current_rig()` call immediately after Enter, never from the stale snapshot taken when
   the prompt was first drawn.
-- **Radio thread must never die**: `_radio_thread` wraps each session in `try/except`
+- **The radio task must never die**: `_radio_task` wraps each session in `try/except`
   and reconnects after drops (`RADIO_RECONNECT_S` cooldown — the radio refuses new
   sessions for a while after an uncleanly-dropped one), so a transient radio/network
   error cannot kill rig state permanently. Liveness comes from `last_rx_age()`
@@ -587,14 +588,15 @@ These requirements must be preserved across all future changes:
   is the "can't reconnect after exiting the logger" symptom. Three pieces, all needed:
   `_install_signal_handlers` handles SIGTERM/SIGHUP (teardown, then `os._exit` —
   EDI/telemetry/input/scope all flush as they are written, so nothing is lost by not
-  unwinding); `main()`'s `finally` covers Ctrl-D, a crash, and the early return from the
-  offline wizard, and is the single owner of teardown (`run()` no longer does its own);
-  and `_shutdown` stops `_radio_thread` from treating the closed session as a drop and
-  opening a fresh one on the way out. `_radio_close_if_connected` also **joins the radio
-  thread**: a session still inside `connect()` is not in `_radio["rig"]` yet, so closing
-  that slot cannot reach it, and only the thread that opened it can close it. Found from
-  a real capture after a kill-and-restart cycle, where every session had said goodbye
-  correctly except one still-connecting one, which the radio then pinged for ~70 s.
+  unwinding), via `loop.add_signal_handler` so the teardown runs as an ordinary loop
+  callback rather than between two bytecodes of whatever the main thread was doing;
+  and `_round`'s `finally` covers Ctrl-D, a crash, and the early return from the
+  offline wizard. Both go through `_radio_stop`, which **cancels the radio task and
+  awaits it** — the task's own `finally` closes whatever session it had reached,
+  including one still inside `connect()`, which is not in `_radio["rig"]` yet and so
+  cannot be closed by clearing that slot. Found from a real capture after a
+  kill-and-restart cycle, where every session had said goodbye correctly except one
+  still-connecting one, which the radio then pinged for ~70 s.
   Verified end-to-end: three back-to-back logger runs, each killed with `tmux
   kill-session` and restarted one second later, all connected immediately and left zero
   packets on the wire.
@@ -688,7 +690,7 @@ and the radio's single network session is what the logger exists to own.
 | `logbook.py` | QSOs, duplicates, scoring, and the EDI export and crash-recovery read |
 | `loc_cache.py` | Which locator a callsign uses, merged from three sources |
 | `recorders.py` | The round's side-channel files: telemetry, input box, scope, webcam |
-| `rotator.py` | The rotator poll thread, the current bearing, "point there" |
+| `rotator.py` | The rotator poll task, the current bearing, "point there" |
 | `rig_server.py` | The rigctld dialect on 4532, answering from a state snapshot |
 
 `rig_server.serve` takes a `snapshot()` callable rather than reading the
@@ -780,10 +782,10 @@ Mid-round rig disconnect uses `_rig_manual` values as fallback (set by the wizar
 **Alt+B / Alt+M** during the round), so the wizard only appears once per round.
 
 **rotctld integration** (optional, no-op when rotctld not running):
-- Background poller (`rotator.poll_thread`) queries `ROTCTLD_HOST:ROTCTLD_PORT` (4533) every
+- Background poller (`rotator.poll`) queries `ROTCTLD_HOST:ROTCTLD_PORT` (4533) every
   `ROTCTLD_POLL_S` (1 s) using the `p` command (returns azimuth and elevation)
 - Current azimuth shown in toolbar as `ROT: 045°` when online, `ROT: ---` when offline
-- **Alt+R** sends `P az 0` to rotctld to slew the rotator; fires in a background thread
+- **Alt+R** sends `P az 0` to rotctld to slew the rotator; fires as a background task
 - To start rotctld: `rotctld -m MODEL -r /dev/ttyUSB0` (see Hamlib docs for MODEL number)
 
 **Rig server** (port 4532, always on): serves the rigctld TCP dialect (`f` → freq in
@@ -824,13 +826,13 @@ one forward across the events that don't mention it.
   changes was >= 1.0°.
 - **Offline transitions are events too, but only on a real transition**: the
   radio going offline writes one `{"freq_hz": null, "mode": null}` line, gated
-  on having been online — `_radio_thread`'s loop also spins while the radio has
+  on having been online — `_radio_task`'s loop also spins while the radio has
   simply never been reachable, and a null line every `RADIO_RECONNECT_S` would
   say nothing new.
-- Opened in `main()` **before** the radio/rotator threads start, since both
+- Opened in `main()` **before** the radio and rotator tasks start, since both
   write to it the moment they have something and the radio's first push lands
-  within a second of connecting. `_telemetry_write` takes a lock: the radio's
-  CI-V receive thread and the rotator poller are genuinely concurrent writers.
+  within a second of connecting. No lock: both writers are tasks on the one
+  event loop, so an append cannot interleave with another.
 - No `ptt` field: it used to be queried and recorded here too, but the WAV
   recordings' own IC-9700 metadata already carries it straight from the rig
   with zero polling lag (see `contest_video.py`'s `read_wav_metadata`) -- this
@@ -874,7 +876,7 @@ below — Alt+V to start/stop, off by default):
   video4linux2 + PulseAudio); `WEBCAM_DEVICE`/`WEBCAM_AUDIO_SOURCE` constants at the
   top of the file are the only things that need adjusting for a given machine (find
   with `v4l2-ctl --list-devices` / `pactl list short sources`). `-preset ultrafast`
-  keeps the encode cheap enough to run alongside the radio/rotator threads and the UI for a
+  keeps the encode cheap enough to run alongside the radio, the rotator and the UI for a
   multi-hour round without competing for CPU.
 - Stop sends `SIGINT` (not a hard kill) so ffmpeg finalizes the mp4 properly; a
   5 s `wait()` with a `terminate()` fallback guards against ffmpeg hanging. Also

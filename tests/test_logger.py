@@ -2,7 +2,8 @@
 
 import asyncio
 import io
-import threading
+import os
+import signal
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
@@ -32,7 +33,6 @@ from puskas_logger import (
     _predict_nr,
     _print_recent,
     _rig,
-    _rig_lock,
     parse_input,
 )
 from recorders import (
@@ -1504,8 +1504,7 @@ class TestRadioUpdate:
     """icom_net push-update -> _rig cache (replaces the rigctld poller)."""
 
     def _reset(self):
-        with _rig_lock:
-            _rig.update(band="", mode="", qrg="", online=False)
+        _rig.update(band="", mode="", qrg="", online=False)
         pl._rig_manual.update(band="", mode="")
 
     def test_partial_update_stays_offline(self):
@@ -1542,15 +1541,14 @@ class TestRigServer:
     async def test_serves_f_and_m_like_rigctld(self):
         # Exactly the byte flow on4kst_irc_bridge.fetch_rig_info() produces:
         # "f\nm\n", then read freq line + mode line (passband line ignored).
-        with _rig_lock:
-            _rig.update(
-                band="2M",
-                mode="CW",
-                qrg="144.080",
-                online=True,
-                freq_hz=144_080_000,
-                raw_mode="CW",
-            )
+        _rig.update(
+            band="2M",
+            mode="CW",
+            qrg="144.080",
+            online=True,
+            freq_hz=144_080_000,
+            raw_mode="CW",
+        )
         server, port = await self._serve()
         try:
             reader, writer = await asyncio.open_connection("127.0.0.1", port)
@@ -1562,12 +1560,10 @@ class TestRigServer:
             writer.close()
         finally:
             server.close()
-            with _rig_lock:
-                _rig.update(band="", mode="", qrg="", online=False)
+            _rig.update(band="", mode="", qrg="", online=False)
 
     async def test_replies_rprt_error_when_radio_offline(self):
-        with _rig_lock:
-            _rig.update(band="", mode="", qrg="", online=False)
+        _rig.update(band="", mode="", qrg="", online=False)
         server, port = await self._serve()
         try:
             reader, writer = await asyncio.open_connection("127.0.0.1", port)
@@ -1581,8 +1577,7 @@ class TestRigServer:
     async def test_two_clients_are_served_at_once(self):
         # start_server replaced an accept loop plus a thread per client; this
         # pins the property that made those threads exist in the first place.
-        with _rig_lock:
-            _rig.update(online=True, freq_hz=144_300_000, raw_mode="USB")
+        _rig.update(online=True, freq_hz=144_300_000, raw_mode="USB")
         server, port = await self._serve()
         try:
             a = await asyncio.open_connection("127.0.0.1", port)
@@ -1595,8 +1590,7 @@ class TestRigServer:
                 writer.close()
         finally:
             server.close()
-            with _rig_lock:
-                _rig.update(online=False, freq_hz=0, raw_mode="")
+            _rig.update(online=False, freq_hz=0, raw_mode="")
 
     async def test_start_yields_none_when_port_taken(self):
         server, port = await self._serve()
@@ -1606,37 +1600,83 @@ class TestRigServer:
             server.close()
 
 
+class FakeRig:
+    """Stands in for IcomNetRig in the radio task: connects instantly, never
+    goes stale, and records that it was closed."""
+
+    def __init__(self, *_args):
+        self.closed = asyncio.Event()
+
+    async def connect(self, timeout=None):
+        pass
+
+    async def close(self):
+        self.closed.set()
+
+    def last_rx_age(self):
+        return 0.0
+
+    def on_update(self, _cb): ...
+    def on_scope(self, _cb): ...
+    def on_meters(self, _cb): ...
+    def enable_scope(self): ...
+    def enable_meters(self): ...
+
+
+@pytest.fixture
+def fake_radio_session(monkeypatch):
+    """The radio task, running against a stand-in rig."""
+    rigs: list[FakeRig] = []
+
+    def _build(*args):
+        rigs.append(FakeRig(*args))
+        return rigs[-1]
+
+    monkeypatch.setattr(pl.icom_net, "IcomNetRig", _build)
+    monkeypatch.setattr(
+        pl.icom_net, "_load_netrc_credentials", lambda host: ("user", "pass")
+    )
+    yield rigs
+    pl._radio["task"] = None
+    pl._radio["rig"] = None
+    _rig.update(band="", mode="", qrg="", online=False, freq_hz=0, raw_mode="")
+
+
 class TestSignalTeardown:
     """SIGTERM/SIGHUP is the *normal* way a round ends — the entrypoint script
     kills the tmux session — so the teardown the handler runs is exercised
     every round, not only on a crash.
 
-    A Python signal handler runs on the main thread, between bytecodes,
-    wherever that thread happens to be. The main thread is the UI, and the UI
-    calls current_rig() constantly, so it is regularly inside `with
-    _rig_lock`. A teardown that takes the same non-reentrant lock therefore
-    self-deadlocks — verified directly: Lock.acquire(timeout=1) returns False
-    when the same thread already holds it, and the real call site has no
-    timeout at all. The process would then hang holding the radio session
-    open, which is precisely the failure the handler exists to prevent.
+    It is an event-loop callback now, not a `signal.signal` handler running
+    between two bytecodes of whatever the main thread was in the middle of.
+    That is what lets it touch the same state the UI touches: the threading
+    version took the lock the UI was already holding and self-deadlocked, and
+    the process could then not even be killed by a second SIGTERM
+    (FINDINGS.md).
     """
 
-    def test_teardown_does_not_block_on_the_rig_lock(self):
-        was_set = pl._shutdown.is_set()
-        done = threading.Event()
+    async def test_sigterm_says_goodbye_to_the_radio_and_exits(
+        self, monkeypatch, fake_radio_session
+    ):
+        exited: list[int] = []
+        done = asyncio.Event()
 
-        def worker():
-            # exactly what the UI thread is doing when the signal arrives
-            with pl._rig_lock:
-                pl._radio_close_if_connected()
+        def _fake_exit(code):
+            exited.append(code)
             done.set()
 
-        threading.Thread(target=worker, daemon=True).start()
-        try:
-            assert done.wait(2.0), "_radio_close_if_connected blocked on _rig_lock"
-        finally:
-            if not was_set:
-                pl._shutdown.clear()
+        monkeypatch.setattr(pl.os, "_exit", _fake_exit)
+
+        pl._radio_start()
+        pl._install_signal_handlers()
+        assert await wait_until(lambda: pl._radio_rig() is not None)
+
+        os.kill(os.getpid(), signal.SIGTERM)
+        async with asyncio.timeout(2.0):
+            await done.wait()
+
+        assert fake_radio_session[0].closed.is_set()
+        assert exited == [128 + signal.SIGTERM]
 
 
 class TestScopeRecorder:
@@ -1665,17 +1705,16 @@ class TestScopeRecorder:
         assert recorders._scope_rec["file"] is None
 
 
-def test_radio_close_if_connected_closes_and_clears_the_session():
+async def test_radio_stop_closes_and_clears_the_session(fake_radio_session):
     # A logger exit must deregister the radio session (IcomNetRig.close
     # sends the token deregister) so a restart never races the radio's
-    # abandoned-session cooldown.
-    rig = MagicMock()
-    with _rig_lock:
-        pl._radio["rig"] = rig
-    try:
-        pl._radio_close_if_connected()
-        rig.close.assert_called_once()
-        assert pl._radio["rig"] is None
-    finally:
-        with _rig_lock:
-            pl._radio["rig"] = None
+    # abandoned-session cooldown. Cancelling the radio task is how that
+    # happens, including for a session still inside connect().
+    pl._radio_start()
+    assert await wait_until(lambda: pl._radio_rig() is not None)
+
+    await pl._radio_stop()
+
+    assert fake_radio_session[0].closed.is_set()
+    assert pl._radio_rig() is None
+    assert pl._radio["task"] is None

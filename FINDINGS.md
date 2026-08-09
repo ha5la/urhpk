@@ -413,3 +413,31 @@ event loop propagates it to the UI. That is a real trade, and it is the reason
 to keep the escape hatch (`asyncio.to_thread`) rather than to ban threads
 outright. Note though that the UI already blocks on a mutex today, and the file
 writes inside critical sections are already on whatever thread reaches them.
+
+### What it became (August 2026)
+
+Eight threads and seven locks to **zero of either**. Measured on a running
+logger (pty harness, radio absent): four OS threads, of which one is the event
+loop and three are idle `ThreadPoolExecutor` workers left behind by the startup
+wizard's `asyncio.to_thread(input, …)` — the one escape hatch the rule allows.
+Nothing waits on the radio, the rotator, the rig server or a timer in a thread
+any more.
+
+Three things worth keeping:
+
+- **The signal handler stopped being a hazard by construction.** It is
+  `loop.add_signal_handler` now, so the teardown is an ordinary loop callback
+  rather than code injected between two bytecodes of whatever the main thread
+  was in the middle of. The self-deadlock above needed both halves; removing
+  the lock fixed it, and this removes the shape.
+- **Cancel is not enough on its own — cancel *and await* is.** The meter poller
+  sends four queries with no `await` between them, and that burst is
+  uninterruptible. `close()` awaits the cancelled tasks before the first
+  goodbye packet, which is a stronger guarantee than the `join(timeout=1.0)` it
+  replaced.
+- **The webcam stays on `subprocess.Popen`, deliberately.** Converting it to
+  `asyncio.create_subprocess_exec` looked like the last step, but on Python
+  3.12 the default child watcher is `ThreadedChildWatcher`, which spawns a
+  thread per child — the conversion would have *added* the thread it was
+  supposed to remove. The cost of leaving it is a `proc.wait(timeout=5.0)` on
+  the loop when a recording is stopped, once per recording.

@@ -94,6 +94,12 @@ class Pty:
     def text(self) -> str:
         return self.buf.decode("utf-8", "replace")
 
+    def close_terminal(self) -> None:
+        """Make the terminal vanish, as `tmux kill-session` does."""
+        if self.master is not None:
+            os.close(self.master)
+            self.master = None
+
     def close(self) -> None:
         if self.proc.poll() is None:
             self.proc.terminate()
@@ -101,7 +107,7 @@ class Pty:
             self.proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             self.proc.kill()
-        os.close(self.master)
+        self.close_terminal()
 
 
 @pytest.fixture
@@ -190,6 +196,22 @@ def test_sigterm_finishes_instead_of_hanging(logger, tmp_path):
 
     logger.proc.send_signal(signal.SIGTERM)
     assert logger.proc.wait(timeout=10) == 128 + signal.SIGTERM
+
+
+def test_sighup_with_the_terminal_already_gone_still_runs_teardown(logger):
+    """How a round actually ends: `tmux kill-session` closes the pty *and*
+    sends SIGHUP, so the teardown has to run on a UI whose terminal is already
+    dead. 128+SIGHUP as the exit code is the proof it ran — the default
+    disposition would report a signalled death instead.
+    """
+    for marker, reply in PROMPTS:
+        logger.wait_for(marker)
+        logger.send(reply)
+    logger.wait_for(b"PUSK")
+
+    logger.close_terminal()
+    logger.proc.send_signal(signal.SIGHUP)
+    assert logger.proc.wait(timeout=10) == 128 + signal.SIGHUP
 
 
 if __name__ == "__main__":  # a quick manual run without pytest

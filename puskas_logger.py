@@ -16,7 +16,6 @@ import os
 import re
 import signal
 import sys
-import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -96,17 +95,18 @@ def _format_combos(by_band: dict[str, list[str]]) -> str:
 # the radio, not up to a poll interval late.
 # ──────────────────────────────────────────────────────────────
 _rig: dict = {"band": "", "mode": "", "qrg": "", "online": False}
-_rig_lock = threading.Lock()
 _rig_manual: dict = {"band": "", "mode": ""}
-# Deliberately not guarded by _rig_lock, unlike _rig: a signal handler runs on
-# the main thread wherever it happens to be, and the main thread is the UI,
-# which is regularly inside current_rig()'s critical section. Teardown from the
-# handler taking that lock is a self-deadlock, and SIGTERM is how a round
-# normally ends. Nothing here needs the lock anyway -- this is a single-slot
-# handoff, so the worst a race can do is close() the same session twice, which
-# is idempotent.
-_radio: dict = {"rig": None, "thread": None}  # live session, None while offline
-_shutdown = threading.Event()  # set once the session is being torn down for good
+_radio: dict = {"rig": None, "task": None}  # live session, None while offline
+
+# Fire-and-forget tasks, held so the loop cannot collect one mid-flight.
+_pending: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> asyncio.Task:
+    task = asyncio.get_running_loop().create_task(coro)
+    _pending.add(task)
+    task.add_done_callback(_pending.discard)
+    return task
 
 
 def _on_radio_update(freq_hz, mode, band) -> None:
@@ -114,19 +114,18 @@ def _on_radio_update(freq_hz, mode, band) -> None:
     # arrived, stay "offline" rather than show a half-known state.
     if freq_hz is None or mode is None:
         return
-    with _rig_lock:
-        # freq_hz/raw_mode: what the rigctld-dialect server replies with --
-        # raw dial mode ("USB"), not the contest-normalized one ("SSB").
-        _rig.update(
-            band=band,
-            mode=edi.mode_from_radio(mode),
-            qrg=f"{freq_hz / 1e6:.3f}",
-            online=True,
-            freq_hz=freq_hz,
-            raw_mode=mode,
-        )
-    # Outside the lock: this flushes to disk, and _apply_update has already
-    # filtered out no-op updates, so every call here is a real change.
+    # freq_hz/raw_mode: what the rigctld-dialect server replies with --
+    # raw dial mode ("USB"), not the contest-normalized one ("SSB").
+    _rig.update(
+        band=band,
+        mode=edi.mode_from_radio(mode),
+        qrg=f"{freq_hz / 1e6:.3f}",
+        online=True,
+        freq_hz=freq_hz,
+        raw_mode=mode,
+    )
+    # _apply_update has already filtered out no-op updates, so every call here
+    # is a real change.
     telemetry_write(
         telemetry_rig_record(
             datetime.now(timezone.utc), freq_hz, edi.mode_from_radio(mode)
@@ -134,21 +133,25 @@ def _on_radio_update(freq_hz, mode, band) -> None:
     )
 
 
-def _radio_thread():
+async def _radio_task() -> None:
     """Keep one live icom_net session up; reconnect after drops.
 
     RADIO_RECONNECT_S between attempts is not just politeness: the radio
     refuses new sessions for a while after an uncleanly-dropped one, so
     hammering it would only push recovery further away.
+
+    Cancelling this task is how a round says goodbye to the radio: the `finally`
+    below closes whatever session it had reached, including one still inside
+    connect().
     """
-    while not _shutdown.is_set():
+    while True:
         rig = None
         try:
             user, password = icom_net._load_netrc_credentials(RADIO_HOST)
             rig = icom_net.IcomNetRig(RADIO_HOST, user, password)
             rig.on_update(_on_radio_update)
-            rig.connect(timeout=RADIO_CONNECT_TIMEOUT_S)
-            # Both re-armed on every (re)connect: the meter poller is a thread
+            await rig.connect(timeout=RADIO_CONNECT_TIMEOUT_S)
+            # Both re-armed on every (re)connect: the meter poller is a task
             # belonging to the session it was started on, and re-enabling scope
             # costs one frame (the radio actually remembers the setting across
             # sessions -- see icom_net's notes -- but relying on that would make
@@ -158,37 +161,43 @@ def _radio_thread():
             rig.on_meters(on_radio_meters)
             rig.enable_meters()
             _radio["rig"] = rig
-            while rig.last_rx_age() < RADIO_STALE_S and not _shutdown.is_set():
-                time.sleep(1.0)
+            while rig.last_rx_age() < RADIO_STALE_S:
+                await asyncio.sleep(1.0)
         except Exception:
             pass
-        _radio["rig"] = None
-        with _rig_lock:
+        finally:
+            _radio["rig"] = None
             was_online = _rig["online"]
             _rig.update(band="", mode="", qrg="", online=False, freq_hz=0, raw_mode="")
-        # Only on a real online→offline transition: this loop also runs while
-        # the radio has simply never been reachable, and a null line every
-        # RADIO_RECONNECT_S would say nothing new.
-        if was_online:
-            now = datetime.now(timezone.utc)
-            telemetry_write(telemetry_rig_record(now, None, None))
-            # The meters go with it. Without an explicit null a consumer keeps
-            # carrying the last reading forward -- and since it has no reason
-            # to expect a supply voltage to change, it would show the voltage
-            # from before the outage for the whole outage. Resetting the
-            # change-detector too guarantees the first reading after a
-            # reconnect is written even if it happens to match the last one
-            # before the drop.
-            forget_meters()
-            telemetry_write(
-                telemetry_meter_record(now, dict.fromkeys(icom_net.CIV_METERS.values()))
-            )
-        if rig is not None:
-            try:
-                rig.close()
-            except Exception:
-                pass
-        _shutdown.wait(RADIO_RECONNECT_S)
+            # Only on a real online→offline transition: this loop also runs
+            # while the radio has simply never been reachable, and a null line
+            # every RADIO_RECONNECT_S would say nothing new.
+            if was_online:
+                now = datetime.now(timezone.utc)
+                telemetry_write(telemetry_rig_record(now, None, None))
+                # The meters go with it. Without an explicit null a consumer
+                # keeps carrying the last reading forward -- and since it has no
+                # reason to expect a supply voltage to change, it would show the
+                # voltage from before the outage for the whole outage. Resetting
+                # the change-detector too guarantees the first reading after a
+                # reconnect is written even if it happens to match the last one
+                # before the drop.
+                forget_meters()
+                telemetry_write(
+                    telemetry_meter_record(
+                        now, dict.fromkeys(icom_net.CIV_METERS.values())
+                    )
+                )
+            if rig is not None:
+                try:
+                    await rig.close()
+                except Exception:
+                    pass
+        await asyncio.sleep(RADIO_RECONNECT_S)
+
+
+def _radio_start() -> None:
+    _radio["task"] = _spawn(_radio_task())
 
 
 def _radio_rig() -> icom_net.IcomNetRig | None:
@@ -196,25 +205,18 @@ def _radio_rig() -> icom_net.IcomNetRig | None:
     return _radio["rig"]
 
 
-def _radio_close_if_connected() -> None:
+async def _radio_stop() -> None:
     """Say goodbye to the radio on exit, so a restart never races the radio's
-    abandoned-session cooldown (see icom_net.close). Sets _shutdown first:
-    without it _radio_thread would just see the session go stale and open a
-    fresh one on its way out. Called from every exit path, and idempotent."""
-    _shutdown.set()
-    rig, _radio["rig"] = _radio["rig"], None
-    if rig is not None:
-        try:
-            rig.close()
-        except Exception:
-            pass
-    # A session still inside connect() is not in _radio["rig"] yet, so closing
-    # that slot cannot reach it -- but _radio_thread closes whatever it opened
-    # the moment it notices _shutdown, so waiting for the thread is enough.
-    # Only a connect genuinely in flight makes this wait at all.
-    thread = _radio["thread"]
-    if thread is not None:
-        thread.join(timeout=RADIO_CONNECT_TIMEOUT_S + 2.0)
+    abandoned-session cooldown (see icom_net.close). Called from every exit
+    path, and idempotent."""
+    task, _radio["task"] = _radio["task"], None
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
 
 
 def _install_signal_handlers() -> None:
@@ -223,33 +225,84 @@ def _install_signal_handlers() -> None:
     exit path here -- and the one that used to leave the radio streaming to a
     dead socket, refusing new sessions. EDI/telemetry/input logs are all
     flushed as they are written, so exiting straight from the handler loses
-    nothing."""
+    nothing.
 
-    def _terminate(signum, _frame):
+    asyncio's own signal handling rather than signal.signal(): the teardown
+    runs as an ordinary loop callback, on a loop that is between callbacks,
+    instead of between two bytecodes of whatever the main thread was in the
+    middle of. That is what makes it safe to touch the same state the UI
+    touches -- the shape that used to be a self-deadlock (FINDINGS.md)."""
+
+    async def _terminate(signum: int) -> None:
         webcam_stop_if_running()
-        _radio_close_if_connected()
+        await _radio_stop()
         os._exit(128 + signum)
 
+    loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGHUP):
-        signal.signal(sig, _terminate)
+        loop.add_signal_handler(sig, lambda s=sig: _spawn(_terminate(s)))
 
 
 def rig_snapshot() -> tuple[bool, int, str]:
     """(online, freq_hz, raw_mode) — what rig_server answers a query with."""
-    with _rig_lock:
-        return _rig["online"], _rig.get("freq_hz", 0), _rig.get("raw_mode", "")
+    return _rig["online"], _rig.get("freq_hz", 0), _rig.get("raw_mode", "")
 
 
 def current_rig() -> tuple[str, str, str, bool]:
-    """(band, mode, qrg, online) — falls back to manual override if offline."""
-    with _rig_lock:
-        if _rig["online"]:
-            return _rig["band"], _rig["mode"], _rig["qrg"], True
+    """(band, mode, qrg, online) — falls back to manual override if offline.
+
+    No lock: `_rig` is written by the radio task and read by the UI and the rig
+    server, all on the one event loop, so none can observe another half-done.
+    """
+    if _rig["online"]:
+        return _rig["band"], _rig["mode"], _rig["qrg"], True
     return _rig_manual["band"], _rig_manual["mode"], "", False
 
 
 _clock_sync_notice: dict = {"msg": "", "until": 0.0}
-_clock_sync_lock = threading.Lock()
+
+
+async def _clock_sync_run() -> None:
+    _clock_sync_notice["msg"] = "clock sync: waiting for :00…"
+    _clock_sync_notice["until"] = time.monotonic() + 120.0
+    now = datetime.now(timezone.utc)
+    await asyncio.sleep(60 - now.second - now.microsecond / 1e6)
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    rig = _radio_rig()
+    if rig is None:
+        msg = "clock sync failed: radio offline"
+    else:
+        # Only frames FROM the radio count -- it echoes our own back too.
+        from_radio = bytes([icom_net.CIV_CONTROLLER_ADDR, icom_net.CIV_IC9700_ADDR])
+        acks: list[int] = []
+        all_acked = asyncio.Event()
+
+        def _on_frame(frame: bytes) -> None:
+            if len(frame) >= 3 and frame[:2] == from_radio and frame[2] in (0xFB, 0xFA):
+                acks.append(frame[2])
+                if len(acks) >= 3:
+                    all_acked.set()
+
+        rig.on_civ_frame(_on_frame)
+        try:
+            rig.set_clock(now)
+            try:
+                await asyncio.wait_for(all_acked.wait(), 2.0)
+            except TimeoutError:
+                pass
+        except Exception as exc:
+            msg = f"clock sync failed: {exc}"
+        else:
+            if acks.count(0xFB) == 3:
+                msg = f"clock synced {now:%H:%M}Z"
+            elif 0xFA in acks:
+                msg = "clock sync failed: radio rejected a set command"
+            else:
+                msg = f"clock sync failed: {acks.count(0xFB)}/3 acks"
+        finally:
+            rig.remove_civ_frame(_on_frame)
+    _clock_sync_notice["msg"] = msg
+    _clock_sync_notice["until"] = time.monotonic() + 5.0
 
 
 def _clock_sync() -> None:
@@ -259,53 +312,7 @@ def _clock_sync() -> None:
     Shows "waiting…" immediately so the operator knows the key was registered,
     then the result for 5 s once the sync fires. Success = the radio ACKs
     (FB) all three CI-V set commands (UTC offset, time, date)."""
-
-    def _do():
-        with _clock_sync_lock:
-            _clock_sync_notice["msg"] = "clock sync: waiting for :00…"
-            _clock_sync_notice["until"] = time.monotonic() + 120.0
-        now = datetime.now(timezone.utc)
-        secs_to_next_minute = 60 - now.second - now.microsecond / 1e6
-        time.sleep(secs_to_next_minute)
-        now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-        rig = _radio_rig()
-        if rig is None:
-            msg = "clock sync failed: radio offline"
-        else:
-            # Only frames FROM the radio count -- it echoes our own back too.
-            from_radio = bytes([icom_net.CIV_CONTROLLER_ADDR, icom_net.CIV_IC9700_ADDR])
-            acks: list[int] = []
-
-            def _on_frame(frame: bytes) -> None:
-                if (
-                    len(frame) >= 3
-                    and frame[:2] == from_radio
-                    and frame[2] in (0xFB, 0xFA)
-                ):
-                    acks.append(frame[2])
-
-            rig.on_civ_frame(_on_frame)
-            try:
-                rig.set_clock(now)
-                deadline = time.monotonic() + 2.0
-                while time.monotonic() < deadline and len(acks) < 3:
-                    time.sleep(0.05)
-            except Exception as exc:
-                msg = f"clock sync failed: {exc}"
-            else:
-                if acks.count(0xFB) == 3:
-                    msg = f"clock synced {now:%H:%M}Z"
-                elif 0xFA in acks:
-                    msg = "clock sync failed: radio rejected a set command"
-                else:
-                    msg = f"clock sync failed: {acks.count(0xFB)}/3 acks"
-            finally:
-                rig.remove_civ_frame(_on_frame)
-        with _clock_sync_lock:
-            _clock_sync_notice["msg"] = msg
-            _clock_sync_notice["until"] = time.monotonic() + 5.0
-
-    threading.Thread(target=_do, daemon=True).start()
+    _spawn(_clock_sync_run())
 
 
 # ──────────────────────────────────────────────────────────────
@@ -642,9 +649,8 @@ async def run(lb: LogBook, tname: str):
         if webcam_recording():
             parts.append(("bg:ansired fg:white", "  ● REC  │  "))
 
-        with _clock_sync_lock:
-            sync_msg = _clock_sync_notice["msg"]
-            sync_until = _clock_sync_notice["until"]
+        sync_msg = _clock_sync_notice["msg"]
+        sync_until = _clock_sync_notice["until"]
         if time.monotonic() < sync_until:
             parts.append(("bg:ansigreen fg:black", f"  {sync_msg}  │  "))
 
@@ -661,9 +667,8 @@ async def run(lb: LogBook, tname: str):
     def _toolbar_signature() -> tuple:
         """Pure (no side effects) summary of everything _toolbar() renders --
         used by _toolbar_watcher to decide whether a redraw is actually
-        needed. Deliberately does not call _toolbar() itself: its band/mode
-        REDRAW-triggering logic must only ever run on the event-loop thread
-        (see the comment there), never from this background thread."""
+        needed. Deliberately does not call _toolbar() itself: that would fire
+        its band/mode REDRAW on a tick nobody is prompting for."""
         band, mode, qrg, online = current_rig()
         now = datetime.now(timezone.utc)
         rot_az, rot_online = rotator.current()
@@ -675,9 +680,8 @@ async def run(lb: LogBook, tname: str):
                 q = lb.qsos[real_idx]
                 mismatch = band != q.band or mode != q.mode
 
-        with _clock_sync_lock:
-            sync_active = time.monotonic() < _clock_sync_notice["until"]
-            sync_msg = _clock_sync_notice["msg"] if sync_active else None
+        sync_active = time.monotonic() < _clock_sync_notice["until"]
+        sync_msg = _clock_sync_notice["msg"] if sync_active else None
 
         webcam_msg, webcam_until = _state["webcam_notice"]
         webcam_active = time.monotonic() < webcam_until
@@ -1141,6 +1145,20 @@ async def run(lb: LogBook, tname: str):
         print("  (no QSOs logged)")
 
 
+async def _round(lb: LogBook, tname: str) -> None:
+    """The loop-side lifecycle: bring the radio up, run the round, and tear
+    both down however it ends -- normal Ctrl-D exit, an early return from the
+    offline wizard, a crash, or Ctrl-C. Signals go through
+    _install_signal_handlers instead."""
+    _radio_start()
+    _install_signal_handlers()
+    try:
+        await run(lb, tname)
+    finally:
+        webcam_stop_if_running()
+        await _radio_stop()
+
+
 # ──────────────────────────────────────────────────────────────
 # Entry point
 # ──────────────────────────────────────────────────────────────
@@ -1211,10 +1229,6 @@ def main():
     )
     telemetry_open(_telem_path)
 
-    _install_signal_handlers()
-    t = threading.Thread(target=_radio_thread, daemon=True)
-    _radio["thread"] = t
-    t.start()
     _scope_path = Path(
         f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{lb.my_callsign}.scope"
     )
@@ -1238,17 +1252,11 @@ def main():
     input("[Enter to start]")
 
     try:
-        asyncio.run(run(lb, tname))
+        asyncio.run(_round(lb, tname))
     except Exception as e:
         print(f"\n[ERROR] {e}")
         save_all(lb, tname)
         raise
-    finally:
-        # One owner for teardown, covering every way run() can end: normal
-        # Ctrl-D exit, an early return from the offline wizard, a crash, or
-        # Ctrl-C. Signals go through _install_signal_handlers instead.
-        webcam_stop_if_running()
-        _radio_close_if_connected()
 
 
 if __name__ == "__main__":

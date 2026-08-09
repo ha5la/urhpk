@@ -26,11 +26,11 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import os
 import socket
 import struct
 import sys
-import threading
 import time
 from datetime import datetime, timezone
 
@@ -529,9 +529,81 @@ class IcomNetError(Exception):
     pass
 
 
-def _rendezvous(
-    sock: socket.socket, addr: tuple[str, int], local_id: bytes, timeout: float
-) -> bytes:
+class _UdpChannel(asyncio.DatagramProtocol):
+    """One UDP socket to the radio. Inbound datagrams queue up for whoever
+    is reading; outbound ones need no address, because the socket is
+    connected to the radio at open time."""
+
+    def __init__(self):
+        self.queue: asyncio.Queue[bytes] = asyncio.Queue()
+        self.transport: asyncio.DatagramTransport | None = None
+
+    def connection_made(self, transport) -> None:
+        self.transport = transport
+
+    def datagram_received(self, data: bytes, addr) -> None:
+        self.queue.put_nowait(data)
+
+    def error_received(self, exc: Exception) -> None:
+        pass  # an ICMP unreachable while the radio is away; the loops retry anyway
+
+    def send(self, packet: bytes) -> None:
+        if self.transport is not None:
+            self.transport.sendto(packet)
+
+    def close(self) -> None:
+        if self.transport is not None:
+            self.transport.close()
+            self.transport = None
+
+    @property
+    def port(self) -> int:
+        return self.transport.get_extra_info("sockname")[1]
+
+    @property
+    def peer(self) -> tuple[str, int]:
+        return self.transport.get_extra_info("peername")
+
+    async def expect(self, match, timeout: float) -> bytes | None:
+        """The next datagram `match` accepts, or None if none arrives within
+        `timeout`. Datagrams it rejects are discarded, as every reader here
+        wants exactly one shape of packet and nothing else on the socket is
+        addressed to it."""
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            try:
+                data = await asyncio.wait_for(self.queue.get(), remaining)
+            except TimeoutError:
+                return None
+            if match(data):
+                return data
+
+
+async def _open_channel(remote_addr: tuple[str, int]) -> _UdpChannel:
+    _, channel = await asyncio.get_running_loop().create_datagram_endpoint(
+        _UdpChannel,
+        local_addr=("0.0.0.0", 0),
+        remote_addr=remote_addr,
+        family=socket.AF_INET,
+    )
+    return channel
+
+
+async def _expect_len(chan: _UdpChannel, length: int, timeout: float) -> bytes:
+    data = await chan.expect(lambda d: len(d) == length, timeout)
+    if data is None:
+        raise IcomNetError(f"no {length}-byte reply from radio within {timeout}s")
+    return data
+
+
+def _is_type(ptype: int):
+    return lambda d: len(d) >= 0x10 and struct.unpack_from("<H", d, 0x04)[0] == ptype
+
+
+async def _rendezvous(chan: _UdpChannel, local_id: bytes, timeout: float) -> bytes:
     """Are-you-there / I-am-here / are-you-ready handshake, shared by the
     control socket and the CI-V socket (each gets its own fresh local_id /
     remote_id pair). Returns the radio's remote_id for this socket."""
@@ -540,46 +612,19 @@ def _rendezvous(
     remote_id = None
     while remote_id is None:
         if time.monotonic() > deadline:
-            raise IcomNetError(f"no response from {addr} (are-you-there)")
-        sock.sendto(hello, addr)
-        try:
-            sock.settimeout(0.5)
-            data, _ = sock.recvfrom(2048)
-        except TimeoutError:
-            continue
-        if (
-            len(data) >= 0x10
-            and struct.unpack_from("<H", data, 0x04)[0] == PT_I_AM_HERE
-        ):
+            raise IcomNetError(f"no response from {chan.peer} (are-you-there)")
+        chan.send(hello)
+        data = await chan.expect(_is_type(PT_I_AM_HERE), 0.5)
+        if data is not None:
             remote_id = bytes(data[8:12])
 
     ready = control_packet(PT_ARE_YOU_READY, 1, local_id, remote_id)
     while True:
         if time.monotonic() > deadline:
-            raise IcomNetError(f"no response from {addr} (are-you-ready)")
-        sock.sendto(ready, addr)
-        try:
-            sock.settimeout(0.5)
-            data, _ = sock.recvfrom(2048)
-        except TimeoutError:
-            continue
-        if (
-            len(data) >= 0x10
-            and struct.unpack_from("<H", data, 0x04)[0] == PT_ARE_YOU_READY
-        ):
+            raise IcomNetError(f"no response from {chan.peer} (are-you-ready)")
+        chan.send(ready)
+        if await chan.expect(_is_type(PT_ARE_YOU_READY), 0.5) is not None:
             return remote_id
-
-
-def _local_udp_port() -> int:
-    """OS-assigned free UDP port: bind a throwaway socket, read the port,
-    close it, and hand the number back to the caller to reuse -- the same
-    trick wfview itself uses, since the conninfo request needs to name the
-    civ_port *before* the real CI-V socket is opened on it."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.bind(("0.0.0.0", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
 
 
 class IcomNetRig:
@@ -604,9 +649,6 @@ class IcomNetRig:
         self._radio_control_port = control_port
         self._radio_civ_port = civ_port
 
-        # RLock: _apply_update holds this while reading self.band, whose own
-        # getter re-acquires the same lock -- a plain Lock would self-deadlock.
-        self._lock = threading.RLock()
         self.freq_hz: int | None = None
         self.mode: str | None = None
         self._listeners: list = []
@@ -618,52 +660,48 @@ class IcomNetRig:
         self._scope_listeners: list = []
         self._meters: dict[str, int] = {}
         self._meter_cbs: list = []
-        self._meter_thread: threading.Thread | None = None
+        self._meter_task: asyncio.Task | None = None
         self._meter_interval = METER_POLL_S
         self._scope_pending_range: tuple[int, int] | None = None
         self._scope_buf = bytearray()
 
-        self._stop = threading.Event()
-        self._ctrl_sock: socket.socket | None = None
-        self._civ_sock: socket.socket | None = None
+        self._ctrl: _UdpChannel | None = None
+        self._civ: _UdpChannel | None = None
         # Session identity, filled in by connect(); None until each socket's
         # rendezvous succeeds, so close() can tell what there is to say goodbye to.
         self._tok: bytes | None = None
         self._ctrl_local_id: bytes | None = None
         self._ctrl_remote_id: bytes | None = None
-        self._ctrl_addr: tuple[str, int] | None = None
+        self._ctrl_seq = 1
+        self._auth_seq = 1
         self._civ_local_id: bytes | None = None
         self._civ_remote_id: bytes | None = None
-        self._civ_addr_net: tuple[str, int] | None = None
         self._civ_seq = 1
         self._civ_inner = 0
-        self._threads: list[threading.Thread] = []
-        self._send_lock = threading.Lock()
+        self._civ_ready = asyncio.Event()
+        self._tasks: list[asyncio.Task] = []
         self._last_civ_rx = 0.0
 
     @property
     def band(self) -> str | None:
-        with self._lock:
-            return band_from_hz(self.freq_hz) if self.freq_hz is not None else None
+        return band_from_hz(self.freq_hz) if self.freq_hz is not None else None
 
     def on_update(self, callback) -> None:
         """callback(freq_hz, mode, band) fires whenever either changes."""
         self._listeners.append(callback)
 
     def _apply_update(self, kind: str, value) -> None:
-        with self._lock:
-            if kind == "freq":
-                if value == self.freq_hz:
-                    return
-                self.freq_hz = value
-            else:
-                if value == self.mode:
-                    return
-                self.mode = value
-            freq_hz, mode, band = self.freq_hz, self.mode, self.band
+        if kind == "freq":
+            if value == self.freq_hz:
+                return
+            self.freq_hz = value
+        else:
+            if value == self.mode:
+                return
+            self.mode = value
         for cb in self._listeners:
             try:
-                cb(freq_hz, mode, band)
+                cb(self.freq_hz, self.mode, self.band)
             except Exception:
                 pass
 
@@ -672,8 +710,7 @@ class IcomNetRig:
         first packet). The radio pings this socket constantly even when idle,
         so a growing age means the session is dead -- the liveness signal a
         reconnect supervisor needs."""
-        with self._lock:
-            last = self._last_civ_rx
+        last = self._last_civ_rx
         return float("inf") if last == 0.0 else time.monotonic() - last
 
     def on_civ_frame(self, callback) -> None:
@@ -713,46 +750,39 @@ class IcomNetRig:
         Off unless asked for, like enable_scope: it is the only outbound
         traffic this client generates in steady state, and a consumer that
         doesn't record meters shouldn't pay for it. Must be re-armed after a
-        reconnect, since the poll thread belongs to the session.
+        reconnect, since the poll task belongs to the session.
 
-        Registered in self._threads so close() *joins* it before touching any
-        socket. Setting _stop alone is not enough: this loop sends a burst of
-        four queries per cycle, so an unjoined one can still be mid-burst when
-        close() starts its teardown and put meter queries on the wire after the
-        goodbye and token-deregister packets -- exactly the kind of unclean
-        exit that leaves the radio refusing the next session."""
-        if self._meter_thread is not None and self._meter_thread.is_alive():
+        Registered in self._tasks so close() cancels and awaits it before
+        touching any socket. This loop sends a burst of four queries per cycle
+        with no await between them, so cancelling and awaiting is what
+        guarantees no meter query reaches the wire after the goodbye and
+        token-deregister packets -- exactly the kind of unclean exit that
+        leaves the radio refusing the next session."""
+        if self._meter_task is not None and not self._meter_task.done():
             return
         self._meter_interval = interval
-        self._meter_thread = threading.Thread(target=self._meter_loop, daemon=True)
-        self._threads.append(self._meter_thread)
-        self._meter_thread.start()
+        self._meter_task = asyncio.create_task(self._meter_loop())
+        self._tasks.append(self._meter_task)
 
-    def _meter_loop(self) -> None:
+    async def _meter_loop(self) -> None:
         """Ask for every meter, let the replies land in _civ_loop, then report
         one snapshot per cycle.
 
         Reporting a snapshot rather than firing per reply is what lets a
         recorder write one line per cycle instead of up to four, and keeps the
         four values in a record genuinely simultaneous."""
-        while not self._stop.is_set():
+        while True:
             for sub in CIV_METERS:
-                try:
-                    self._send_civ_command(CIV_CMD_METER, bytes([sub]))
-                except Exception:
-                    break
-            if self._stop.wait(METER_SETTLE_S):
-                return
-            with self._lock:
-                snapshot = dict(self._meters)
+                self._send_civ_command(CIV_CMD_METER, bytes([sub]))
+            await asyncio.sleep(METER_SETTLE_S)
+            snapshot = dict(self._meters)
             if snapshot:
                 for cb in tuple(self._meter_cbs):
                     try:
                         cb(snapshot)
                     except Exception:
                         pass
-            if self._stop.wait(max(0.0, self._meter_interval - METER_SETTLE_S)):
-                return
+            await asyncio.sleep(max(0.0, self._meter_interval - METER_SETTLE_S))
 
     def on_scope(self, callback) -> None:
         """callback(start_hz, end_hz, pixels: bytes) fires on each complete
@@ -780,12 +810,11 @@ class IcomNetRig:
             return
         start_hz, end_hz = self._scope_pending_range
         pixels = bytes(self._scope_buf)
-        with self._lock:
-            self.scope_start_hz, self.scope_end_hz, self.scope_pixels = (
-                start_hz,
-                end_hz,
-                pixels,
-            )
+        self.scope_start_hz, self.scope_end_hz, self.scope_pixels = (
+            start_hz,
+            end_hz,
+            pixels,
+        )
         self._scope_pending_range = None
         self._scope_buf = bytearray()
         for cb in self._scope_listeners:
@@ -794,61 +823,51 @@ class IcomNetRig:
             except Exception:
                 pass
 
-    def connect(self, timeout: float = 5.0) -> None:
+    async def connect(self, timeout: float = 5.0) -> None:
         """On any failure partway through, log out and close sockets rather
         than leaving a half-registered session on the radio -- confirmed
         against real hardware that repeated failed connection attempts
         without this left the radio unable to complete a login/conninfo
         handshake at all until the abandoned sessions aged out on their own."""
         try:
-            self._connect_impl(timeout)
+            await self._connect_impl(timeout)
         except BaseException:
-            self.close()
+            await self.close()
             raise
 
-    def _send_token_deregister(self) -> None:
+    async def _send_token_deregister(self) -> None:
         """Free our session slot on the radio -- an abandoned session blocks
         reconnecting for tens of seconds (observed on real hardware)."""
-        if getattr(self, "_tok", None) is not None and self._ctrl_sock is not None:
-            try:
-                pkt = token_packet(
-                    getattr(self, "_ctrl_seq", 100),
-                    self._ctrl_local_id,
-                    self._ctrl_remote_id,
-                    getattr(self, "_auth_seq", 100),
-                    0x01,  # deregister
-                    self._tok,
-                )
-                self._ctrl_sock.sendto(pkt, self._ctrl_addr)
-                self._recv_len(self._ctrl_sock, 0x40, DEREGISTER_ACK_TIMEOUT_S)
-            except (OSError, IcomNetError):
-                pass
+        if self._tok is None or self._ctrl is None:
+            return
+        pkt = token_packet(
+            self._ctrl_seq,
+            self._ctrl_local_id,
+            self._ctrl_remote_id,
+            self._auth_seq,
+            0x01,  # deregister
+            self._tok,
+        )
+        self._ctrl.send(pkt)
+        await self._ctrl.expect(lambda d: len(d) == 0x40, DEREGISTER_ACK_TIMEOUT_S)
 
-    def _send_disconnect(self, sock, addr, local_id, remote_id) -> None:
+    def _send_disconnect(self, chan, local_id, remote_id) -> None:
         """The goodbye a real client sends on every socket it opened, captured
         from wfview's own shutdown. Without it the radio keeps the session on
         its books: it goes on pinging the dead socket at ~50 packets/s (and
         refuses a fresh session in the meantime) until its own timeout expires,
         which is the whole reason restarting the logger used to be painful."""
-        if sock is None or local_id is None:
+        if chan is None or local_id is None:
             return
-        try:
-            sock.sendto(control_packet(PT_DISCONNECT, 0, local_id, remote_id), addr)
-        except OSError:
-            pass
+        chan.send(control_packet(PT_DISCONNECT, 0, local_id, remote_id))
 
-    def _connect_impl(self, timeout: float = 5.0) -> None:
-        self._ctrl_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        ctrl_addr = (self.host, self._radio_control_port)
+    async def _connect_impl(self, timeout: float = 5.0) -> None:
+        self._ctrl = await _open_channel((self.host, self._radio_control_port))
         ctrl_local_id = os.urandom(4)
-        ctrl_remote_id = _rendezvous(self._ctrl_sock, ctrl_addr, ctrl_local_id, timeout)
+        ctrl_remote_id = await _rendezvous(self._ctrl, ctrl_local_id, timeout)
         # Stashed early (not just at the end) so close() can send a deregister
         # if a later step in this method fails.
-        self._ctrl_local_id, self._ctrl_remote_id, self._ctrl_addr = (
-            ctrl_local_id,
-            ctrl_remote_id,
-            ctrl_addr,
-        )
+        self._ctrl_local_id, self._ctrl_remote_id = ctrl_local_id, ctrl_remote_id
 
         auth_seq = 1
         # The are-you-there(seq=0)/are-you-ready(seq=1) handshake is untracked and
@@ -870,8 +889,8 @@ class IcomNetRig:
         )
         ctrl_seq += 1
         auth_seq += 1
-        self._ctrl_sock.sendto(pkt, ctrl_addr)
-        resp = self._recv_len(self._ctrl_sock, 0x60, timeout)
+        self._ctrl.send(pkt)
+        resp = await _expect_len(self._ctrl, 0x60, timeout)
         login = parse_login_response(resp)
         if not login["ok"]:
             raise IcomNetError(
@@ -882,22 +901,12 @@ class IcomNetRig:
         pkt = token_packet(ctrl_seq, ctrl_local_id, ctrl_remote_id, auth_seq, 0x02, tok)
         ctrl_seq += 1
         auth_seq += 1
-        self._ctrl_sock.sendto(pkt, ctrl_addr)
+        self._ctrl.send(pkt)
 
-        capabilities = None
-        deadline = time.monotonic() + timeout
-        while capabilities is None:
-            if time.monotonic() > deadline:
-                raise IcomNetError(
-                    "no capabilities packet from radio after token register"
-                )
-            self._ctrl_sock.settimeout(0.5)
-            try:
-                data, _ = self._ctrl_sock.recvfrom(4096)
-            except TimeoutError:
-                continue
-            if is_capabilities_packet(data):
-                capabilities = parse_capabilities(data)
+        data = await self._ctrl.expect(is_capabilities_packet, timeout)
+        if data is None:
+            raise IcomNetError("no capabilities packet from radio after token register")
+        capabilities = parse_capabilities(data)
         if not capabilities:
             raise IcomNetError("capabilities packet listed no radios")
         radio = capabilities[0]
@@ -909,7 +918,9 @@ class IcomNetRig:
         # ctrl_seq comment above) means sending one anyway just puts our seq
         # numbering out of step with what a real client's sequence looks like.
 
-        civ_port = _local_udp_port()
+        # Opened before conninfo, which has to name the port the radio will
+        # send CI-V traffic to.
+        self._civ = await _open_channel((self.host, self._radio_civ_port))
         pkt = conninfo_packet(
             ctrl_seq,
             ctrl_local_id,
@@ -919,14 +930,13 @@ class IcomNetRig:
             radio["guid"],
             radio["name"] or "radio",
             self._username,
-            civ_port,
+            self._civ.port,
         )
         ctrl_seq += 1
         auth_seq += 1
-        self._ctrl_sock.sendto(pkt, ctrl_addr)
-        self._recv_len(
-            self._ctrl_sock, 0x90, timeout
-        )  # confirms the radio accepted the stream-open request
+        self._ctrl.send(pkt)
+        # confirms the radio accepted the stream-open request
+        await _expect_len(self._ctrl, 0x90, timeout)
 
         self._ctrl_seq, self._auth_seq = ctrl_seq, auth_seq
 
@@ -937,163 +947,132 @@ class IcomNetRig:
         # the just-registered conninfo session and never opens CI-V data at all,
         # even though the low-level are-you-there/ready responder (which is
         # session-independent) still answers normally the whole time.
-        self._stop.clear()
-        self._threads = [threading.Thread(target=self._ctrl_loop, daemon=True)]
-        self._threads[0].start()
+        self._tasks = [asyncio.create_task(self._ctrl_loop())]
 
-        self._civ_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self._civ_sock.bind(("0.0.0.0", civ_port))
-        civ_net_addr = (self.host, self._radio_civ_port)
         civ_local_id = os.urandom(4)
-        civ_remote_id = _rendezvous(self._civ_sock, civ_net_addr, civ_local_id, timeout)
-        self._civ_local_id, self._civ_remote_id, self._civ_addr_net = (
-            civ_local_id,
-            civ_remote_id,
-            civ_net_addr,
-        )
+        civ_remote_id = await _rendezvous(self._civ, civ_local_id, timeout)
+        self._civ_local_id, self._civ_remote_id = civ_local_id, civ_remote_id
         # same untracked-handshake-vs-tracked-counter split as ctrl_seq above
         self._civ_seq = 1
         self._civ_inner = 0
         # wfview uses magic=0x04 to open the IC-9700's CI-V stream; kappanhang uses
         # 0x05 for the IC-705 -- _civ_loop tries 0x04 first and falls back to 0x05.
         self._civ_open_magic = 0x04
-        self._civ_ready = threading.Event()
+        self._civ_ready.clear()
 
-        civ_thread = threading.Thread(target=self._civ_loop, daemon=True)
-        self._threads.append(civ_thread)
-        civ_thread.start()
-        if not self._civ_ready.wait(timeout=10.0):
-            raise IcomNetError("radio never sent CI-V data after opening the stream")
+        self._tasks.append(asyncio.create_task(self._civ_loop()))
+        try:
+            await asyncio.wait_for(self._civ_ready.wait(), 10.0)
+        except TimeoutError:
+            raise IcomNetError(
+                "radio never sent CI-V data after opening the stream"
+            ) from None
 
         # Prime current state rather than waiting for the next front-panel change.
         self._send_civ_command(0x03)
         self._send_civ_command(0x04)
 
-    def _recv_len(self, sock: socket.socket, length: int, timeout: float) -> bytes:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            sock.settimeout(0.5)
-            try:
-                data, _ = sock.recvfrom(4096)
-            except TimeoutError:
-                continue
-            if len(data) == length:
-                return data
-        raise IcomNetError(f"no {length}-byte reply from radio within {timeout}s")
-
     def _send_civ_command(self, cmd: int, data: bytes = b"") -> None:
-        # Locked: called both from _civ_loop and from caller threads (CW
-        # macros, clock sync) -- unlocked seq increments could collide.
-        with self._send_lock:
-            frame = civ_frame(self._civ_addr, CIV_CONTROLLER_ADDR, cmd, data)
-            pkt = civ_data_packet(
-                self._civ_seq,
-                self._civ_local_id,
-                self._civ_remote_id,
-                self._civ_inner,
-                frame,
-            )
-            self._civ_seq += 1
-            self._civ_inner += 1
-            self._civ_sock.sendto(pkt, self._civ_addr_net)
+        frame = civ_frame(self._civ_addr, CIV_CONTROLLER_ADDR, cmd, data)
+        pkt = civ_data_packet(
+            self._civ_seq,
+            self._civ_local_id,
+            self._civ_remote_id,
+            self._civ_inner,
+            frame,
+        )
+        self._civ_seq += 1
+        self._civ_inner += 1
+        self._civ.send(pkt)
 
-    def _ctrl_loop(self) -> None:
+    async def _ctrl_loop(self) -> None:
         last_idle = 0.0
         last_reauth = time.monotonic()
-        self._ctrl_sock.settimeout(IDLE_PERIOD_S)
-        while not self._stop.is_set():
-            try:
-                data, _ = self._ctrl_sock.recvfrom(4096)
-                if is_ping_request(data):
-                    reply = ping_reply(
+        while True:
+            data = await self._ctrl.expect(is_ping_request, IDLE_PERIOD_S)
+            if data is not None:
+                self._ctrl.send(
+                    ping_reply(
                         struct.unpack_from("<H", data, 0x06)[0],
                         self._ctrl_local_id,
                         self._ctrl_remote_id,
                         data[0x11:0x15],
                     )
-                    self._ctrl_sock.sendto(reply, self._ctrl_addr)
-            except (TimeoutError, OSError):
-                pass
+                )
 
             now = time.monotonic()
             if now - last_idle >= IDLE_PERIOD_S:
-                idle = control_packet(
-                    0x00, 0, self._ctrl_local_id, self._ctrl_remote_id
+                self._ctrl.send(
+                    control_packet(0x00, 0, self._ctrl_local_id, self._ctrl_remote_id)
                 )
-                try:
-                    self._ctrl_sock.sendto(idle, self._ctrl_addr)
-                except OSError:
-                    pass
                 last_idle = now
             if now - last_reauth >= TOKEN_RENEWAL_S:
-                pkt = token_packet(
-                    self._ctrl_seq,
-                    self._ctrl_local_id,
-                    self._ctrl_remote_id,
-                    self._auth_seq,
-                    0x05,
-                    self._tok,
+                self._ctrl.send(
+                    token_packet(
+                        self._ctrl_seq,
+                        self._ctrl_local_id,
+                        self._ctrl_remote_id,
+                        self._auth_seq,
+                        0x05,
+                        self._tok,
+                    )
                 )
                 self._ctrl_seq += 1
                 self._auth_seq += 1
-                try:
-                    self._ctrl_sock.sendto(pkt, self._ctrl_addr)
-                except OSError:
-                    pass
                 last_reauth = now
 
-    def _civ_loop(self) -> None:
+    def _dispatch_civ(self, payload: bytes) -> None:
+        for frame in split_civ_frames(payload):
+            for cb in tuple(self._frame_listeners):
+                try:
+                    cb(frame)
+                except Exception:
+                    pass
+            scope = parse_scope_frame(frame)
+            if scope is not None:
+                self._apply_scope_frame(scope)
+                continue
+            meter = parse_meter_frame(frame)
+            if meter is not None:
+                self._meters[meter[0]] = meter[1]
+                continue
+            update = parse_civ_update(frame)
+            if update is not None:
+                self._apply_update(*update)
+
+    async def _civ_loop(self) -> None:
         last_idle = 0.0
         last_data = 0.0  # 0.0 means "never yet" -- distinguishes initial open from a later stall
         last_reopen = 0.0
         opened_once = False
-        self._civ_sock.settimeout(IDLE_PERIOD_S)
-        while not self._stop.is_set():
+        while True:
             try:
-                data, _ = self._civ_sock.recvfrom(4096)
-                with self._lock:
-                    self._last_civ_rx = time.monotonic()
+                data = await asyncio.wait_for(self._civ.queue.get(), IDLE_PERIOD_S)
+            except TimeoutError:
+                data = None
+            if data is not None:
+                self._last_civ_rx = time.monotonic()
                 payload = parse_civ_data_packet(data)
                 if payload is not None:
                     if last_data == 0.0:
                         self._civ_ready.set()
                     last_data = time.monotonic()
-                    for frame in split_civ_frames(payload):
-                        for cb in tuple(self._frame_listeners):
-                            try:
-                                cb(frame)
-                            except Exception:
-                                pass
-                        scope = parse_scope_frame(frame)
-                        if scope is not None:
-                            self._apply_scope_frame(scope)
-                            continue
-                        meter = parse_meter_frame(frame)
-                        if meter is not None:
-                            with self._lock:
-                                self._meters[meter[0]] = meter[1]
-                            continue
-                        update = parse_civ_update(frame)
-                        if update is not None:
-                            self._apply_update(*update)
+                    self._dispatch_civ(payload)
                 elif is_ping_request(data):
-                    reply = ping_reply(
-                        struct.unpack_from("<H", data, 0x06)[0],
-                        self._civ_local_id,
-                        self._civ_remote_id,
-                        data[0x11:0x15],
+                    self._civ.send(
+                        ping_reply(
+                            struct.unpack_from("<H", data, 0x06)[0],
+                            self._civ_local_id,
+                            self._civ_remote_id,
+                            data[0x11:0x15],
+                        )
                     )
-                    self._civ_sock.sendto(reply, self._civ_addr_net)
-            except (TimeoutError, OSError):
-                pass
 
             now = time.monotonic()
             if now - last_idle >= IDLE_PERIOD_S:
-                idle = control_packet(0x00, 0, self._civ_local_id, self._civ_remote_id)
-                try:
-                    self._civ_sock.sendto(idle, self._civ_addr_net)
-                except OSError:
-                    pass
+                self._civ.send(
+                    control_packet(0x00, 0, self._civ_local_id, self._civ_remote_id)
+                )
                 last_idle = now
 
             # Retry cadence intentionally conservative, not wfview's documented
@@ -1119,10 +1098,7 @@ class IcomNetRig:
                     )
                     self._civ_seq += 1
                     self._civ_inner += 1
-                    try:
-                        self._civ_sock.sendto(pkt, self._civ_addr_net)
-                    except OSError:
-                        pass
+                    self._civ.send(pkt)
                     # The radio never sends CI-V data unprompted just because the
                     # stream is "open" -- confirmed from a real wfview session
                     # trace: its first actual CI-V traffic is a client-sent query
@@ -1134,45 +1110,44 @@ class IcomNetRig:
                     opened_once = True
                     last_reopen = now
 
-    def close(self) -> None:
+    async def close(self) -> None:
         """Full teardown in the order wfview's own shutdown uses (captured from
         a live session): close the CI-V stream, say goodbye on the CI-V socket,
         deregister the token, say goodbye on the control socket. Idempotent, and
-        safe on a session that never finished connecting."""
-        self._stop.set()
-        for t in self._threads:
-            t.join(timeout=1.0)
-        self._threads = []
-        if self._civ_sock is not None:
+        safe on a session that never finished connecting.
+
+        The tasks are cancelled *and awaited* before any of that: a send burst
+        between two awaits is uninterruptible, so awaiting is what guarantees
+        nothing reaches the wire after the goodbye."""
+        for task in self._tasks:
+            task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks = []
+        self._meter_task = None
+        if self._civ is not None:
             if self._civ_local_id is not None:
-                try:
-                    pkt = openclose_packet(
+                self._civ.send(
+                    openclose_packet(
                         self._civ_seq,
                         self._civ_local_id,
                         self._civ_remote_id,
                         self._civ_inner,
                         0x00,
                     )
-                    self._civ_seq += 1
-                    self._civ_inner += 1
-                    self._civ_sock.sendto(pkt, self._civ_addr_net)
-                except OSError:
-                    pass
-                self._send_disconnect(
-                    self._civ_sock,
-                    self._civ_addr_net,
-                    self._civ_local_id,
-                    self._civ_remote_id,
                 )
-            self._civ_sock.close()
-            self._civ_sock = None
-        self._send_token_deregister()
-        self._send_disconnect(
-            self._ctrl_sock, self._ctrl_addr, self._ctrl_local_id, self._ctrl_remote_id
-        )
-        if self._ctrl_sock is not None:
-            self._ctrl_sock.close()
-            self._ctrl_sock = None
+                self._civ_seq += 1
+                self._civ_inner += 1
+                self._send_disconnect(
+                    self._civ, self._civ_local_id, self._civ_remote_id
+                )
+            self._civ.close()
+            self._civ = None
+        await self._send_token_deregister()
+        self._send_disconnect(self._ctrl, self._ctrl_local_id, self._ctrl_remote_id)
+        if self._ctrl is not None:
+            self._ctrl.close()
+            self._ctrl = None
         self._tok = None
 
 
@@ -1218,7 +1193,7 @@ def read_scope_records(path) -> list[tuple[float, int, int, bytes]]:
     return records
 
 
-def main() -> None:
+async def main() -> None:
     if len(sys.argv) < 2:
         print(f"Usage: {sys.argv[0]} <radio-ip> [--scope [outfile.scope]]")
         sys.exit(1)
@@ -1255,20 +1230,19 @@ def main() -> None:
         rig.on_scope(on_scope)
 
     print(f"[icom] connecting to {host} ...", flush=True)
-    rig.connect()
+    await rig.connect()
     if scope_enabled:
         rig.enable_scope()
     print("[icom] connected -- waiting for live updates (Ctrl-C to quit)", flush=True)
     try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
+        await asyncio.Event().wait()  # until Ctrl-C
+    except (KeyboardInterrupt, asyncio.CancelledError):
         pass
     finally:
-        rig.close()
+        await rig.close()
         if scope_file is not None:
             scope_file.close()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

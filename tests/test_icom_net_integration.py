@@ -11,10 +11,9 @@ on_update() with no polling involved.
 
 from __future__ import annotations
 
+import asyncio
 import os
-import socket
 import struct
-import threading
 from datetime import datetime, timezone
 
 import pytest
@@ -30,7 +29,7 @@ from icom_net import (
     parse_civ_data_packet,
     split_civ_frames,
 )
-from tests.helpers import wait_until_sync
+from tests.helpers import wait_until
 
 
 def _envelope(
@@ -82,62 +81,65 @@ def _conninfo_response(sentid: bytes, rcvdid: bytes) -> bytes:
     return bytes(buf)
 
 
+class _FakeEndpoint(asyncio.DatagramProtocol):
+    """One of the radio's listening sockets. Unlike the client's channels
+    these are unconnected — the radio replies to whoever wrote to it."""
+
+    def __init__(self, handler):
+        self._handler = handler
+        self.transport = None
+
+    def connection_made(self, transport) -> None:
+        self.transport = transport
+
+    def datagram_received(self, data: bytes, addr) -> None:
+        self._handler(data, addr)
+
+
 class FakeIcomRadio:
     """Just enough server-side protocol to satisfy IcomNetRig.connect()."""
 
     def __init__(self):
-        self.ctrl_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.ctrl_sock.bind(("127.0.0.1", 0))
-        self.civ_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.civ_sock.bind(("127.0.0.1", 0))
-        self.control_port = self.ctrl_sock.getsockname()[1]
-        self.civ_port = self.civ_sock.getsockname()[1]
-
-        self._stop = threading.Event()
         self._my_ctrl_id = os.urandom(4)
         self._my_civ_id = os.urandom(4)
         self._client_ctrl_id = b"\x00\x00\x00\x00"
         self._client_civ_id = b"\x00\x00\x00\x00"
-        self._client_ctrl_addr = None
         self._client_civ_addr = None
         self._tok = os.urandom(6)
         self._civ_inner_seq = 0
-        self.civ_opened = threading.Event()
-        self.civ_closed = threading.Event()
+        self.civ_opened = asyncio.Event()
+        self.civ_closed = asyncio.Event()
         self.received_civ: list[bytes] = []
-        self.token_deregistered = threading.Event()
-        self.ctrl_disconnected = threading.Event()
-        self.civ_disconnected = threading.Event()
+        self.token_deregistered = asyncio.Event()
+        self.ctrl_disconnected = asyncio.Event()
+        self.civ_disconnected = asyncio.Event()
         self._cur_freq = 144_174_000
         self._cur_mode = 0x01  # USB
+        self._ctrl_transport = None
+        self._civ_transport = None
 
-        self._threads = [
-            threading.Thread(target=self._ctrl_loop, daemon=True),
-            threading.Thread(target=self._civ_loop, daemon=True),
-        ]
-
-    def start(self) -> None:
-        for t in self._threads:
-            t.start()
+    async def start(self) -> None:
+        loop = asyncio.get_running_loop()
+        self._ctrl_transport, _ = await loop.create_datagram_endpoint(
+            lambda: _FakeEndpoint(self._handle_ctrl), local_addr=("127.0.0.1", 0)
+        )
+        self._civ_transport, _ = await loop.create_datagram_endpoint(
+            lambda: _FakeEndpoint(self._handle_civ), local_addr=("127.0.0.1", 0)
+        )
+        self.control_port = self._ctrl_transport.get_extra_info("sockname")[1]
+        self.civ_port = self._civ_transport.get_extra_info("sockname")[1]
 
     def stop(self) -> None:
-        self._stop.set()
-        for t in self._threads:
-            t.join(timeout=1.0)
-        self.ctrl_sock.close()
-        self.civ_sock.close()
+        """Idempotent: one test kills the radio mid-session, then the fixture
+        tears it down again."""
+        for transport in (self._ctrl_transport, self._civ_transport):
+            if transport is not None:
+                transport.close()
+        self._ctrl_transport = self._civ_transport = None
 
-    def _ctrl_loop(self) -> None:
-        self.ctrl_sock.settimeout(0.05)
-        while not self._stop.is_set():
-            try:
-                data, addr = self.ctrl_sock.recvfrom(4096)
-            except TimeoutError:
-                continue
-            except OSError:
-                break
-            self._client_ctrl_addr = addr
-            self._handle_ctrl(data, addr)
+    def _send_ctrl(self, data: bytes, addr) -> None:
+        if self._ctrl_transport is not None:
+            self._ctrl_transport.sendto(data, addr)
 
     def _handle_ctrl(self, data: bytes, addr) -> None:
         if len(data) < 6:
@@ -145,25 +147,25 @@ class FakeIcomRadio:
         length, ptype = struct.unpack_from("<IH", data, 0)
         if length == 0x10 and ptype == 3:  # are-you-there
             self._client_ctrl_id = bytes(data[8:12])
-            self.ctrl_sock.sendto(
+            self._send_ctrl(
                 control_packet(4, 0, self._my_ctrl_id, self._client_ctrl_id), addr
             )
         elif length == 0x10 and ptype == 6:  # are-you-ready
-            self.ctrl_sock.sendto(data, addr)
+            self._send_ctrl(data, addr)
         elif length == 0x10 and ptype == 5:  # disconnect
             self.ctrl_disconnected.set()
         elif length == 0x10:
             pass  # idle
         elif length == 0x80:  # login_packet
             self._tok = data[0x1A:0x1C] + self._tok[2:]
-            self.ctrl_sock.sendto(
+            self._send_ctrl(
                 _login_response(self._my_ctrl_id, self._client_ctrl_id, self._tok), addr
             )
         elif length == 0x40:  # token_packet
             requesttype = data[0x15]
             if requesttype == 0x01:
                 self.token_deregistered.set()
-            self.ctrl_sock.sendto(
+            self._send_ctrl(
                 _token_response(
                     self._my_ctrl_id, self._client_ctrl_id, requesttype, self._tok
                 ),
@@ -177,35 +179,28 @@ class FakeIcomRadio:
                     "IC-9700",
                     CIV_IC9700_ADDR,
                 )
-                self.ctrl_sock.sendto(caps, addr)
+                self._send_ctrl(caps, addr)
         elif length == 0x90:  # conninfo_packet
-            self.ctrl_sock.sendto(
+            self._send_ctrl(
                 _conninfo_response(self._my_ctrl_id, self._client_ctrl_id), addr
             )
 
-    def _civ_loop(self) -> None:
-        self.civ_sock.settimeout(0.05)
-        while not self._stop.is_set():
-            try:
-                data, addr = self.civ_sock.recvfrom(4096)
-            except TimeoutError:
-                continue
-            except OSError:
-                break
-            self._client_civ_addr = addr
-            self._handle_civ(data, addr)
+    def _send_civ_to(self, data: bytes, addr) -> None:
+        if self._civ_transport is not None:
+            self._civ_transport.sendto(data, addr)
 
     def _handle_civ(self, data: bytes, addr) -> None:
+        self._client_civ_addr = addr
         if len(data) < 6:
             return
         length, ptype = struct.unpack_from("<IH", data, 0)
         if length == 0x10 and ptype == 3:  # are-you-there
             self._client_civ_id = bytes(data[8:12])
-            self.civ_sock.sendto(
+            self._send_civ_to(
                 control_packet(4, 0, self._my_civ_id, self._client_civ_id), addr
             )
         elif length == 0x10 and ptype == 6:  # are-you-ready
-            self.civ_sock.sendto(data, addr)
+            self._send_civ_to(data, addr)
         elif length == 0x10 and ptype == 5:  # disconnect
             self.civ_disconnected.set()
         elif length == 0x16:  # openclose_packet
@@ -248,7 +243,7 @@ class FakeIcomRadio:
         )
         self._civ_inner_seq += 1
         if self._client_civ_addr:
-            self.civ_sock.sendto(pkt, self._client_civ_addr)
+            self._send_civ_to(pkt, self._client_civ_addr)
 
     def push_freq_mode(self, hz: int, mode_code: int) -> None:
         """Simulate the radio pushing a CI-V Transceive update -- exactly
@@ -266,18 +261,18 @@ class FakeIcomRadio:
         )
         self._civ_inner_seq += 1
         if self._client_civ_addr:
-            self.civ_sock.sendto(pkt, self._client_civ_addr)
+            self._send_civ_to(pkt, self._client_civ_addr)
 
 
 @pytest.fixture
-def fake_radio():
+async def fake_radio():
     radio = FakeIcomRadio()
-    radio.start()
+    await radio.start()
     yield radio
     radio.stop()
 
 
-def test_connect_and_receive_unsolicited_transceive_update(fake_radio):
+async def test_connect_and_receive_unsolicited_transceive_update(fake_radio):
     rig = IcomNetRig(
         "127.0.0.1",
         "testuser",
@@ -289,11 +284,11 @@ def test_connect_and_receive_unsolicited_transceive_update(fake_radio):
     rig.on_update(lambda freq_hz, mode, band: updates.append((freq_hz, mode, band)))
 
     try:
-        rig.connect(timeout=5.0)
+        await rig.connect(timeout=5.0)
 
         # connect()'s priming read-freq/read-mode queries recover initial state --
         # each answer is its own UDP packet, so wait for both, not just one.
-        assert wait_until_sync(
+        assert await wait_until(
             lambda: rig.freq_hz == 144_174_000 and rig.mode == "USB", timeout=2.0
         )
         assert rig.band == "2M"
@@ -301,17 +296,17 @@ def test_connect_and_receive_unsolicited_transceive_update(fake_radio):
         # Now simulate a live front-panel change -- e.g. QSY to 70cm CW --
         # and confirm it arrives with no polling, i.e. purely event-driven.
         fake_radio.push_freq_mode(432_500_000, 0x03)
-        assert wait_until_sync(
+        assert await wait_until(
             lambda: rig.freq_hz == 432_500_000 and rig.mode == "CW", timeout=2.0
         )
         assert rig.band == "70CM"
 
         assert (432_500_000, "CW", "70CM") in updates
     finally:
-        rig.close()
+        await rig.close()
 
 
-def test_send_cw_stop_cw_and_set_clock_reach_the_radio_as_civ_frames(fake_radio):
+async def test_send_cw_stop_cw_and_set_clock_reach_the_radio_as_civ_frames(fake_radio):
     # The three rigctld operations puskas_logger uses besides freq/mode
     # reads: CW macro send ('b'), CW abort (0xBB), clock sync (\set_clock).
     # Each must land on the radio as the exact CI-V frame Hamlib would send.
@@ -323,8 +318,8 @@ def test_send_cw_stop_cw_and_set_clock_reach_the_radio_as_civ_frames(fake_radio)
         civ_port=fake_radio.civ_port,
     )
     try:
-        rig.connect(timeout=5.0)
-        assert wait_until_sync(lambda: rig.freq_hz is not None, timeout=2.0)
+        await rig.connect(timeout=5.0)
+        assert await wait_until(lambda: rig.freq_hz is not None, timeout=2.0)
 
         rig.send_cw("TU")
         rig.stop_cw()
@@ -338,14 +333,14 @@ def test_send_cw_stop_cw_and_set_clock_reach_the_radio_as_civ_frames(fake_radio)
             to_radio + bytes([0x1A, 0x05, 0x01, 0x80, 0x18, 0x05]),
             to_radio + bytes([0x1A, 0x05, 0x01, 0x79, 0x20, 0x26, 0x08, 0x03]),
         ]
-        assert wait_until_sync(
+        assert await wait_until(
             lambda: all(f in fake_radio.received_civ for f in expected), timeout=2.0
         )
     finally:
-        rig.close()
+        await rig.close()
 
 
-def test_on_civ_frame_sees_raw_inbound_frames(fake_radio):
+async def test_on_civ_frame_sees_raw_inbound_frames(fake_radio):
     # ACK frames (FB/FA) and replies this client doesn't interpret itself
     # must still be observable -- the logger's clock-sync feedback needs to
     # know whether the radio accepted a set command.
@@ -359,18 +354,18 @@ def test_on_civ_frame_sees_raw_inbound_frames(fake_radio):
     frames = []
     rig.on_civ_frame(frames.append)
     try:
-        rig.connect(timeout=5.0)
+        await rig.connect(timeout=5.0)
         # connect()'s priming read-freq query is answered by the fake radio --
         # that reply must show up raw, addressing bytes and all.
         freq_reply = bytes([CIV_CONTROLLER_ADDR, CIV_IC9700_ADDR, 0x03])
-        assert wait_until_sync(
+        assert await wait_until(
             lambda: any(f.startswith(freq_reply) for f in frames), timeout=2.0
         )
     finally:
-        rig.close()
+        await rig.close()
 
 
-def test_close_says_goodbye_on_both_sockets(fake_radio):
+async def test_close_says_goodbye_on_both_sockets(fake_radio):
     # Deregistering the token alone is not the whole goodbye: without a
     # disconnect (0x05) on each socket the radio keeps the session on its
     # books and goes on streaming to the dead sockets -- measured at ~50
@@ -384,14 +379,15 @@ def test_close_says_goodbye_on_both_sockets(fake_radio):
         control_port=fake_radio.control_port,
         civ_port=fake_radio.civ_port,
     )
-    rig.connect(timeout=5.0)
-    rig.close()
-    assert fake_radio.civ_closed.wait(timeout=2.0)
-    assert fake_radio.civ_disconnected.wait(timeout=2.0)
-    assert fake_radio.ctrl_disconnected.wait(timeout=2.0)
+    await rig.connect(timeout=5.0)
+    await rig.close()
+    async with asyncio.timeout(2.0):
+        await fake_radio.civ_closed.wait()
+        await fake_radio.civ_disconnected.wait()
+        await fake_radio.ctrl_disconnected.wait()
 
 
-def test_close_deregisters_the_session_token(fake_radio):
+async def test_close_deregisters_the_session_token(fake_radio):
     # Without this the radio holds the abandoned session for tens of
     # seconds (observed on real hardware) and refuses the next connect --
     # fatal for a logger restart mid-contest.
@@ -402,13 +398,15 @@ def test_close_deregisters_the_session_token(fake_radio):
         control_port=fake_radio.control_port,
         civ_port=fake_radio.civ_port,
     )
-    rig.connect(timeout=5.0)
+    await rig.connect(timeout=5.0)
     assert not fake_radio.token_deregistered.is_set()
-    rig.close()
-    assert fake_radio.token_deregistered.wait(timeout=2.0)
+    await rig.close()
+    assert fake_radio.token_deregistered.is_set()
 
 
-def test_last_rx_age_is_fresh_while_connected_and_grows_when_radio_dies(fake_radio):
+async def test_last_rx_age_is_fresh_while_connected_and_grows_when_radio_dies(
+    fake_radio,
+):
     rig = IcomNetRig(
         "127.0.0.1",
         "testuser",
@@ -417,23 +415,24 @@ def test_last_rx_age_is_fresh_while_connected_and_grows_when_radio_dies(fake_rad
         civ_port=fake_radio.civ_port,
     )
     try:
-        rig.connect(timeout=5.0)
+        await rig.connect(timeout=5.0)
         # connect() only returns once CI-V data has been seen, so the age
         # must already be finite and recent.
         assert rig.last_rx_age() < 2.0
         fake_radio.stop()
-        assert wait_until_sync(lambda: rig.last_rx_age() > 0.5, timeout=5.0)
+        assert await wait_until(lambda: rig.last_rx_age() > 0.5, timeout=5.0)
     finally:
-        rig.close()
+        await rig.close()
 
 
-def test_close_joins_the_meter_poller_before_tearing_down_sockets(fake_radio):
-    # The meter poller sends a burst of four queries per cycle, so setting
-    # _stop alone leaves it able to be mid-burst while close() is already
-    # sending its goodbye and token-deregister packets -- putting meter
-    # queries on the wire *after* the disconnect, which is exactly what
-    # leaves the radio refusing the next session. close() must join it, which
-    # it only does for threads registered in _threads.
+async def test_close_cancels_the_meter_poller_before_tearing_down_sockets(fake_radio):
+    # The meter poller sends a burst of four queries per cycle with no await
+    # between them, so a cancel that is not awaited leaves it able to finish
+    # that burst while close() is already sending its goodbye and
+    # token-deregister packets -- putting meter queries on the wire *after*
+    # the disconnect, which is exactly what leaves the radio refusing the next
+    # session. close() must await it, which it only does for tasks registered
+    # in _tasks.
     rig = IcomNetRig(
         "127.0.0.1",
         "testuser",
@@ -441,9 +440,9 @@ def test_close_joins_the_meter_poller_before_tearing_down_sockets(fake_radio):
         control_port=fake_radio.control_port,
         civ_port=fake_radio.civ_port,
     )
-    rig.connect(timeout=5.0)
+    await rig.connect(timeout=5.0)
     rig.enable_meters(interval=0.05)
-    meter_thread = rig._meter_thread
-    assert meter_thread in rig._threads
-    rig.close()
-    assert not meter_thread.is_alive()
+    meter_task = rig._meter_task
+    assert meter_task in rig._tasks
+    await rig.close()
+    assert meter_task.done()
