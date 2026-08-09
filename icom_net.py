@@ -224,7 +224,7 @@ def civ_clock_payloads(now: datetime) -> list[bytes]:
 
 
 # ============================================================
-# Scope (spectrum waterfall) frames
+# Scope (spectrum-scope waterfall) frames
 #
 # Not a separate socket/port -- confirmed against real hardware that the
 # IC-9700's own SET > Network menu only exposes three LAN ports (Control/

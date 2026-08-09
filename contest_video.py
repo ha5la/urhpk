@@ -2006,7 +2006,7 @@ RENDER_FPS = 30  # output frame rate; the webcam PiP is resampled to
 
 
 # ---------------------------------------------------------------------------
-# Scope (spectrum waterfall) background -- from icom_net.py's .scope
+# Scope (spectrum-scope waterfall) background -- from icom_net.py's .scope
 # recordings (real IC-9700 CI-V scope sweeps), instead of showspectrum's
 # reconstruction from the recorded audio. See icom_net.py's own docs for
 # where these come from; this section only renders them into video.
@@ -2410,7 +2410,7 @@ def hud_az_marks(
     """(video_t, azimuth) for every telemetry line that reports on the rotator,
     offline ones included -- an explicit `"az": null` is a real mark carrying
     None, so the needle stops there instead of pointing at the last known
-    bearing for the rest of the video. A line that only reports the rig says
+    azimuth for the rest of the video. A line that only reports the rig says
     nothing about the rotator and is not a mark at all, even though both load
     as `az=None`.
 
@@ -2504,7 +2504,7 @@ class HudTimeline:
             self._ticker_cols.append(prev_col)
 
     def _az_at(self, t: float) -> float | None:
-        """The rotator's bearing at t, swept between samples rather than
+        """The rotator's azimuth at t, swept between samples rather than
         stepped to them.
 
         The poller reports whole degrees about once a second, so a real slew
@@ -2932,7 +2932,7 @@ def _seven_seg(draw, text, x, y, max_w, max_h, colour, anchor="mm", field=None) 
 
 
 def _paste_needle(img: Image.Image, sprite, pivot, centre, az: float) -> None:
-    """Paste a compass needle pointing at bearing `az` (0 = north, clockwise),
+    """Paste a compass needle pointing at `az` degrees (0 = north, clockwise),
     turned about its own pivot -- the ball at its base, well below the middle
     of its bounding box, so rotating about the box centre would swing the whole
     needle around the compass instead of pointing it.

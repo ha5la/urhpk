@@ -412,7 +412,7 @@ def _rig_server_thread(srv: socket.socket) -> None:
 
 
 # ──────────────────────────────────────────────────────────────
-# Scope recorder — the radio's own spectrum sweeps to a .scope file
+# Scope recorder — the radio's own sweeps to a .scope file
 # (contest_video.py --scope). Lives here because the logger owns the
 # radio's single network session; the icom_net CLI harness can't run
 # alongside it.

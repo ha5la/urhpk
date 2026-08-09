@@ -106,7 +106,7 @@ into it.
 (`yaesuudpcontrol.cpp`/`yaesucommander.cpp` are its only consumers), which is
 exactly what made it misleading. Confirmed two independent ways before writing any
 code: a `dumpcap` capture of all UDP traffic during a live wfview session with a
-visibly working spectrum showed zero packets on 50004 (reproduced independently by
+visibly working spectrum scope showed zero packets on 50004 (reproduced independently by
 the user in Wireshark, who also noted the radio's own `SET > Network` menu exposes
 only three ports); and wfview's `conninfo_packet` has exactly two port fields,
 `civport` and `audioport`, so the radio is structurally never told about a third

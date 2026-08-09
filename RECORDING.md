@@ -477,7 +477,7 @@ than trusting the toolbar's "synced" message alone.
   260704-HA5LA.cast             ← asciinema recording of the logger/irssi tmux session
   260704-HA5LA-webcam.mp4       ← Alt+V webcam capture (written by puskas_logger, optional)
   260704-HA5LA-webcam.log       ← ffmpeg capture log for the above (exact sync timestamp)
-  260704-HA5LA.scope            ← radio spectrum sweeps (written by puskas_logger, optional input)
+  260704-HA5LA.scope            ← radio sweeps (written by puskas_logger, optional input)
   urhob2026cw_annotated.mp4     ← rendered video (written by contest_video.py)
   urhob2026cw_annotated.mp4.chapters.txt  ← paste into the YouTube description
   urhob2026cw_annotated.mp4.srt           ← upload as a YouTube captions track

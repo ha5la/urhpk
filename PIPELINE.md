@@ -59,7 +59,7 @@ Separately and by hand: the **IC-9700's own Voice Recorder** is switched on, and
 it records to its SD card, splitting a new WAV on every RX/TX transition.
 
 While the round runs, the logger is writing five things besides the log: rig and
-rotator telemetry, every keystroke and QSO, the radio's spectrum sweeps, and —
+rotator telemetry, every keystroke and QSO, the radio's sweeps, and —
 if Alt+V was pressed — a webcam capture. None of it is recoverable afterwards,
 which is why it is all on by default.
 

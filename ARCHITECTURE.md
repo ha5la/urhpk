@@ -170,7 +170,7 @@ compliance (resending a specific buffered packet on demand) — skippable on a c
 LAN, confirmed in steady-state traffic. What is *not* skippable is the initial seq
 numbering and handshake ordering above.
 
-### Scope (spectrum waterfall) data
+### Scope (spectrum-scope waterfall) data
 
 Goal: match the exact waterfall the radio's own display shows, rather than one
 reconstructed from the recorded audio — audio can only ever show what the receiver
@@ -415,7 +415,7 @@ The HUD's rule is that the more important a value, the bigger it is drawn.
 - **The needle sweeps between samples rather than stepping to them.** The poller
   reports whole degrees about once a second, so a slew arrives as closely-spaced
   samples that interpolate into one continuous turn; a gap longer than
-  `HUD_AZ_INTERP_S` is a stationary rotator, not slow movement, so the bearing holds
+  `HUD_AZ_INTERP_S` is a stationary rotator, not slow movement, so the azimuth holds
   there. Interpolation takes the short way round the circle. Azimuth is deliberately
   its own time series (`hud_az_marks`) rather than a field of the per-run rig state:
   a run is however long freq/mode hold for, so one median for all of it made a real
@@ -752,7 +752,7 @@ contest-normalized one (`SSB`), matching real rigctld byte-for-byte. Binds local
 only; silently serves nothing if the port is already taken.
 
 **Scope recorder** (`YYMMDD-CALL.scope`, always on once the radio connects): records
-the radio's own spectrum sweeps via `enable_scope()`/`on_scope` to the `.scope` format
+the radio's own sweeps via `enable_scope()`/`on_scope` to the `.scope` format
 `contest_video.py --scope` consumes. Lives in the logger because the radio holds only
 one network session (see the icom_net.py section above) — the CLI harness recorder can't run
 alongside the logger. Re-enabled on every reconnect (scope data output is
