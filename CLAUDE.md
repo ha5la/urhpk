@@ -98,7 +98,7 @@ questions about "why does this exist" are answered by where a thing sits in it.
 there at startup (uppercased); the grid locator is fetched from the ON4KST server
 via `/SHow CONFig` after login.
 
-**File layout — global databases live in `~`, per-session files in the CWD.** The
+**File layout — global databases live in `~`, per-round files in the CWD.** The
 whole stack runs on one laptop during a round, and a contest directory holds
 exactly one round:
 

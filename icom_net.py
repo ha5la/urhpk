@@ -1200,7 +1200,7 @@ def _load_netrc_credentials(host: str) -> tuple[str, str]:
 def write_scope_record(f, ts: float, start_hz: int, end_hz: int, pixels: bytes) -> None:
     """Append one sweep to a scope recording: <f8 ts><u4 start_hz><u4 end_hz>
     <u2 npixels><npixels raw bytes>, repeated per sweep. A simple, appendable
-    binary format sized for a multi-hour contest session -- JSON per sweep
+    binary format sized for a multi-hour round -- JSON per sweep
     would balloon file size at scope refresh rates for no benefit, since
     pixel values are already byte-quantized 0-160 with nothing gained from
     text encoding (same reasoning as the WAV recorder storing raw samples

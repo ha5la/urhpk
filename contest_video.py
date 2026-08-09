@@ -14,10 +14,10 @@ YouTube-ready MP4 with:
   * an RX/TX badge, from the WAV files' own rig metadata (the QRG/mode/rotator
     line it used to carry is redundant with the terminal PiP's own toolbar)
   * optionally, a large picture-in-picture of the logger/irssi terminal
-    session (--cast, an asciinema recording) and a small webcam PiP
+    (--cast, an asciinema recording) and a small webcam PiP
 
 The ticker and badge are burned in via one ASS subtitle file in a single
-ffmpeg pass; the terminal-session PiP is rendered separately (see
+ffmpeg pass; the cast PiP is rendered separately (see
 render_cast_video) and composited alongside the webcam PiP in that same pass
 -- no frame-by-frame rendering of the main video.
 
@@ -209,7 +209,7 @@ PITCH_SEARCH_HI_HZ = 1600.0
 
 def _detect_pitch(x: np.ndarray, sr: int, fallback: float) -> float:
     """Find the actual dominant tone frequency in a segment, rather than
-    trusting a single assumed pitch for the whole session.
+    trusting a single assumed pitch for the whole round.
 
     A received signal's true beat note can be very different from the
     operator's own TX sidetone -- confirmed against real data far more
@@ -329,7 +329,7 @@ def _decode_samples(
     `pitch` is only a fallback for the rare case _detect_pitch can't find
     anything (e.g. a silent segment) -- the actual demodulation frequency
     is always auto-detected, see _detect_pitch's docstring for why a single
-    assumed pitch for the whole session doesn't hold.
+    assumed pitch for the whole round doesn't hold.
 
     Returns (events, snr_db). Events is empty when the signal carries no
     keyed CW (flat envelope / silence)."""
@@ -660,13 +660,13 @@ def remap_audio_t(segs: list[Segment], long_cw_segs: set[int] | None = None) -> 
 
 def trim_to_duration(segs: list[Segment], max_dur: float) -> list[Segment]:
     """Keep only the segments needed to cover the first max_dur seconds of
-    real session time (a --duration preview), shortening the last one to
+    real round time (a --duration preview), shortening the last one to
     land exactly on the cutoff.
 
     Called *before* CW decoding, not after: decode_segment/gate_events are
     the expensive part of the pipeline, and a short preview has no use for
     segments past the cutoff, so this skips decoding them at all rather than
-    decoding the full session and discarding most of the result.
+    decoding the full round and discarding most of the result.
     """
     out = [s for s in segs if s.audio_t < max_dur]
     if out:
@@ -731,7 +731,7 @@ def parse_edi(path: str) -> tuple[str, str, list[Qso]]:
 
 def merge_edi(paths: list[str]) -> tuple[str, str, list[Qso]]:
     """Merge one or more per-band EDI logs (e.g. 2M + 70CM from the same
-    session) into a single chronological QSO list -- the recording is one
+    round) into a single chronological QSO list -- the recording is one
     continuous audio timeline regardless of how many bands were worked."""
     mycall, mywwl = "", ""
     qsos: list[Qso] = []
@@ -763,7 +763,7 @@ def stream_start(wall: datetime, segs: list[Segment]) -> float:
     clamps that case to segs[0].audio_t, which is exactly wrong here. A cast
     or scope recording clamped to 0 gets its frame 0 pinned to video t=0, so
     everything in it reads late by the whole cast-to-WAV gap (25 s in the
-    dry-run that caught it, as the cast PiP's clock lagging the session).
+    dry-run that caught it, as the cast PiP's clock lagging the round).
 
     This is the normal case, not an edge case: run-recorded-contest-session.sh
     starts asciinema before the radio recorder is switched on, so every cast
@@ -828,7 +828,7 @@ def sync_webcam_start(
     The webcam is a separate device with its own clock convention, which
     need not match the WAV recorder's (in practice the WAV recorder here
     stamped filenames in plain UTC, while the phone stamped its own in local
-    wall time -- two different offsets for the same session). So its offset
+    wall time -- two different offsets for the same round). So its offset
     can't be assumed to equal `offset_h`; it's derived the same way
     `offset_h` itself was, by treating the whole webcam clip as a one-segment
     "recording" and reusing derive_utc_offset's span-midpoint match against
@@ -947,8 +947,8 @@ def refine_webcam_start(
     not a constant. Found from a real reported case, confirmed by ear (the
     operator's own voice reaches the phone's own mic and the radio's mic at
     the same real-world instant, but drifted apart across the *output*
-    timeline the further into the session): sampling confident anchors
-    across a real ~2-hour session showed the correction growing smoothly
+    timeline the further into the round): sampling confident anchors
+    across a real ~2-hour round showed the correction growing smoothly
     from ~0s near the start to ~+3.2s near the end -- not a frame-rate or
     rendering bug (that was checked and fixed separately; see
     decode_long_segment's neighbour docstrings), and not something a single
@@ -1012,7 +1012,7 @@ def refine_webcam_start(
     # wildly inconsistent correction -- e.g. another voice briefly matching
     # by chance) can skew a single least-squares fit substantially. Found
     # on a real ~2h same-machine webcam recording: one naive fit put the
-    # whole-session drift at +3.4s; iteratively rejecting outliers (>1.5
+    # whole-round drift at +3.4s; iteratively rejecting outliers (>1.5
     # std from the running fit) and refitting converged to +5.1s with the
     # residual std dropping from ~2.6s to ~0.1s -- the robust fit is the
     # trustworthy one. Only attempted with >=4 points; fewer than that
@@ -1033,12 +1033,12 @@ def refine_webcam_start(
 
 
 # ---------------------------------------------------------------------------
-# Terminal session capture (asciinema .cast, e.g. an irssi+logger tmux
+# Terminal capture (asciinema .cast, e.g. an irssi+logger tmux
 # session recorded with `asciinema rec`). Rendered as a real video PIP
 # (pyte replays the cast into a virtual terminal; each frame is rasterized
 # with PIL) rather than as ASS text, since the cast can contain many more
 # state changes per second than are worth a separate subtitle event (the
-# toolbar clock alone ticks ~10x/second the whole session), and a fixed,
+# toolbar clock alone ticks ~10x/second the whole round), and a fixed,
 # modest frame rate reads perfectly well for text.
 #
 # Sync is exact and needs no cross-correlation at all, unlike the webcam:
@@ -1228,7 +1228,7 @@ def render_cast_video(
     just treats it as one more PIP video input alongside the webcam.
 
     Frames are piped as raw RGB24 straight into an ffmpeg encode, not
-    written to disk as a PNG sequence first -- a multi-hour session at
+    written to disk as a PNG sequence first -- a multi-hour round at
     even a modest fps would otherwise mean tens of thousands of files.
 
     The canvas persists across frames and only pyte's own `screen.dirty`
@@ -1237,16 +1237,16 @@ def render_cast_video(
     just the toolbar clock, changes at a time), and redrawing every one
     of a wide terminal's cells every frame regardless measured at under
     1x realtime throughput, worse than the encode itself for a multi-hour
-    session."""
+    round."""
     with open(cast_path) as f:
         header = json.loads(f.readline())
         events = [json.loads(line) for line in f]
     W, H = header["width"], header["height"]
     duration = events[-1][0] if events else 0.0
-    # A --duration preview only shows the first minutes of a session, so
+    # A --duration preview only shows the first minutes of a round, so
     # replaying the whole cast is wasted work -- and it is the slowest stage
     # in the pipeline, so it dominates exactly the case the flag exists to
-    # make cheap. Measured: a 20-minute cut of a 121-minute session spent
+    # make cheap. Measured: a 20-minute cut of a 121-minute round spent
     # ~40 minutes here to use ~7 of it.
     if max_duration is not None:
         duration = min(duration, max_duration)
@@ -1574,7 +1574,7 @@ def build_state_events(
 
     Comparing the two frequency sources exactly (Hz for Hz) is unsound:
     the WAV metadata and rigctld-via-telemetry don't agree to the exact
-    Hz even when nothing changed. Checked against this real session's own
+    Hz even when nothing changed. Checked against this real round's own
     data: a systematic disagreement of 160/250/300/310 Hz (depending on
     band) shows up on *every* segment's very first telemetry sample, which
     would otherwise look like a spurious retune right at the start of
@@ -2287,7 +2287,7 @@ def hud_s_marks(
 ) -> list[tuple[float, float]]:
     """(video_t, 0..1 signal level) from the scope recording's own centre
     bins -- a genuine S-meter for the HUD that costs no new recording and
-    works retroactively on every session captured since the logger's scope
+    works retroactively on every round captured since the logger's scope
     recorder went in.
 
     The centre bin really is the tuned frequency: the IC-9700's scope runs in
@@ -3374,9 +3374,9 @@ def render(
         # audio-clock drift measured via the webcam (see main(), cast_rate)
         # applies here too: setpts stretches its timeline the same way the
         # webcam branch's does, before the fps=RENDER_FPS resample. itsoffset
-        # positions its own t=0 (the moment the logger session started) at
+        # positions its own t=0 (the moment the logger started) at
         # cast_start in the output timeline. tpad clones its last frame so a
-        # cast shorter than the session can't truncate the shared filtergraph,
+        # cast shorter than the round can't truncate the shared filtergraph,
         # same reasoning as the webcam branch below.
         # Height-constrained, not width-constrained: with a bar along the bottom
         # the terminal's limit is the room above it, and a width fraction
@@ -3415,7 +3415,7 @@ def render(
         # its own frame 0 lands at webcam_start in the output timeline --
         # exactly right, since that's the real moment the phone started
         # recording. tpad clones the cam's last frame indefinitely so a clip
-        # a little shorter than the session (as here) can never end the
+        # a little shorter than the round (as here) can never end the
         # shared filtergraph early and truncate the main waterfall/audio.
         # The cam is *not* mirrored: the logger's own Alt+V capture records
         # the laptop webcam already the right way round (an earlier phone
@@ -3509,7 +3509,7 @@ def main() -> None:
     ap.add_argument(
         "edi",
         nargs="*",
-        help="EDI log(s) for the same session -- pass more than one "
+        help="EDI log(s) for the same round -- pass more than one "
         "to merge multiple bands worked in one recording",
     )
     ap.add_argument("-o", "--out", default="contest_video.mp4")
@@ -3535,14 +3535,14 @@ def main() -> None:
     ap.add_argument(
         "--duration",
         type=float,
-        help="trim to the first DURATION seconds of real session time "
+        help="trim to the first DURATION seconds of real round time "
         "(chronological preview; also skips CW-decoding past the "
         "cutoff, so a short preview is much faster to build)",
     )
     ap.add_argument(
         "--cast",
-        help="asciinema cast (v2) recording of the logger/irssi terminal "
-        "session, shown as a large picture-in-picture -- synced from "
+        help="asciinema cast (v2) recording of the logger/irssi terminal, "
+        "shown as a large picture-in-picture -- synced from "
         "the cast header's own Unix-epoch timestamp, exact real-world "
         "UTC with no whole-hour rounding needed",
     )
@@ -3722,7 +3722,7 @@ def main() -> None:
     # read_wav_metadata runs before --duration trims segs (unlike the CW
     # decode loop further down, which *should* skip past the cutoff) so the
     # webcam fine-tune below can search for TX anchors across the *full*
-    # session, same reasoning as sync_webcam_start using qsos_all above --
+    # round, same reasoning as sync_webcam_start using qsos_all above --
     # a short preview otherwise has too few candidates to find a confident
     # match.
     read_wav_metadata(segs)
@@ -3769,7 +3769,7 @@ def main() -> None:
                 # audio) applies to the cast PiP too. Confirmed needed from
                 # a real report: the operator saw the logger's own on-screen
                 # mode change happen visibly before the audio caught up with
-                # it, late in the same session this webcam drift was found
+                # it, late in the same round this webcam drift was found
                 # in -- consistent with one shared laptop-clock drift, not
                 # two unrelated bugs.
                 if args.cast and cast_start is not None:
@@ -3873,7 +3873,7 @@ def main() -> None:
 
     # Only feeds qso_windows()'s exact chapter/caption timing now -- the
     # typewriter overlay this also used to drive is gone, since the
-    # terminal-session PIP already shows exactly what was typed, live.
+    # cast PIP already shows exactly what was typed, live.
     qso_times = None
     if args.input_log:
         input_log = load_input_log(args.input_log)
@@ -3923,7 +3923,7 @@ def main() -> None:
         # invert that at tau = total. The margin keeps tpad's frame-cloning
         # from being visible at the very end of a preview.
         cast_span = (total - cast_start) * (1 - cast_rate) + STREAM_TRIM_MARGIN_S
-        print("rendering terminal-session PiP ...")
+        print("rendering cast PiP ...")
         render_cast_video(args.cast, cast_video, max_duration=cast_span)
 
     hud_video = stem + ".hud.mp4"

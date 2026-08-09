@@ -1,10 +1,10 @@
 # Contest recording and video production
 
-Started as notes from the URH Országos Bajnokság 2026-07-04 session (first
+Started as notes from the URH Országos Bajnokság 2026-07-04 round (first
 test run) — kept up to date since as `contest_video.py` gained features.
 ARCHITECTURE.md holds the pipeline's own constraints and FINDINGS.md the
 measurements and dead ends behind them; this file is the practical "how to
-actually use it" companion, with real numbers from real sessions.
+actually use it" companion, with real numbers from real rounds.
 
 ## Recording setup
 
@@ -15,7 +15,7 @@ actually use it" companion, with real numbers from real sessions.
   `parse_wav_title`/`read_wav_metadata` in ARCHITECTURE.md).
 - **Format**: 16 kHz mono PCM WAV, one file per transmission (RX or TX)
 - **Segments are contiguous**: sub-second gaps between files; total duration of
-  all WAVs equals the session length
+  all WAVs equals the round length
 
 One recording directory per round (e.g. `urhob2026cw/recording/`).
 The matching EDI log lives next to it (`urhob2026cw/260704-HA5LA-2M.edi`).
@@ -26,7 +26,7 @@ The matching EDI log lives next to it (`urhob2026cw/260704-HA5LA-2M.edi`).
 uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4] [options]
 ```
 Pass more than one EDI file to merge multiple bands worked in one recording
-(e.g. a 2M + 70CM session) into a single timeline — a WAV segment carries no
+(e.g. a 2M + 70CM round) into a single timeline — a WAV segment carries no
 band field, so this only matters for merging QSO lists, not for rendering.
 
 | Option | Effect |
@@ -35,7 +35,7 @@ band field, so this only matters for merging QSO lists, not for rendering.
 | `--res 720p\|1080p` | Render resolution (default 1080p) — 720p is ~2.5× faster, good for preview |
 | `--pitch HZ` | CW tone fallback (default 600 Hz) — only used if `_detect_pitch` finds nothing at all in a segment; normally auto-detected per segment |
 | `--skip-gaps` | Trim listening/CQ gaps between QSOs to `GAP_KEEP_S` (3 s) each |
-| `--duration SECONDS` | Chronological preview: trim to the first `SECONDS` of real session time, skip CW-decoding past the cutoff (a 10-minute preview of a 2-hour session decodes ~12× less audio) |
+| `--duration SECONDS` | Chronological preview: trim to the first `SECONDS` of real round time, skip CW-decoding past the cutoff (a 10-minute preview of a 2-hour round decodes ~12× less audio) |
 | `--telemetry FILE` | `*-telemetry.jsonl` — optional; adds the compass needle and the meter panel, mode-gates the CW ticker, recovers CW from long segments, and catches freq/mode changes inside one. The WAV files themselves already give RX/TX and the starting QRG/mode |
 | `--input-log FILE` | `*-input.jsonl` — optional; gives exact (not audio-structure-heuristic) QSO start/end times for chapters/captions where the operator logged the QSO during this recording |
 | `--cast FILE` | asciinema `.cast` recording of the logger/irssi tmux session, shown as a large picture-in-picture |
@@ -74,7 +74,7 @@ single PNG in about a second.
   genuine CW than length). Needs `--telemetry`; without it, nothing inside
   an over-length segment is ever recovered.
 - **CW tone is auto-detected per segment**, not assumed to be 600 Hz (IC-9700
-  sidetone default) for the whole session — `--pitch` is now only a fallback
+  sidetone default) for the whole round — `--pitch` is now only a fallback
   for the rare case `_detect_pitch` finds nothing (e.g. true silence). Found
   from real received-signal segments the user transcribed by ear: one RX
   segment's true tone was ~1296 Hz against the 600 Hz default, a 695 Hz gap
@@ -191,19 +191,19 @@ Two follow-up bugs turned up once this was checked against real recordings
   first cluster in the whole recording, which could be minutes away. It now
   just uses the approximate time as-is in that case (no worse than before
   this whole timing feature existed). Caught by the user on the "mix"
-  session: a QSO they could hear starting at 0:26 in the video was
-  chaptered at 9:28, because that session is mostly voice and the first CW
+  round: a QSO they could hear starting at 0:26 in the video was
+  chaptered at 9:28, because that round is mostly voice and the first CW
   ever decoded doesn't happen until minutes in.
 
 That last point led to a fourth bug, also fixed: **`cluster_starts()`
 originally required a segment to have decoded CW events to count as a burst
 start.** A voice-mode over never carries decodable CW, so on the "mix"
-session (27 voice QSOs, 3 CW) this found only 5 bursts across the whole
+round (27 voice QSOs, 3 CW) this found only 5 bursts across the whole
 51-minute recording — nearly every QSO got no audio-precision benefit at
 all. The fix: key on segment duration alone (`dur <= MAX_OVER_S`) instead of
 requiring events. A WAV segment boundary is a precise real-world RX/TX
 transition no matter what's being transmitted — CW and voice are equally
-real switches. After the fix, the same session has 27 clusters, and QSO 1
+real switches. After the fix, the same round has 27 clusters, and QSO 1
 (logged at 0:48 after this fix, was jumping to 9:28 before the third bug fix
 above) is at least in the right *burst* now.
 
@@ -221,7 +221,7 @@ start of this exchange" — necessary, not incidental.
 That gap closed without needing telemetry, from an idea of the user's:
 **a burst's own first segment isn't always where a QSO starts**, if the
 operator was listening (RX) before their own initiating call -- e.g. the
-very first burst of the "mix" session starts mid-listen. `_tx_start` finds
+very first burst of the "mix" round starts mid-listen. `_tx_start` finds
 the real start within a burst by exploiting two things that hold without
 any PTT data: RX and TX strictly alternate (the recorder splits on every
 switch), and a TX segment -- a brief call or report -- is consistently
@@ -334,12 +334,12 @@ panel, via `qso_windows()`, so all three (panel, chapter, caption) agree on
 timing — and both get the `--input-log` precision improvement described
 above wherever a matching event exists, not just the audio-structure fallback.
 
-## Terminal-session picture-in-picture (`--cast`)
+## Terminal picture-in-picture (`--cast`)
 
 `--cast FILE` takes an [asciinema](https://asciinema.org/) (cast v2)
 recording of the tmux session running irssi + `puskas_logger.py` during the
 contest, and shows it as a large picture-in-picture — the dominant visual
-element, since the terminal session is most of what there is to watch. It
+element, since the terminal is most of what there is to watch. It
 replaces what used to be separate QSO panels, running-score header, UTC
 clock, and typewriter overlay, all of which are just visible directly in the
 real logger UI now.
@@ -373,7 +373,7 @@ corner. Two different sync paths exist depending on how the clip was made:
   mp4's own container metadata after capture: that was tested against a
   real ~2h/3GB file and does work (a 15s stream-copy remux), but needs a
   full second copy of the file on disk at the same time — too risky right
-  when a session ends and disk space is tightest. A rename needs none of
+  when a round ends and disk space is tightest. A rename needs none of
   that (verified: 0.006s on a 3GB file, a directory-entry update
   independent of size). Falls back to `webcam_start_from_log` (the same
   precision, parsed from the `*-webcam.log` ffmpeg capture log) or
@@ -387,12 +387,12 @@ corner. Two different sync paths exist depending on how the clip was made:
   filename timestamp; `refine_webcam_start` then corrects both a residual
   sub-hour offset *and* a linear clock-drift rate by cross-correlating the
   operator's own voice between the two devices' audio tracks (confirmed
-  against a real ~2h session: 2.73s off with the coarse offset alone, 0.07s
+  against a real ~2h round: 2.73s off with the coarse offset alone, 0.07s
   off after the rate correction). `--webcam-offset SECONDS` bypasses all of
   this with a fixed manual correction — for a clip with no audio track, or
   wherever cross-correlation finds no confident match.
 
-Puskás Kupa sessions should prefer the Alt+V logger-recorded path now that
+Puskás Kupa rounds should prefer the Alt+V logger-recorded path now that
 it exists — it's simpler and exactly synced by construction; the phone path
 remains for older recordings or if Alt+V wasn't used.
 
@@ -466,7 +466,7 @@ the radio's own menu first. Needs watching before the contest: check the
 radio's menu clock (which does show seconds) after pressing `Alt+T` rather
 than trusting the toolbar's "synced" message alone.
 
-## File layout for a contest session
+## File layout for a contest round
 
 ```
 ~/contest-dir/

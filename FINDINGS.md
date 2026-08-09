@@ -179,7 +179,7 @@ calibration then costs one line rather than a ruined recording.
   fit through it returns a physically absurd −1.5 A intercept purely from the short
   lever arm.
 - **A cheap multimeter's burden voltage is enough to brown the radio out, and the
-  radio itself measures it.** With the meter in series, the session's own `vd`
+  radio itself measures it.** With the meter in series, the round's own `vd`
   readings fell to raw 22–41 — 10.2–10.7 V at the radio against 13.7 V at the
   supply, i.e. ~0.55 Ω of shunt plus leads — and at 25% power the radio hit
   undervoltage and switched off, twice, reproducibly. The current readings stay
@@ -188,7 +188,7 @@ calibration then costs one line rather than a ruined recording.
   failure produced the fit above. What it does cost is the assumption that the
   receive baseline stays constant while being subtracted — part of why the lowest
   point fits worst.
-- **Vd's own curve is confirmed by the same session.** Across 10–100% power the gap
+- **Vd's own curve is confirmed by the same round.** Across 10–100% power the gap
   between supply voltage and converted Vd grows 0.37 → 0.81 V, and that gap is
   *linear in current*: 54 mΩ of series resistance with a 0.10 V intercept. A wrong
   curve would have shown curvature or a nonsense intercept. The 54 mΩ is worth
@@ -243,7 +243,7 @@ Two separate problems, found in sequence:
    Without an explicit `fps=` filter the branch was laid out by frame count rather
    than by true timestamps, so it ran slightly fast the whole way through.
 2. **Two independent crystals don't tick at the same rate.** Reported as "video
-   ahead of audio by 1:48 into a 2 h session", confirmed by ear and by uploading to
+   ahead of audio by 1:48 into a 2 h round", confirmed by ear and by uploading to
    YouTube. The whole-hour offset correction passed sub-hour *rate* skew straight
    through, invisible to every test that only checked "does the render apply
    whatever `webcam_start` it was given" rather than "is `webcam_start` correct".
@@ -252,7 +252,7 @@ Two separate problems, found in sequence:
    the assumed start showed a *growing* gap — ~0 s near the start, ~+3.2 s near the
    end. A linear drift, which no single offset can correct.
 
-`refine_webcam_start` fits both: anchors sampled evenly across the *whole* session
+`refine_webcam_start` fits both: anchors sampled evenly across the *whole* round
 (an earlier version took the first few, clustered them in the opening minutes and
 got a near-meaningless rate), cross-correlated via an RMS envelope rather than raw
 samples (a coarse amplitude-rhythm signature survives two very different
@@ -263,7 +263,7 @@ coarse-only mapping was off by 2.73 s, the rate-corrected one by 0.07 s.
 
 **Rejected: tagging the true start into the mp4's container metadata after
 capture.** It works (tested on a real ~2 h/3 GB file: a 15 s stream-copy remux) but
-needs a full second copy of the file on disk at exactly the point in a session when
+needs a full second copy of the file on disk at exactly the point in a round when
 free space is tightest. The rename that replaced it took 0.006 s on that same file —
 a directory-entry update, independent of size.
 
@@ -291,7 +291,7 @@ a directory-entry update, independent of size.
   checking `font.getmetrics()`. Verified by pixel-diffing the same frame: 39
   differing pixels before, 0 after.
 - **Redraw only the rows pyte marks dirty.** Redrawing every row every frame took
-  123.8 s for a 76.9 s clip (0.62× realtime — hours for a full session); redrawing
+  123.8 s for a 76.9 s clip (0.62× realtime — hours for a full round); redrawing
   only `screen.dirty` onto a persistent canvas cut it to 25.6 s (~3× realtime), a 5×
   speedup measured on the same input.
 

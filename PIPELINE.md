@@ -52,7 +52,7 @@ is what starts and stops everything:
 - **Window 1 (`bg`, not recorded)**: `hamlib_supervisor.py` and
   `on4kst_irc_bridge.py`. They live here rather than in a `systemd --user` unit
   precisely because they should run for the round and not a minute longer —
-  killing the session tears them down with everything else. Attach to it to
+  killing the tmux session tears them down with everything else. Attach to it to
   watch the bridge's connect/drop messages.
 
 Separately and by hand: the **IC-9700's own Voice Recorder** is switched on, and
@@ -79,7 +79,7 @@ uv run contest_video.py recording *.edi \
   --cast *.cast --webcam *-webcam-*.mp4 --scope *.scope -o out.mp4
 ```
 
-This is the long, unattended step — roughly 1.5× the session's own length at
+This is the long, unattended step — roughly 1.5× the round's own length at
 720p with everything on. Preview first: `--duration 1200 --res 720p` cuts it to
 minutes, and `--hud-demo` checks the status bar's layout in about a second.
 
@@ -120,7 +120,7 @@ youtubeuploader \
   requiring a re-click through the browser consent screen. Irrelevant in practice since
   contests are monthly.
 
-### Why the logger session is recorded with asciinema
+### Why the logger's pane is recorded with asciinema
 
 `run-recorded-contest-session.sh` records the logger's pane with
 [asciinema](https://asciinema.org/) — not the irssi pane, and not a

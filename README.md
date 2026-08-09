@@ -20,7 +20,7 @@ Amateur radio contest toolset for the Puskás URH Kupa, plus a general-purpose
 | `run-recorded-contest-session.sh` | The contest-round entrypoint — recorded irssi + logger, plus rig/rotator supervision and the bridge in a background window |
 | `sync-clock.sh` | Forces an immediate chrony resync (offset + drift rate) right before a round starts |
 
-## Quick start — contest session
+## Quick start — contest round
 
 ```
 uv run puskas_harvester.py          # once, before the round

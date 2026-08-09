@@ -221,7 +221,7 @@ them are in FINDINGS.md.
 
 Turns a contest recording plus its EDI log into a YouTube-ready MP4: a scrolling
 waterfall background, a DOOM-style HUD status bar, and picture-in-picture of the
-logger's own terminal session and the operator's webcam.
+logger's own terminal and the operator's webcam.
 
 ```
 uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
@@ -230,7 +230,7 @@ Dependencies: `numpy`, `pyte`, `pillow` (uv script header) + `ffmpeg`/`ffprobe`.
 
 **RECORDING.md is the companion document** — the full option list, the CW decoder's
 tuned constants and the reasoning behind the QSO-timing heuristics live there, with
-real numbers from real sessions. Keep it current; this section is only what someone
+real numbers from real rounds. Keep it current; this section is only what someone
 *editing the code* has to know.
 
 ### Inputs
@@ -240,7 +240,7 @@ real numbers from real sessions. Keep it current; this section is only what some
   the sum of segment durations**; filename wall-clock is used only to line QSOs up
   against the audio. All segments must share one sample rate/format (they are
   concatenated with `ffmpeg -f concat -c copy`).
-- **Multiple EDI files merge into one timeline** — a session worked across bands
+- **Multiple EDI files merge into one timeline** — a round worked across bands
   writes one EDI per band but is still one physical recording. `merge_edi`
   concatenates and sorts by `dt`. `Qso` carries no band field; band only ever
   mattered for logging, not rendering.
@@ -299,7 +299,7 @@ intermediate wav.
   `--skip-gaps` needs an explicit `long_cw_segs` exemption or `remap_audio_t` would
   trim away the very audio just recovered.
 - **`--duration SECONDS` trims before the decode loop**, not after — decoding is the
-  dominant cost, so a 10-minute preview of a 2-hour session decodes ~12× less audio.
+  dominant cost, so a 10-minute preview of a 2-hour round decodes ~12× less audio.
   QSOs past the cutoff are dropped before chapters/SRT are built.
 - Also writes `<out>.chapters.txt` (paste into the YouTube description; first
   chapter must be `0:00`, and anything within `MIN_CHAPTER_GAP_S` of the previous
@@ -331,7 +331,7 @@ RECORDING.md has the cases, and the regression tests name them.
   status bar: nothing may overlap it. The webcam goes on top of it, inside the face
   recess.
 - **Every side stream needs `tpad=stop_mode=clone`** so a clip shorter than the
-  session cannot end the shared filtergraph early and silently truncate the main
+  round cannot end the shared filtergraph early and silently truncate the main
   video and audio. This is a real risk class with multi-input filtergraphs.
 - **Sync differs per stream, and the difference is the point:**
   - cast and scope carry real absolute timestamps (asciinema's Unix epoch header;
@@ -351,7 +351,7 @@ RECORDING.md has the cases, and the regression tests name them.
   (ffmpeg has no meaning for a negative `-itsoffset`). This is the **normal** case:
   `run-recorded-contest-session.sh` starts asciinema before the radio recorder, and
   the `.scope` recorder starts when the radio connects. Clamping instead showed up
-  as the cast PiP's clock lagging the session by 25 s.
+  as the cast PiP's clock lagging the round by 25 s.
 - **Filter-graph string assertions cannot catch how branches combine.** Three real
   bugs got through them. Verify a change by rendering an actual clip and decoding a
   frame back out.
@@ -384,7 +384,7 @@ The HUD's rule is that the more important a value, the bigger it is drawn.
   `HUD_THEME_DIR` is script-relative — renders run from a contest directory.
 - **`hud_art(theme, W, H)` prepares everything once per render** (crop and scale the
   bar, scale every rect, cut/key/pre-scale the sprites); a frame is then a copy plus
-  values. `draw_hud_frame` is called ~24,000 times for a 2 h session.
+  values. `draw_hud_frame` is called ~24,000 times for a 2 h round.
 - **`HUD_W`/`HUD_H` (1920x340) come from the artwork's own 5.65:1 aspect**, and the
   bar is scaled uniformly or not at all — squashing it turns the compass into an
   ellipse, which is the specific reason this artwork was chosen. A test asserts
@@ -514,7 +514,7 @@ These requirements must be preserved across all future changes:
   the screen — unconditionally 10x/s, even though almost every tick produced
   byte-for-byte identical output (the clock only changes once a second; rig/rotator/
   webcam state changes far less often). Under `--cast` (asciinema recording of this
-  session, see `contest_video.py`) every redraw is a recorded terminal-output event,
+  terminal, see `contest_video.py`) every redraw is a recorded terminal-output event,
   so this meant ~10 recorded events/s for the whole contest, nearly all redundant.
   `_toolbar_signature()` is a pure (no side effects) tuple of everything `_toolbar()`
   reads; `_toolbar_watcher(app)` polls it at the same 10Hz cadence (so a real
@@ -655,7 +655,7 @@ uv run puskas_logger.py
 
 | Priority | Source | How |
 |---|---|---|
-| 1 (highest) | QSOs entered this session | `_update_loc_cache` called after each logged/edited QSO |
+| 1 (highest) | QSOs entered this round | `_update_loc_cache` called after each logged/edited QSO |
 | 2 | Recovered EDI files (crash recovery) | `_update_loc_cache` called for each recovered QSO in `main()` |
 | 3 | `my-logs/*.edi` historical logs | `_parse_edi_files()` always merged via `_merge_loc_sources` |
 | 4 | `~/.puskas/on4kst-seen-stations.json` | merged second |
@@ -668,7 +668,7 @@ No API calls during contest.
 
 **Crash recovery**: at startup, scans `*.edi` / `*.EDI` (case-insensitive) in the current
 directory. If found, shows a summary and offers to resume — all QSOs, serials, and dup state
-are rebuilt from the EDI records. EDI files are the sole persistence format (no session file).
+are rebuilt from the EDI records. EDI files are the sole persistence format (no round file).
 Files are saved as lowercase `YYMMDD-CALL-BAND.edi`, and `load_from_edi` matches
 case-insensitively and deduplicates by stem — a directory holding both spellings of one
 log must never load it twice.
@@ -733,8 +733,8 @@ Macros silently no-op when the radio is offline. Escape aborts via `stop_cw` (0x
 **Offline setup wizard**: if the radio is not reachable at startup and no manual band/mode
 override is set, the logger shows an interactive prompt asking for band (`2M/70CM/23CM`)
 then mode (`SSB/CW/FM`) before entering the main loop. Ctrl-D exits cleanly.
-Mid-session rig disconnect uses `_rig_manual` values as fallback (set by the wizard or
-**Alt+B / Alt+M** during the session), so the wizard only appears once per session.
+Mid-round rig disconnect uses `_rig_manual` values as fallback (set by the wizard or
+**Alt+B / Alt+M** during the round), so the wizard only appears once per round.
 
 **rotctld integration** (optional, no-op when rotctld not running):
 - Background poller (`_rot_thread`) queries `ROTCTLD_HOST:ROTCTLD_PORT` (4533) every
@@ -758,7 +758,7 @@ one network session (see the icom_net.py section above) — the CLI harness reco
 alongside the logger. Re-enabled on every reconnect (scope data output is
 session-scoped on the radio's side); file is lazily opened on the first sweep and
 flushed per sweep. Measured on real hardware: 29.4 sweeps/s at 493 bytes each
-(18-byte header + 475 pixels) = ~14.5 kB/s, so **~105 MB per 2 h session**.
+(18-byte header + 475 pixels) = ~14.5 kB/s, so **~105 MB per 2 h round**.
 
 **Telemetry recorder** (`*-telemetry.jsonl`, always on, **one JSON line per
 actual change**, microsecond stamps): records are *partial* by source --
@@ -832,7 +832,7 @@ below — Alt+V to start/stop, off by default):
   top of the file are the only things that need adjusting for a given machine (find
   with `v4l2-ctl --list-devices` / `pactl list short sources`). `-preset ultrafast`
   keeps the encode cheap enough to run alongside the radio/rotator threads and the UI for a
-  multi-hour session without competing for CPU.
+  multi-hour round without competing for CPU.
 - Stop sends `SIGINT` (not a hard kill) so ffmpeg finalizes the mp4 properly; a
   5 s `wait()` with a `terminate()` fallback guards against ffmpeg hanging. Also
   triggered automatically on exit (`_webcam_stop_if_running`, both the normal
