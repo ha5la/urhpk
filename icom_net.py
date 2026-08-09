@@ -409,11 +409,6 @@ def token_packet(
     return bytes(buf)
 
 
-def parse_token_response(data: bytes) -> bool:
-    """True if the radio accepted the token_packet request."""
-    return len(data) >= 0x40 and data[0x30:0x34] == b"\x00\x00\x00\x00"
-
-
 def parse_capabilities(data: bytes) -> list[dict]:
     """A capabilities_packet is pushed by the radio, unprompted, right
     after the register (requesttype=0x02) token exchange. Recognize one
