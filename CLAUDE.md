@@ -37,10 +37,14 @@ questions about "why does this exist" are answered by where a thing sits in it.
 
 ## Development principles
 
-- **Succinct code comments**: prefer explaining identifiers over comments (Robert C.
-  Martin) — a well-named variable/function usually makes a comment unnecessary. When
-  the *why* genuinely needs explaining (a hidden constraint, a non-obvious tradeoff, a
-  bug's root cause), write a succinct comment, not an essay.
+- **Succinct code comments**: the first question is not "is this short enough" but
+  **what would it cost to omit this entirely** — usually nothing. Then: can a clearer
+  identifier carry it instead (Robert C. Martin)? Only what survives both gets a
+  comment, and then a sentence, not an essay. Three kinds are worth zero and should
+  not be written: **history** ("this used to be X" — git keeps it), **restating the
+  standard**, and **justifying a duplication or workaround** — that last one is a
+  load-bearing excuse, it goes stale silently because nothing tests a justification,
+  and it ends up arguing against a fix that has become free.
 - **Kent Beck's simplicity rule**: always implement the simplest thing that works.
   Prefer decremental development — remove code that isn't needed rather than keeping
   it "just in case". Dead code is technical debt.

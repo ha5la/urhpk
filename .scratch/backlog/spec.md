@@ -1,0 +1,29 @@
+# Backlog
+
+Items carried over from the hand-written `TODO` at the repo root. That file is
+a brainstorm scratchpad in no particular order; items move here as tickets and
+leave there.
+
+This is not one feature — it is the standing list. Each ticket is independent
+unless it says otherwise. The numbering is a suggested order, not a
+dependency chain, and it follows one rule: **things that make later work
+verifiable come before the work they would verify.** The e2e test and the
+pytest budget are first for that reason, and the e2e test is explicitly wanted
+in the window between the structure refactor and the next round.
+
+The `structure/` effort (compressing the project) is tracked separately and
+takes precedence — several of these touch files it is about to move.
+
+| # | Ticket | Kind |
+|---|---|---|
+| 01 | `e2e-test` | verification |
+| 02 | `pytest-budget` | verification |
+| 03 | `radio-clock-sync` | reliability |
+| 04 | `score-mismatch` | correctness |
+| 05 | `cw-decode-follows-radio-mode` | correctness |
+| 06 | `esc-should-not-clear-input` | UX bug |
+| 07 | `render-progress` | UX |
+| 08 | `hud-chip-animation` | UX |
+| 09 | `webcam-face-tracking` | UX |
+| 10 | `translucent-map-pip` | feature |
+| 11 | `waterfall-text` | fun, out of contest time |
