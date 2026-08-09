@@ -71,11 +71,6 @@ concepts, one name.
   forward azimuth at the start of a great circle, which differs from the final
   bearing. `bearing_from_to` would be a lossier name.
 
-## Open decision: one dependency declaration, or two
-
-Not settled — see `issues/02-dependency-declaration.md`. It blocks the library
-work, because it decides whether the library is a sibling module or a package.
-
 ## Order
 
 Each item is a separate issue file. They are ordered so that earlier ones
@@ -89,3 +84,4 @@ shrink the surface later ones have to move.
 6. `06-split-logger.md` — 2,130 lines into modules
 7. `07-prose-compression.md` — name the concepts, shorten the comments
 8. `08-purge.md` — unreferenced code and unreachable codepaths
+9. `09-require-round-directory.md` — a round lives in its own subdirectory
