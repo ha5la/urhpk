@@ -676,18 +676,36 @@ Purpose-built for Puskás URH Kupa rules. Requires `prompt_toolkit` (declared in
 uv run puskas_logger.py
 ```
 
+### Where the code lives
+
+`puskas_logger.py` is the UI and the radio session — the two things that cannot
+usefully be pulled apart from it. The UI is verified by running rounds rather
+than by tests ("no visual glitches" is a real requirement no unit test asserts),
+and the radio's single network session is what the logger exists to own.
+
+| Module | What it owns |
+|---|---|
+| `logbook.py` | QSOs, duplicates, scoring, and the EDI export and crash-recovery read |
+| `loc_cache.py` | Which locator a callsign uses, merged from three sources |
+| `recorders.py` | The round's side-channel files: telemetry, input box, scope, webcam |
+| `rotator.py` | The rotator poll thread, the current bearing, "point there" |
+| `rig_server.py` | The rigctld dialect on 4532, answering from a state snapshot |
+
+`rig_server.serve` takes a `snapshot()` callable rather than reading the
+logger's `_rig`, which is what lets it live outside the file holding that state.
+
 **Locator cache** — built at startup by merging four sources in priority order (highest first):
 
 | Priority | Source | How |
 |---|---|---|
-| 1 (highest) | QSOs entered this round | `_update_loc_cache` called after each logged/edited QSO |
-| 2 | Recovered EDI files (crash recovery) | `_update_loc_cache` called for each recovered QSO in `main()` |
-| 3 | `my-logs/*.edi` historical logs | `_parse_edi_files()` always merged via `_merge_loc_sources` |
+| 1 (highest) | QSOs entered this round | `loc_cache.remember` called after each logged/edited QSO |
+| 2 | Recovered EDI files (crash recovery) | `loc_cache.remember` called for each recovered QSO in `main()` |
+| 3 | `my-logs/*.edi` historical logs | `loc_cache._from_my_logs()`, via `edi.read`, always merged |
 | 4 | `~/.puskas/on4kst-seen-stations.json` | merged second |
 | 5 (lowest) | `~/.puskas/puskas-seen-stations.json` | merged last |
 
-`_merge_loc_sources(*sources)` takes sources highest-priority-first; each locator
-appears once at the position of its highest-priority source. `_update_loc_cache(cache,
+`loc_cache.merge_sources(*sources)` takes sources highest-priority-first; each locator
+appears once at the position of its highest-priority source. `loc_cache.remember(cache,
 callsign, loc)` inserts `loc` at the front of `cache[callsign]` (most recently used first).
 No API calls during contest.
 
@@ -762,7 +780,7 @@ Mid-round rig disconnect uses `_rig_manual` values as fallback (set by the wizar
 **Alt+B / Alt+M** during the round), so the wizard only appears once per round.
 
 **rotctld integration** (optional, no-op when rotctld not running):
-- Background poller (`_rot_thread`) queries `ROTCTLD_HOST:ROTCTLD_PORT` (4533) every
+- Background poller (`rotator.poll_thread`) queries `ROTCTLD_HOST:ROTCTLD_PORT` (4533) every
   `ROTCTLD_POLL_S` (1 s) using the `p` command (returns azimuth and elevation)
 - Current azimuth shown in toolbar as `ROT: 045°` when online, `ROT: ---` when offline
 - **Alt+R** sends `P az 0` to rotctld to slew the rotator; fires in a background thread
@@ -835,7 +853,7 @@ one forward across the events that don't mention it.
   `{"t": ..., "event": "qso", "call", "band", "mode", "nr_s", "dup"}`. This is
   deliberately *not* inferred from the `"text"` stream (Enter-submit,
   Ctrl+U/unix-line-discard, and Escape-abort all just clear the buffer the
-  same way — see the long comment above `_input_log_open` for why that's
+  same way — see the long comment above `recorders.input_log_open` for why that's
   unreliable). It's written from the one place in the code that unambiguously
   knows a QSO was logged, right next to `lb.add(qso)`. `now = datetime.now
   (timezone.utc)` is captured **once** and used for both `qso.dt = now.replace
