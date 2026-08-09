@@ -272,3 +272,15 @@ def load_from_edi(
 
     lb.qsos.sort(key=lambda q: (q.dt, q.nr_s))
     return lb, tname
+
+
+def band_summary(lb: LogBook) -> str:
+    parts = []
+    for b in BANDS:
+        qsos = [q for q in lb.qsos if q.band == b]
+        if not qsos:
+            continue
+        valid = [q for q in qsos if not _is_dup_in_log(qsos, q)]
+        pts = sum(q.dist_km for q in valid)
+        parts.append(f"{b}:{len(qsos)}q/{pts}pt")
+    return "  ".join(parts) or "no QSOs yet"

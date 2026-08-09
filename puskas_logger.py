@@ -42,6 +42,7 @@ from logbook import (
     QSO,
     LogBook,
     _is_dup_in_log,
+    band_summary,
     load_from_edi,
     save_all,
     tname_for,
@@ -441,25 +442,13 @@ def _cw_stop() -> None:
             pass
 
 
-def _band_summary(lb: LogBook) -> str:
-    parts = []
-    for b in ("2M", "70CM", "23CM"):
-        qsos = [q for q in lb.qsos if q.band == b]
-        if not qsos:
-            continue
-        valid = [q for q in qsos if not _is_dup_in_log(qsos, q)]
-        pts = sum(q.dist_km for q in valid)
-        parts.append(f"{b}:{len(qsos)}q/{pts}pt")
-    return "  ".join(parts) or "no QSOs yet"
-
-
 _CW_LEGEND = "  F1:CQ  F2:MY  F3:EXCH  F4:TU  F5:HIS  F6:DE  F7:?  F8:QSY  ESC:STOP"
 
 
 def _print_header(lb: LogBook):
     bar = "━" * W
     print(f"\n\033[1m{bar}\033[0m")
-    print(f" PUSKÁS LOGGER  │  {_band_summary(lb)}")
+    print(f" PUSKÁS LOGGER  │  {band_summary(lb)}")
     print(f"\033[2m{_CW_LEGEND}\033[0m")
     print(f"\033[1m{bar}\033[0m")
 

@@ -16,12 +16,12 @@ from logbook import (
     QSO,
     LogBook,
     _is_dup_in_log,
+    band_summary,
     load_from_edi,
     tname_for,
     write_edi,
 )
 from puskas_logger import (
-    _band_summary,
     _bearing_arrow,
     _edi_qso_count,
     _format_combos,
@@ -652,32 +652,32 @@ class TestQsoEdit:
 
 
 # ──────────────────────────────────────────────────────────────
-# _band_summary
+# band_summary
 # ──────────────────────────────────────────────────────────────
 
 
 class TestBandSummary:
     def test_no_qsos(self):
         lb = LogBook("HA5LA", "JN97TF", {})
-        assert _band_summary(lb) == "no QSOs yet"
+        assert band_summary(lb) == "no QSOs yet"
 
     def test_single_band(self):
         lb = LogBook("HA5LA", "JN97TF", {})
         lb.add(_qso(band="2M", dist_km=100, nr_s=1, h=16))
-        assert _band_summary(lb) == "2M:1q/100pt"
+        assert band_summary(lb) == "2M:1q/100pt"
 
     def test_dups_excluded_from_pts(self):
         lb = LogBook("HA5LA", "JN97TF", {})
         lb.add(_qso(callsign="HA7NS", band="2M", dist_km=100, nr_s=1, h=16))
         lb.add(_qso(callsign="HA7NS", band="2M", dist_km=100, nr_s=2, h=17))  # dup
-        assert _band_summary(lb) == "2M:2q/100pt"
+        assert band_summary(lb) == "2M:2q/100pt"
 
     def test_three_bands(self):
         lb = LogBook("HA5LA", "JN97TF", {})
         lb.add(_qso(band="2M", dist_km=100, nr_s=1, h=16))
         lb.add(_qso(band="70CM", dist_km=200, nr_s=1, h=17))
         lb.add(_qso(band="23CM", dist_km=50, nr_s=1, h=18))
-        s = _band_summary(lb)
+        s = band_summary(lb)
         assert "2M:1q/100pt" in s
         assert "70CM:1q/200pt" in s
         assert "23CM:1q/50pt" in s
@@ -689,7 +689,7 @@ class TestBandSummary:
         ):
             lb.add(_qso(band=band, dist_km=km, nr_s=i, h=16 + i))
         prefix = " PUSKÁS LOGGER  │  "
-        full = prefix + _band_summary(lb)
+        full = prefix + band_summary(lb)
         assert len(full) <= 64
 
 
