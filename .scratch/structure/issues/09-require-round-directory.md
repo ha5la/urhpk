@@ -1,6 +1,6 @@
 # 09 — Refuse to run in the project root
 
-Status: ready-for-agent
+Status: resolved
 
 A round produces a fistful of files — `*.edi`, `*-telemetry.jsonl`,
 `*-input.jsonl`, `*.scope`, `*.cast`, `*-webcam.mp4`. One round's worth is
@@ -27,3 +27,32 @@ round lives in its own subdirectory of the project.
   here costs a contest round, which is worse than the pile it prevents.
 - Needs a test with a pinned fake root rather than one that depends on where
   the suite happens to run.
+
+## Answer
+
+`wiring.round_directory_error(cwd, project_root)` decides;
+`wiring.require_round_directory()` exits 2 with the message. The decision is
+pure and takes both sides as arguments, so it is tested against a pinned root
+rather than wherever the suite runs.
+
+The root is found as `Path(__file__).parent`, not by walking up from the
+current directory — the answer must not depend on the very thing being
+checked. Both sides `.resolve()`, so reaching the root through a symlink is
+still the root.
+
+`puskas_harvester.py` is exempt, as the ticket expected: its real output goes
+to `~/.puskas/` and it is run days ahead, plausibly from the root.
+
+The false-positive rule bit twice, both times usefully:
+
+- **`contest_video.py` is guarded only at the render.** `--hud-demo` and
+  `--hud-theme-check` write one PNG and exit, and RECORDING.md tells you to
+  iterate the HUD's layout with them — from the root, naturally.
+- **`PROJECT_ROOT` was a captured default.** `project_root: Path =
+  PROJECT_ROOT` binds at import, so monkeypatching the module global did
+  nothing. The test caught it; the default is `None` now and the global is read
+  at call time.
+
+Verified by running both, not only by the suite: refused from the root,
+allowed from `26augusztus/`, and `--hud-demo` still writes its PNG from the
+root.

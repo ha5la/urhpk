@@ -43,6 +43,7 @@ from wiring import (
     ROTCTLD_HOST,
     ROTCTLD_PORT,
     SEEN_STATIONS,
+    require_round_directory,
 )
 
 # ──────────────────────────────────────────────────────────────
@@ -1927,6 +1928,7 @@ def _edi_qso_count(path: Path) -> int:
 
 
 def main():
+    require_round_directory()
     print("Puskás URH Kupa Logger")
     print("─" * 40)
 

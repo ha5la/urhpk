@@ -104,7 +104,12 @@ via `/SHow CONFig` after login.
 
 **File layout — global databases live in `~`, per-round files in the CWD.** The
 whole stack runs on one laptop during a round, and a contest directory holds
-exactly one round:
+exactly one round. `puskas_logger.py` and `contest_video.py` enforce it: both
+refuse to start in the project root, since that is where a mistaken launch
+lands and several rounds' files in one directory cannot be told apart
+afterwards. `--hud-demo` and `--hud-theme-check` are exempt — they write one
+PNG and exit, and iterating the HUD's layout from the root is how they are
+meant to be used.
 
 | Path | What |
 |---|---|

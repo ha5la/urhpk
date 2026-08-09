@@ -48,6 +48,7 @@ import pyte
 from PIL import Image, ImageDraw, ImageFont
 
 import edi
+import wiring
 from geo import initial_bearing, maidenhead_to_latlon
 from icom_net import band_from_hz, read_scope_records
 
@@ -3565,6 +3566,11 @@ def main() -> None:
 
     if not args.recdir or not args.edi:
         ap.error("recdir and at least one EDI file are required")
+
+    # Only the render is guarded: --hud-demo and --hud-theme-check write one
+    # PNG and exit, and iterating the HUD's layout from the project root is
+    # exactly how they are meant to be used.
+    wiring.require_round_directory()
 
     W, H = RESOLUTIONS[args.res]
     segs = scan_segments(args.recdir)
