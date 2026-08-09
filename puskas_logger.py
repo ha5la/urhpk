@@ -97,6 +97,13 @@ def _format_combos(by_band: dict[str, list[str]]) -> str:
 _rig: dict = {"band": "", "mode": "", "qrg": "", "online": False}
 _rig_lock = threading.Lock()
 _rig_manual: dict = {"band": "", "mode": ""}
+# Deliberately not guarded by _rig_lock, unlike _rig: a signal handler runs on
+# the main thread wherever it happens to be, and the main thread is the UI,
+# which is regularly inside current_rig()'s critical section. Teardown from the
+# handler taking that lock is a self-deadlock, and SIGTERM is how a round
+# normally ends. Nothing here needs the lock anyway -- this is a single-slot
+# handoff, so the worst a race can do is close() the same session twice, which
+# is idempotent.
 _radio: dict = {"rig": None, "thread": None}  # live session, None while offline
 _shutdown = threading.Event()  # set once the session is being torn down for good
 
@@ -149,15 +156,14 @@ def _radio_thread():
             rig.enable_scope()
             rig.on_meters(on_radio_meters)
             rig.enable_meters()
-            with _rig_lock:
-                _radio["rig"] = rig
+            _radio["rig"] = rig
             while rig.last_rx_age() < RADIO_STALE_S and not _shutdown.is_set():
                 time.sleep(1.0)
         except Exception:
             pass
+        _radio["rig"] = None
         with _rig_lock:
             was_online = _rig["online"]
-            _radio["rig"] = None
             _rig.update(band="", mode="", qrg="", online=False, freq_hz=0, raw_mode="")
         # Only on a real online→offline transition: this loop also runs while
         # the radio has simply never been reachable, and a null line every
@@ -186,8 +192,7 @@ def _radio_thread():
 
 def _radio_rig() -> icom_net.IcomNetRig | None:
     """The live session, or None — for commands (CW keying, clock set)."""
-    with _rig_lock:
-        return _radio["rig"]
+    return _radio["rig"]
 
 
 def _radio_close_if_connected() -> None:
@@ -196,8 +201,7 @@ def _radio_close_if_connected() -> None:
     without it _radio_thread would just see the session go stale and open a
     fresh one on its way out. Called from every exit path, and idempotent."""
     _shutdown.set()
-    with _rig_lock:
-        rig, _radio["rig"] = _radio["rig"], None
+    rig, _radio["rig"] = _radio["rig"], None
     if rig is not None:
         try:
             rig.close()

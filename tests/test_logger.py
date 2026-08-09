@@ -1,6 +1,7 @@
 """Tests for puskas_logger pure functions — no rig, no network, no prompts."""
 
 import io
+import threading
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
@@ -1527,6 +1528,39 @@ class TestRigServer:
             assert rig_server.bind(srv.getsockname()[1]) is None
         finally:
             srv.close()
+
+
+class TestSignalTeardown:
+    """SIGTERM/SIGHUP is the *normal* way a round ends — the entrypoint script
+    kills the tmux session — so the teardown the handler runs is exercised
+    every round, not only on a crash.
+
+    A Python signal handler runs on the main thread, between bytecodes,
+    wherever that thread happens to be. The main thread is the UI, and the UI
+    calls current_rig() constantly, so it is regularly inside `with
+    _rig_lock`. A teardown that takes the same non-reentrant lock therefore
+    self-deadlocks — verified directly: Lock.acquire(timeout=1) returns False
+    when the same thread already holds it, and the real call site has no
+    timeout at all. The process would then hang holding the radio session
+    open, which is precisely the failure the handler exists to prevent.
+    """
+
+    def test_teardown_does_not_block_on_the_rig_lock(self):
+        was_set = pl._shutdown.is_set()
+        done = threading.Event()
+
+        def worker():
+            # exactly what the UI thread is doing when the signal arrives
+            with pl._rig_lock:
+                pl._radio_close_if_connected()
+            done.set()
+
+        threading.Thread(target=worker, daemon=True).start()
+        try:
+            assert done.wait(2.0), "_radio_close_if_connected blocked on _rig_lock"
+        finally:
+            if not was_set:
+                pl._shutdown.clear()
 
 
 class TestScopeRecorder:
