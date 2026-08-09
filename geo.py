@@ -31,6 +31,11 @@ def maidenhead_to_latlon(locator: str) -> tuple[float, float] | None:
     return (lat, lon)
 
 
+def is_locator(text: str) -> bool:
+    """Whether `text` is a well-formed 4- or 6-character Maidenhead locator."""
+    return _LOCATOR.fullmatch((text or "").strip().upper()) is not None
+
+
 def latlon_to_maidenhead(lat: float, lon: float) -> str:
     lon += 180
     lat += 90

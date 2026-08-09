@@ -8,6 +8,7 @@ variant won, so these pin the behaviour the blanket excepts used to provide.
 
 import pytest
 
+import geo
 import on4kst_irc_bridge as bridge
 import puskas_logger as pl
 from geo import (
@@ -114,3 +115,23 @@ class TestCallersSurviveBadLocators:
 
     def test_sked_text_includes_distance_when_valid(self):
         assert "km" in bridge.sked_text("HA7NS", "HA5LA", HOME, FAR)
+
+
+class TestIsLocator:
+    @pytest.mark.parametrize(
+        "good", ["JN97", "JN97WM", "jn97wm", " JN97WM ", "AA00AA", "RR99XX"]
+    )
+    def test_accepts_a_well_formed_locator(self, good):
+        assert geo.is_locator(good)
+
+    @pytest.mark.parametrize(
+        "bad", ["", "   ", "JN9", "JN97W", "JN97WMX", "SS97", "JN97ZZ", "HA5LA", "599"]
+    )
+    def test_rejects_anything_else(self, bad):
+        assert not geo.is_locator(bad)
+
+    def test_agrees_with_maidenhead_to_latlon(self):
+        # One definition of "a locator", not two: anything is_locator accepts
+        # must parse, and anything it rejects must not.
+        for text in ["JN97", "JN97WM", "jn97wm", "JN9", "SS97", "HA5LA", ""]:
+            assert geo.is_locator(text) == (geo.maidenhead_to_latlon(text) is not None)

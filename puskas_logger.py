@@ -36,7 +36,7 @@ from prompt_toolkit.styles import DynamicStyle, Style
 
 import edi
 import icom_net
-from geo import bearing_between, distance_between
+from geo import bearing_between, distance_between, is_locator
 from wiring import (
     ON4KST_SEEN,
     RIG_SERVER_PORT,
@@ -77,7 +77,6 @@ def _format_combos(by_band: dict[str, list[str]]) -> str:
 # ──────────────────────────────────────────────────────────────
 # Locator cache
 # ──────────────────────────────────────────────────────────────
-RE_LOC = re.compile(r"^[A-R]{2}[0-9]{2}([A-X]{2})?$", re.IGNORECASE)
 
 
 def _parse_edi_files() -> dict[str, str]:
@@ -97,7 +96,7 @@ def _parse_edi_files() -> dict[str, str]:
                 if len(f) >= 10:
                     callsign = f[2].strip().upper()
                     loc = f[9].strip().upper()
-                    if callsign and RE_LOC.match(loc):
+                    if callsign and is_locator(loc):
                         cache[callsign] = loc
         except Exception:
             pass
@@ -1041,7 +1040,7 @@ def load_from_edi(
         for r in log.records:
             callsign = r.callsign.upper()
             loc = r.loc.upper()
-            if not (callsign and log.band and RE_LOC.match(loc)):
+            if not (callsign and log.band and is_locator(loc)):
                 continue
             try:
                 nr_s, nr_r = int(r.nr_s), int(r.nr_r)
@@ -1091,7 +1090,7 @@ def parse_input(line: str) -> dict | str:
         return f"Expected serial number as third token, got {tokens[2]!r}"
     loc = ""
     for tok in tokens[3:]:
-        if RE_LOC.match(tok):
+        if is_locator(tok):
             loc = tok[:6]
             break
     if not loc:
@@ -1524,7 +1523,7 @@ def run(lb: LogBook, tname: str):
         if not tokens:
             return ""
         first = tokens[0]
-        if RE_LOC.match(first) and len(tokens) == 1:
+        if is_locator(first) and len(tokens) == 1:
             dist = lb.dist(first)
             bear = lb.bearing(first)
             if dist:
@@ -1706,7 +1705,7 @@ def run(lb: LogBook, tname: str):
                 tokens = event.app.current_buffer.text.upper().split()
                 if tokens:
                     first = tokens[0]
-                    if RE_LOC.match(first):
+                    if is_locator(first):
                         loc = first
                     elif RE_CALLSIGN.match(first):
                         locs = lb.loc_cache.get(first, [])
@@ -1957,7 +1956,7 @@ def main():
         my_callsign = _load_callsign()
         print(f"Callsign: {my_callsign}")
         my_loc = input("Your locator [JN97TF]: ").strip().upper() or "JN97TF"
-        if not RE_LOC.match(my_loc):
+        if not is_locator(my_loc):
             print(f"Warning: {my_loc!r} doesn't look like a valid Maidenhead locator")
         now = datetime.now(timezone.utc)
         default_tname = tname_for(now)

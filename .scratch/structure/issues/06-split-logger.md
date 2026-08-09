@@ -1,6 +1,6 @@
 # 06 — Split puskas_logger.py (2,130 lines)
 
-Status: needs-triage
+Status: claimed
 
 Blocked by: 03
 

@@ -7,10 +7,9 @@ from unittest.mock import MagicMock
 import pytest
 
 import puskas_logger as pl
-from geo import haversine_km, initial_bearing, maidenhead_to_latlon
+from geo import haversine_km, initial_bearing, is_locator, maidenhead_to_latlon
 from puskas_logger import (
     QSO,
-    RE_LOC,
     LogBook,
     _band_summary,
     _bearing_arrow,
@@ -106,7 +105,7 @@ class TestParseInput:
         assert r["loc"] == "JN97"
 
     def test_eight_char_locator_not_accepted(self):
-        # RE_LOC is anchored — 8-char string doesn't match, so loc stays empty → error
+        # is_locator is anchored — an 8-char string doesn't match, so loc stays empty → error
         r = parse_input("HA7NS 59 001 JN97WMXX")
         assert "Usage" in r
 
@@ -1229,23 +1228,20 @@ class TestLocatorOnlyBearing:
 
     When the operator types a bare locator (e.g. heard on air) as the only
     token in the input buffer, _rprompt shows bearing/distance and Alt+R turns
-    the rotator there.  The path branches on RE_LOC.match(first) with
+    the rotator there.  The path branches on is_locator(first) with
     len(tokens)==1 — the len guard prevents firing mid-QSO (e.g. "HA7NS JN97WM").
     lb.bearing()/lb.dist() accept a raw locator string directly; no cache lookup.
     """
 
-    def test_re_loc_matches_4char_locator(self):
-        assert RE_LOC.match("JN97")
-
-    def test_re_loc_matches_6char_locator(self):
-        assert RE_LOC.match("JN97WM")
-
-    def test_re_loc_does_not_match_typical_callsigns(self):
+    def test_typical_callsigns_do_not_read_as_locators(self):
         # Callsigns like HA7NS have a letter where position 3 must be a digit,
-        # so they never match [A-R]{2}[0-9]{2}([A-X]{2})? — no false locator trigger.
-        assert not RE_LOC.match("HA7NS")
-        assert not RE_LOC.match("DL2ABC")
-        assert not RE_LOC.match("OE5XYZ")
+        # so they never match [A-R]{2}[0-9]{2}([A-X]{2})? — no false locator
+        # trigger. geo's own tests cover the pattern itself; this pins the
+        # property the rotator branch depends on.
+        assert is_locator("JN97") and is_locator("JN97WM")
+        assert not is_locator("HA7NS")
+        assert not is_locator("DL2ABC")
+        assert not is_locator("OE5XYZ")
 
     def test_bearing_from_raw_typed_locator(self):
         # lb.bearing() takes the locator string directly — no cache lookup needed.
