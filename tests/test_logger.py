@@ -8,16 +8,21 @@ import pytest
 
 import puskas_logger as pl
 from geo import haversine_km, initial_bearing, is_locator, maidenhead_to_latlon
-from puskas_logger import (
+from logbook import (
     QSO,
     LogBook,
+    _is_dup_in_log,
+    load_from_edi,
+    tname_for,
+    write_edi,
+)
+from puskas_logger import (
     _band_summary,
     _bearing_arrow,
     _edi_qso_count,
     _format_combos,
     _input_log_open,
     _is_contest_time,
-    _is_dup_in_log,
     _merge_loc_sources,
     _on_buffer_changed,
     _predict_nr,
@@ -34,10 +39,7 @@ from puskas_logger import (
     _webcam_precise_start,
     _webcam_toggle,
     current_rot,
-    load_from_edi,
     parse_input,
-    tname_for,
-    write_edi,
 )
 
 # ──────────────────────────────────────────────────────────────
