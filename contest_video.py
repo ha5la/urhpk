@@ -555,13 +555,6 @@ def scan_segments(recdir: str) -> list[Segment]:
 _WAV_TITLE_RE = re.compile(
     r"(\d+)\.(\d+)\.(\d+)\s+(\S+)\s+.*?(RX|TX)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s*$"
 )
-_SSB_ALIASES = (
-    "USB",
-    "LSB",
-    "AM",
-    "DSB",
-    "SAM",
-)  # matches puskas_logger.py's _mode_str
 
 
 def parse_wav_title(title: str) -> tuple[int, str, bool] | None:
@@ -579,9 +572,7 @@ def parse_wav_title(title: str) -> tuple[int, str, bool] | None:
         return None
     mhz, khz, h10, mode, rxtx = m.groups()
     freq_hz = int(mhz) * 1_000_000 + int(khz) * 1_000 + int(h10) * 10
-    if mode in _SSB_ALIASES:
-        mode = "SSB"
-    return freq_hz, mode, rxtx == "TX"
+    return freq_hz, edi.mode_from_radio(mode), rxtx == "TX"
 
 
 def _read_wav_title(path: str) -> str | None:

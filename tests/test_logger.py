@@ -1402,7 +1402,10 @@ class TestRadioUpdate:
 
     def test_cw_reverse_mode_maps_to_cw(self):
         # icom_net spells reverse CW "CW-R" (rigctld spelled it "CWR").
-        assert pl._mode_str("CW-R") == "CW"
+        self._reset()
+        pl._on_radio_update(144_050_000, "CW-R", "2M")
+        assert pl.current_rig() == ("2M", "CW", "144.050", True)
+        self._reset()
 
 
 class TestRigServer:

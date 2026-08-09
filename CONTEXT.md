@@ -87,6 +87,22 @@ The entity a callsign identifies. The harvested database holds stations you
 *might* work; a QSO holds a callsign you *did*. Same string, different role.
 _Avoid_: using this interchangeably with callsign
 
+### Mode
+
+Two vocabularies, and the step between them. `_mode_str` used to name both
+ends of that step, in two files.
+
+**Radio mode**:
+What the radio reports it is doing — `USB`, `CW-R`, `FMN`, a dozen values,
+spelled the way Icom spells them. `civ_mode_name` turns a CI-V code into one.
+_Avoid_: mode (bare), when the radio's spelling is what is meant
+
+**Logged mode**:
+One of the three a contest log records: `SSB`, `CW`, `FM`. `mode_from_radio`
+is the step from a Radio mode to this one; an unrecognised radio mode passes
+through untranslated rather than being guessed at.
+_Avoid_: mode family, normalized mode
+
 ### The scope stack
 
 Four layers of one subject, deepest first. Each is a different kind of object —

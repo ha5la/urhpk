@@ -172,17 +172,6 @@ _radio: dict = {"rig": None, "thread": None}  # live session, None while offline
 _shutdown = threading.Event()  # set once the session is being torn down for good
 
 
-def _mode_str(raw: str) -> str:
-    r = raw.upper()
-    if r in ("USB", "LSB", "AM", "DSB", "SAM"):
-        return "SSB"
-    if r in ("CW", "CWR", "CW-R"):
-        return "CW"
-    if r in ("FM", "FMN", "WFM", "NFM"):
-        return "FM"
-    return r or "SSB"
-
-
 def _on_radio_update(freq_hz, mode, band) -> None:
     # connect() primes freq and mode with separate queries -- until both have
     # arrived, stay "offline" rather than show a half-known state.
@@ -193,7 +182,7 @@ def _on_radio_update(freq_hz, mode, band) -> None:
         # raw dial mode ("USB"), not the contest-normalized one ("SSB").
         _rig.update(
             band=band,
-            mode=_mode_str(mode),
+            mode=edi.mode_from_radio(mode),
             qrg=f"{freq_hz / 1e6:.3f}",
             online=True,
             freq_hz=freq_hz,
@@ -202,7 +191,9 @@ def _on_radio_update(freq_hz, mode, band) -> None:
     # Outside the lock: this flushes to disk, and _apply_update has already
     # filtered out no-op updates, so every call here is a real change.
     _telemetry_write(
-        _telemetry_rig_record(datetime.now(timezone.utc), freq_hz, _mode_str(mode))
+        _telemetry_rig_record(
+            datetime.now(timezone.utc), freq_hz, edi.mode_from_radio(mode)
+        )
     )
 
 

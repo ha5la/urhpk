@@ -20,6 +20,23 @@ HEADER_BY_BAND = {v: k for k, v in BAND_BY_HEADER.items()}
 MODE_BY_CODE = {"1": "SSB", "2": "CW", "6": "FM"}
 CODE_BY_MODE = {v: k for k, v in MODE_BY_CODE.items()}
 
+_RADIO_MODE_FAMILY = {
+    "USB": "SSB", "LSB": "SSB", "AM": "SSB", "DSB": "SSB", "SAM": "SSB",
+    "CW": "CW", "CWR": "CW", "CW-R": "CW",
+    "FM": "FM", "FMN": "FM", "WFM": "FM", "NFM": "FM",
+}  # fmt: skip
+
+
+def mode_from_radio(raw: str) -> str:
+    """The mode a log records, for a mode the radio reports.
+
+    A log knows three modes; a radio reports a dozen. Anything unrecognised is
+    passed through rather than guessed at, so a firmware that invents a mode
+    shows up in the log instead of being silently filed as SSB.
+    """
+    r = (raw or "").upper()
+    return _RADIO_MODE_FAMILY.get(r) or r or "SSB"
+
 
 @dataclass
 class Record:

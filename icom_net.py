@@ -125,7 +125,7 @@ def split_civ_frames(buf: bytes) -> list[bytes]:
     return frames
 
 
-def _mode_str(code: int) -> str:
+def civ_mode_name(code: int) -> str:
     return {
         0x00: "LSB",
         0x01: "USB",
@@ -154,7 +154,7 @@ def parse_civ_update(frame: bytes) -> tuple[str, object] | None:
     if cmd in (0x00, 0x03) and len(payload) >= 5:
         return ("freq", bcd_decode_freq(payload[:5]))
     if cmd in (0x01, 0x04) and len(payload) >= 1:
-        return ("mode", _mode_str(payload[0]))
+        return ("mode", civ_mode_name(payload[0]))
     return None
 
 
