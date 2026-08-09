@@ -1212,8 +1212,8 @@ def write_scope_record(f, ts: float, start_hz: int, end_hz: int, pixels: bytes) 
 def read_scope_records(path) -> list[tuple[float, int, int, bytes]]:
     """Read back a recording written by write_scope_record: a list of
     (timestamp, start_hz, end_hz, pixels) tuples, one per sweep. The sole
-    reader for the format -- contest_video.py and scope_preview.py both
-    import this rather than each re-parsing the binary layout themselves."""
+    reader for the format -- contest_video.py imports this rather than
+    re-parsing the binary layout itself."""
     records = []
     with open(path, "rb") as f:
         while True:

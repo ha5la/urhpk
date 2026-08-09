@@ -2012,18 +2012,13 @@ RENDER_FPS = 30  # output frame rate; the webcam PiP is resampled to
 # where these come from; this section only renders them into video.
 # ---------------------------------------------------------------------------
 
-SCOPE_AMP_MAX = (
-    160  # icom_net.py's own SCOPE_AMP_MAX -- raw linear scope units, not dBm
-)
+SCOPE_AMP_MAX = 160  # Icom's own linear scope units, not dBm (see write_scope_record)
 
 SCOPE_WATERFALL_SPAN_S = 10.0  # seconds of history the canvas height represents,
 # matching the real IC-9700 display: a signal takes ~4-5s to
 # scroll through half the physical waterfall's height there.
 
-# Same gradient as scope_preview.py -- kept as a separate copy rather than a
-# shared import, since scope_preview.py is a standalone preview tool with no
-# other dependency on contest_video.py's own rendering conventions (RENDER_FPS,
-# canvas sizing) and the two are otherwise unrelated.
+# Classic SDR waterfall gradient: black -> blue -> cyan -> green -> yellow -> red.
 _SCOPE_COLORMAP_STOPS = [
     (0, (0, 0, 0)),
     (32, (0, 0, 180)),

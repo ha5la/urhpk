@@ -197,8 +197,7 @@ demodulated, not the RF passband the operator was watching.
   and human-debuggability matters more than size, while sweeps arrive several times
   a second already byte-quantised. Verified byte-exact round-trip against real
   hardware. `icom_net.read_scope_records` is the format's single owner —
-  `contest_video.py` and `scope_preview.py` both read it through that, neither
-  reimplements the parser.
+  `contest_video.py` reads it through that rather than reimplementing the parser.
 
 ### Meters
 
