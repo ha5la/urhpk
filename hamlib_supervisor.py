@@ -39,13 +39,14 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from wiring import ROTCTLD_PORT
+
 # ============================================================
 # Configuration
 # ============================================================
 ROT_DEVICE = Path("/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0")
 ROT_MODEL = "603"  # Yaesu GS-232B-compatible (custom Arduino)
 ROT_BAUD = "9600"
-ROTCTLD_PORT = 4533
 
 STOP_TIMEOUT_S = 5.0
 

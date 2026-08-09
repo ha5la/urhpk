@@ -39,7 +39,6 @@ import socket
 import sys
 import time
 import urllib.request
-from pathlib import Path
 
 from geo import (
     bearing_between,
@@ -49,14 +48,13 @@ from geo import (
     latlon_to_maidenhead,
     maidenhead_to_latlon,
 )
+from wiring import ON4KST_SEEN, PUSKAS_DIR, RIG_SERVER_HOST, RIG_SERVER_PORT
 
 # ============================================================
 # Configuration
 # ============================================================
 KST_HOST = "www.on4kst.info"
 KST_PORT = 23000
-PUSKAS_DIR = Path.home() / ".puskas"
-ON4KST_SEEN_PATH = PUSKAS_DIR / "on4kst-seen-stations.json"
 CHAT_CHOICE = "2"  # 144/432 MHz
 IRC_HOST = "127.0.0.1"
 IRC_PORT = 6667
@@ -64,8 +62,6 @@ SERVER_NAME = "on4kst.bridge"
 CHANNEL = "#on4kst"
 REFRESH_SEC = 120
 RECONNECT_S = 30
-RIGCTLD_HOST = "localhost"
-RIGCTLD_PORT = 4532  # rigctld dialect; normally served by puskas_logger's rig server
 RIG_QUERY_TIMEOUT_S = 0.5
 
 # ============================================================
@@ -88,11 +84,6 @@ def load_credentials() -> tuple[str, str]:
     print("[error] No credentials found in ~/.netrc.")
     print(f"  Add: machine {KST_HOST} login <callsign> password SECRET")
     sys.exit(1)
-
-
-# ============================================================
-# Locator math (Maidenhead → lat/lon, haversine, bearing)
-# ============================================================
 
 
 def _loc_distance_str(my_loc: str, their_loc: str) -> str:
@@ -218,7 +209,9 @@ async def fetch_rig_info() -> tuple[str, str]:
     for a listening-but-hung server."""
     try:
         async with asyncio.timeout(RIG_QUERY_TIMEOUT_S):
-            reader, writer = await asyncio.open_connection(RIGCTLD_HOST, RIGCTLD_PORT)
+            reader, writer = await asyncio.open_connection(
+                RIG_SERVER_HOST, RIG_SERVER_PORT
+            )
             try:
                 writer.write(b"f\nm\n")
                 await writer.drain()
@@ -295,20 +288,17 @@ RE_LOCATOR = re.compile(r"\b([A-R]{2}\d{2}[A-X]{2})\b", re.I)
 
 def _load_seen() -> dict[str, dict]:
     try:
-        return json.loads(ON4KST_SEEN_PATH.read_text(encoding="utf-8"))
+        return json.loads(ON4KST_SEEN.read_text(encoding="utf-8"))
     except Exception:
         return {}
 
 
 def _persist_seen(data: str) -> None:
     try:
-        if (
-            ON4KST_SEEN_PATH.exists()
-            and ON4KST_SEEN_PATH.read_text(encoding="utf-8") == data
-        ):
+        if ON4KST_SEEN.exists() and ON4KST_SEEN.read_text(encoding="utf-8") == data:
             return
         PUSKAS_DIR.mkdir(exist_ok=True)
-        ON4KST_SEEN_PATH.write_text(data, encoding="utf-8")
+        ON4KST_SEEN.write_text(data, encoding="utf-8")
     except Exception:
         pass
 

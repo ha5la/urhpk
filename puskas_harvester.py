@@ -18,12 +18,12 @@ import time
 import urllib.request
 from pathlib import Path
 
+from wiring import PUSKAS_DIR, SEEN_STATIONS
+
 CONTEST_ID = "67952021b55b621ae6619a4e"
 BASE_URL = "https://bb.mrasz.hu/nest"
 LIST_URL = "https://bb.mrasz.hu/nest/events/list?site=bb.mrasz.hu"
 CACHE_DIR = Path(".puskas_cache")
-PUSKAS_DIR = Path.home() / ".puskas"
-OUTPUT = PUSKAS_DIR / "puskas-seen-stations.json"
 REQUEST_DELAY = 0.3
 REQUEST_TIMEOUT = 15
 HEADERS = {
@@ -207,10 +207,10 @@ def main():
                 )
 
     PUSKAS_DIR.mkdir(exist_ok=True)
-    OUTPUT.write_text(
+    SEEN_STATIONS.write_text(
         json.dumps(stations, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    print(f"\n[OK] {len(stations)} stations → {OUTPUT}")
+    print(f"\n[OK] {len(stations)} stations → {SEEN_STATIONS}")
     print(f"     Delete {CACHE_DIR}/ to force a fresh fetch next time")
 
 

@@ -38,8 +38,8 @@ async def bridge_env():
     dead.bind(("127.0.0.1", 0))
     dead_port = dead.getsockname()[1]
     dead.close()
-    orig_rig_port = bridge_module.RIGCTLD_PORT
-    bridge_module.RIGCTLD_PORT = dead_port
+    orig_rig_port = bridge_module.RIG_SERVER_PORT
+    bridge_module.RIG_SERVER_PORT = dead_port
 
     bridge = Bridge(CALLSIGN)
 
@@ -72,7 +72,7 @@ async def bridge_env():
 
     yield bridge, kst_server, irc_port
 
-    bridge_module.RIGCTLD_PORT = orig_rig_port
+    bridge_module.RIG_SERVER_PORT = orig_rig_port
     kst_task.cancel()
     try:
         await asyncio.wait_for(kst_task, timeout=1.0)
@@ -474,8 +474,14 @@ class TestRigctld:
     async def _live_rig(self, freq_hz: str, mode: str):
         rig = MockRigctld(freq_hz=freq_hz, mode=mode)
         await rig.start()
-        orig_host, orig_port = bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT
-        bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT = "127.0.0.1", rig.port
+        orig_host, orig_port = (
+            bridge_module.RIG_SERVER_HOST,
+            bridge_module.RIG_SERVER_PORT,
+        )
+        bridge_module.RIG_SERVER_HOST, bridge_module.RIG_SERVER_PORT = (
+            "127.0.0.1",
+            rig.port,
+        )
         return rig, (orig_host, orig_port)
 
     async def test_sked_includes_qrg_from_live_server(self, bridge_env):
@@ -495,11 +501,11 @@ class TestRigctld:
             )
         finally:
             w.close()
-            bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT = orig
+            bridge_module.RIG_SERVER_HOST, bridge_module.RIG_SERVER_PORT = orig
             await rig.stop()
 
     async def test_sked_omits_qrg_when_rig_server_unavailable(self, bridge_env):
-        # bridge_env points RIGCTLD_PORT at a dead port by default.
+        # bridge_env points RIG_SERVER_PORT at a dead port by default.
         bridge, kst_server, irc_port = bridge_env
         bridge.my_locator = "JN97MX"
         bridge.kst.online_users["G6DDN"] = {
@@ -526,5 +532,5 @@ class TestRigctld:
             await client.recv_until("144.174 MHz USB")
         finally:
             w.close()
-            bridge_module.RIGCTLD_HOST, bridge_module.RIGCTLD_PORT = orig
+            bridge_module.RIG_SERVER_HOST, bridge_module.RIG_SERVER_PORT = orig
             await rig.stop()

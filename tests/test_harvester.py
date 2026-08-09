@@ -234,7 +234,7 @@ class TestMain:
         )
         output = tmp_path / "output.json"
         monkeypatch.setattr(puskas_harvester, "PUSKAS_DIR", tmp_path)
-        monkeypatch.setattr(puskas_harvester, "OUTPUT", output)
+        monkeypatch.setattr(puskas_harvester, "SEEN_STATIONS", output)
         return output
 
     def test_newer_round_locator_appears_first(self, tmp_path, monkeypatch):

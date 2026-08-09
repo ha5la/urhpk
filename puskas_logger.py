@@ -36,22 +36,23 @@ from prompt_toolkit.styles import DynamicStyle, Style
 
 import icom_net
 from geo import bearing_between, distance_between
+from wiring import (
+    ON4KST_SEEN,
+    RIG_SERVER_PORT,
+    ROTCTLD_HOST,
+    ROTCTLD_PORT,
+    SEEN_STATIONS,
+)
 
 # ──────────────────────────────────────────────────────────────
 # Configuration
 # ──────────────────────────────────────────────────────────────
 RADIO_HOST = "icom9700"  # credentials in ~/.netrc under this machine name
-RIG_SERVER_PORT = 4532  # serve rig state in rigctld dialect (for the bridge)
 RADIO_CONNECT_TIMEOUT_S = 5.0
 RADIO_STALE_S = 5.0  # no CI-V-socket traffic for this long = session dead
 RADIO_RECONNECT_S = 15.0  # quiet time the radio needs before accepting a new session
-ROTCTLD_HOST = "localhost"
-ROTCTLD_PORT = 4533
 ROTCTLD_POLL_S = 1
 MY_LOGS_DIR = Path("my-logs")
-PUSKAS_DIR = Path.home() / ".puskas"
-SEEN_STATIONS = PUSKAS_DIR / "puskas-seen-stations.json"
-ON4KST_SEEN = PUSKAS_DIR / "on4kst-seen-stations.json"
 _BANDS = ("2M", "70CM", "23CM")
 _MODES = ("SSB", "CW", "FM")
 WEBCAM_DEVICE = "/dev/video0"  # find with: v4l2-ctl --list-devices
