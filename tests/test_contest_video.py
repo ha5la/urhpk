@@ -19,6 +19,7 @@ import contest_video as cv
 import cw_decode
 import rig_state
 import timeline as tl
+import video_format
 import webcam_sync
 from cast_render import (
     CAST_BG,
@@ -29,12 +30,6 @@ from cast_render import (
     parse_cast_header,
 )
 from chapters import CAPTION_DUR_S, _srt_time, _yt_time, build_chapters, build_srt
-from contest_video import (
-    SCOPE_AMP_MAX,
-    _resize_scope_row,
-    _scope_colormap,
-    render_scope_video,
-)
 from cw_decode import (
     MAX_OVER_S,
     CharEvent,
@@ -55,6 +50,12 @@ from rig_state import (
     load_input_log,
     load_telemetry,
     match_qso_times,
+)
+from scope_render import (
+    SCOPE_AMP_MAX,
+    _resize_scope_row,
+    _scope_colormap,
+    render_scope_video,
 )
 from timeline import (
     GAP_KEEP_S,
@@ -459,7 +460,7 @@ class TestRenderWebcamSync:
         )
         fchain = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
         pip_chain = fchain.split("[1:v]")[1].split("[pip]")[0]
-        assert f"fps={cv.RENDER_FPS}" in pip_chain
+        assert f"fps={video_format.RENDER_FPS}" in pip_chain
 
     def test_pip_branch_stretches_timeline_by_webcam_rate(self, monkeypatch, tmp_path):
         # Regression test for a real reported bug, separate from the frame-
@@ -489,7 +490,9 @@ class TestRenderWebcamSync:
         fchain = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
         pip_chain = fchain.split("[1:v]")[1].split("[pip]")[0]
         assert pip_chain.startswith("setpts=PTS/0.9995")
-        assert pip_chain.index("setpts=") < pip_chain.index(f"fps={cv.RENDER_FPS}")
+        assert pip_chain.index("setpts=") < pip_chain.index(
+            f"fps={video_format.RENDER_FPS}"
+        )
 
     def test_webcam_pip_is_not_mirrored(self, monkeypatch, tmp_path):
         # The same-machine Alt+V capture records the laptop cam the right way
@@ -549,7 +552,9 @@ class TestRenderWebcamSync:
         fchain = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
         cast_chain = fchain.split("[1:v]")[1].split("[castpip]")[0]
         assert cast_chain.startswith("setpts=PTS/0.9995")
-        assert cast_chain.index("setpts=") < cast_chain.index(f"fps={cv.RENDER_FPS}")
+        assert cast_chain.index("setpts=") < cast_chain.index(
+            f"fps={video_format.RENDER_FPS}"
+        )
         assert 0.0 < cv.CAST_PIP_ALPHA < 1.0  # actually transparent, not opaque
 
 
@@ -2436,7 +2441,7 @@ class TestHudCompass:
         # where the drawn needle (measured back off its pixels) tracks the
         # interpolated bearing to within a few tenths of a degree.
         tl = self._tl([(10.0, 352.0), (11.0, 358.0), (12.0, 4.0)])
-        angles = [tl.at(10.0 + i / cv.RENDER_FPS).rot_az for i in range(61)]
+        angles = [tl.at(10.0 + i / video_format.RENDER_FPS).rot_az for i in range(61)]
         steps = [(b - a + 180) % 360 - 180 for a, b in zip(angles, angles[1:])]
         assert all(0 <= s <= 1 for s in steps), max(steps)
 
@@ -2566,7 +2571,7 @@ class TestHudTheme_Geometry:
         _, _, bw, bh = cv.load_hud_theme()["bar"]
         art_aspect = bw / bh
         assert abs(cv.HUD_W / cv.HUD_H - art_aspect) / art_aspect < 0.01
-        for W, H in cv.RESOLUTIONS.values():
+        for W, H in video_format.RESOLUTIONS.values():
             assert abs(W / cv.hud_height(H) - art_aspect) / art_aspect < 0.01
 
     def test_every_rect_stays_inside_the_bar_and_they_never_overlap(self):
@@ -2904,7 +2909,7 @@ class TestHudRender:
         # libx264 refuses an odd dimension and 720p rounds to 173. Found by
         # rendering a real 720p clip, not by any string-level assertion --
         # the 1080p reference height is already even.
-        for _, H in cv.RESOLUTIONS.values():
+        for _, H in video_format.RESOLUTIONS.values():
             assert cv.hud_height(H) % 2 == 0
 
     def test_render_places_the_hud_bar_along_the_bottom(self):
