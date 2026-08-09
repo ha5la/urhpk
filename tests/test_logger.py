@@ -44,6 +44,7 @@ from recorders import (
     telemetry_rot_record,
     webcam_toggle,
 )
+from tests.helpers import wait_until
 
 # ──────────────────────────────────────────────────────────────
 # Helpers
@@ -1250,22 +1251,18 @@ class TestCurrentRot:
     """rotator.current() reflects rotator._rot state; drives the ROT: toolbar segment."""
 
     def setup_method(self):
-        with rotator._rot_lock:
-            self._saved = dict(rotator._rot)
+        self._saved = dict(rotator._rot)
 
     def teardown_method(self):
-        with rotator._rot_lock:
-            rotator._rot.update(self._saved)
+        rotator._rot.update(self._saved)
 
     def test_offline_when_not_connected(self):
-        with rotator._rot_lock:
-            rotator._rot.update(az=0.0, online=False)
+        rotator._rot.update(az=0.0, online=False)
         _, online = rotator.current()
         assert online is False
 
     def test_returns_azimuth_when_online(self):
-        with rotator._rot_lock:
-            rotator._rot.update(az=123.0, online=True)
+        rotator._rot.update(az=123.0, online=True)
         az, online = rotator.current()
         assert online is True
         assert az == pytest.approx(123.0)
@@ -1273,10 +1270,78 @@ class TestCurrentRot:
     def test_azimuth_not_exposed_when_offline(self):
         # Toolbar shows ROT: --- when offline; az value must not be trusted.
         # rotator.current() signals this via online=False regardless of az content.
-        with rotator._rot_lock:
-            rotator._rot.update(az=270.0, online=False)
+        rotator._rot.update(az=270.0, online=False)
         _, online = rotator.current()
         assert online is False
+
+
+class TestRotctldProtocol:
+    """Talking to rotctld, against a stand-in that answers like the real one.
+
+    rotctld replies to `p` with two lines, azimuth then elevation; only the
+    first is wanted. Worth pinning because nothing else here reads that wire
+    format, and the compass needle in the rendered video comes from it.
+    """
+
+    async def _fake_rotctld(self, reply: bytes, monkeypatch):
+        seen = []
+
+        async def handle(reader, writer):
+            seen.append(await reader.readline())
+            writer.write(reply)
+            await writer.drain()
+            writer.close()
+
+        server = await asyncio.start_server(handle, "127.0.0.1", 0)
+        monkeypatch.setattr(rotator, "ROTCTLD_HOST", "127.0.0.1")
+        monkeypatch.setattr(rotator, "ROTCTLD_PORT", server.sockets[0].getsockname()[1])
+        return server, seen
+
+    async def test_reads_the_azimuth_line_and_ignores_elevation(self, monkeypatch):
+        server, seen = await self._fake_rotctld(b"123.4\n0.0\n", monkeypatch)
+        try:
+            assert await rotator.read_az() == pytest.approx(123.4)
+            assert seen == [b"p\n"]
+        finally:
+            server.close()
+
+    async def test_poll_marks_offline_when_nothing_is_listening(self, monkeypatch):
+        # A closed port is the ordinary case: the rotator is not always on.
+        server, _ = await self._fake_rotctld(b"", monkeypatch)
+        server.close()
+        await server.wait_closed()
+        saved = dict(rotator._rot)
+        writes = []
+        monkeypatch.setattr(rotator, "telemetry_write", writes.append)
+        try:
+            task = asyncio.create_task(rotator.poll())
+            await wait_until(lambda: rotator.current()[1] is False)
+            await asyncio.sleep(0.05)
+            task.cancel()
+            assert rotator.current() == (0.0, False)
+            # Nothing is written: a rotator that was never online has not
+            # changed, and a null line every second would say nothing new.
+            assert writes == []
+        finally:
+            rotator._rot.update(saved)
+
+    async def test_poll_publishes_a_reading_and_records_it_once(self, monkeypatch):
+        server, _ = await self._fake_rotctld(b"90.0\n0.0\n", monkeypatch)
+        saved = dict(rotator._rot)
+        writes = []
+        monkeypatch.setattr(rotator, "telemetry_write", writes.append)
+        monkeypatch.setattr(rotator, "POLL_S", 0.01)
+        try:
+            task = asyncio.create_task(rotator.poll())
+            await wait_until(lambda: rotator.current() == (90.0, True))
+            await wait_until(lambda: len(writes) >= 1)
+            before = len(writes)
+            await asyncio.sleep(0.05)  # several polls, same reading
+            task.cancel()
+            assert len(writes) == before, "an unchanged azimuth was logged again"
+        finally:
+            server.close()
+            rotator._rot.update(saved)
 
 
 # ──────────────────────────────────────────────────────────────

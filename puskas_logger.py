@@ -975,12 +975,14 @@ async def run(lb: LogBook, tname: str):
     )
     session.default_buffer.on_text_changed += on_buffer_changed
     watcher = asyncio.create_task(_toolbar_watcher(session.app))
+    rot_poll = asyncio.create_task(rotator.poll())
     await rig_server.start(RIG_SERVER_PORT, rig_snapshot)
 
     try:
         await _offline_setup()
     except (EOFError, KeyboardInterrupt):
         watcher.cancel()
+        rot_poll.cancel()
         return
 
     while True:
@@ -1129,6 +1131,7 @@ async def run(lb: LogBook, tname: str):
         save_all(lb, tname)
 
     watcher.cancel()
+    rot_poll.cancel()
     print("\nSaving EDI files...")
     paths = save_all(lb, tname)
     if paths:
@@ -1212,7 +1215,6 @@ def main():
     t = threading.Thread(target=_radio_thread, daemon=True)
     _radio["thread"] = t
     t.start()
-    threading.Thread(target=rotator.poll_thread, daemon=True).start()
     _scope_path = Path(
         f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{lb.my_callsign}.scope"
     )
