@@ -10,7 +10,7 @@ How the engineering skills should consume this repo's domain documentation when 
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
 
-This repo is **single-context**. Its narrative documentation already lives in `PIPELINE.md` (the end-to-end story), `ARCHITECTURE.md` (component by component) and `FINDINGS.md` (measurements and dead ends) — read those too; they carry most of the domain knowledge a `CONTEXT.md` would.
+This repo is **single-context**. Its narrative documentation already lives in `docs/PIPELINE.md` (the end-to-end story), `docs/ARCHITECTURE.md` (component by component) and `docs/FINDINGS.md` (measurements and dead ends) — read those too; they carry most of the domain knowledge a `CONTEXT.md` would.
 
 ## File structure
 

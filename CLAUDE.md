@@ -10,16 +10,21 @@ questions about "why does this exist" are answered by where a thing sits in it.
 
 ## The documents
 
+Three live at the root because something insists: GitHub renders README.md,
+the harness reads CLAUDE.md, `docs/agents/domain.md` pins CONTEXT.md. The rest
+are in `docs/`, and are referred to by bare filename everywhere.
+
 | File | What belongs in it |
 |---|---|
 | **CLAUDE.md** (this file) | How to work here: development principles, conventions, house rules |
 | **CONTEXT.md** | What each word means, and nothing else — the project's glossary |
-| **PIPELINE.md** | The end-to-end story: harvest → run the round → render → publish |
-| **ARCHITECTURE.md** | Component by component: what each does and the constraints an edit must not break |
-| **RECORDING.md** | Practical how-to for recording a round and producing a video, with real numbers |
-| **FINDINGS.md** | Measurements, protocol archaeology and dead ends — the evidence behind the rules |
 | **README.md** | The public face: components table, quick starts |
-| **hud-artwork-prompt.md** | Generation prompt and layout spec for the HUD artwork |
+| **docs/PIPELINE.md** | The end-to-end story: harvest → run the round → render → publish |
+| **docs/ARCHITECTURE.md** | Component by component: what each does and the constraints an edit must not break |
+| **docs/RECORDING.md** | Practical how-to for recording a round and producing a video, with real numbers |
+| **docs/FINDINGS.md** | Measurements, protocol archaeology and dead ends — the evidence behind the rules |
+| **docs/operator-setup.md** | This operator's terminal configuration — settings, not project |
+| **docs/hud-artwork-prompt.md** | Generation prompt and layout spec for the HUD artwork |
 
 ## Housekeeping
 

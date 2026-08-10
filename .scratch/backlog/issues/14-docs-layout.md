@@ -1,6 +1,6 @@
 # 14 — README is 42% terminal setup, and the root has eight docs
 
-Status: needs-info
+Status: resolved
 
 Two problems, one ticket, because the fix for each is where the other lands.
 
@@ -31,3 +31,23 @@ files at the root, each with an obvious job.
 
 Worth doing after the structure effort's file splits, not before — 05 and 06
 will change what ARCHITECTURE.md has to describe.
+
+## Answer
+
+The sketch, as written. `docs/` now holds PIPELINE, ARCHITECTURE, RECORDING,
+FINDINGS, hud-artwork-prompt and the new `operator-setup.md`; README, CLAUDE
+and CONTEXT stayed at the root.
+
+Two things worth knowing for the next such move:
+
+- **Nothing broke, because nearly every cross-reference is a bare filename in
+  prose, not a link.** Only README.md linked with paths. So the rule is now
+  written down in CLAUDE.md's document table: the docs are referred to by bare
+  filename, and moving one is a `git mv` plus the table.
+- **`docs/agents/domain.md` names three of them by path** and had to be
+  updated. It is the one file outside the docs that cares where they live.
+
+The README's 50 lines of irssi/tmux/bell settings became
+`docs/operator-setup.md` and are replaced by a two-line pointer, which is what
+the ticket was really about — the front page is now the components table, two
+quick starts, testing, and the documentation index.
