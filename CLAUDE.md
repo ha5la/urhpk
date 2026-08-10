@@ -169,6 +169,9 @@ scoping it to one file has already missed a CI failure.
 
 `.gitignore` excludes scratch files (`*.json`, `*.url`, `*.txt`).
 
+Commits go straight to `master` — one operator, one line of history. Don't
+open a branch unless asked.
+
 ## Agent skills
 
 ### Issue tracker
