@@ -205,6 +205,7 @@ def on_buffer_changed(buf) -> None:
 # ──────────────────────────────────────────────────────────────
 
 _webcam_proc = None
+_webcam_died = False
 _webcam_log_fh = None
 _webcam_out_path = None
 _webcam_log_path = None
@@ -263,10 +264,32 @@ def _webcam_capture_cmd(device: str, audio_source: str, out_path: str) -> list[s
     ]
 
 
+def _webcam_finish() -> None:
+    """Close the ffmpeg log and give the finished mp4 its precise-start name.
+    Shared by the deliberate stop and by webcam_reap: a capture that crashed
+    still leaves a playable prefix, and contest_video finds it by that name
+    like any other."""
+    global _webcam_log_fh, _webcam_out_path, _webcam_log_path
+    if _webcam_log_fh:
+        _webcam_log_fh.close()
+        _webcam_log_fh = None
+    if _webcam_out_path and _webcam_log_path:
+        start = webcam_log.frame_zero_utc(_webcam_log_path)
+        if start is not None:
+            renamed = _webcam_precise_name(_webcam_out_path, start)
+            try:
+                Path(_webcam_out_path).rename(renamed)
+            except OSError:
+                pass  # leave it at its original name -- not fatal
+    _webcam_out_path = None
+    _webcam_log_path = None
+
+
 def webcam_toggle(path_prefix: str) -> str | None:
     """Start or stop webcam capture; returns a status message for the
     toolbar/notice area, or None if nothing changed (e.g. ffmpeg missing)."""
-    global _webcam_proc, _webcam_log_fh, _webcam_out_path, _webcam_log_path
+    global _webcam_proc, _webcam_died, _webcam_log_fh, _webcam_out_path
+    global _webcam_log_path
     now = datetime.now(timezone.utc)
     if _webcam_proc is None:
         out_path = f"{path_prefix}-webcam.mp4"
@@ -284,6 +307,7 @@ def webcam_toggle(path_prefix: str) -> str | None:
             return f"webcam start failed: {e}"
         _webcam_out_path = out_path
         _webcam_log_path = log_path
+        _webcam_died = False
         log_input_event(
             {"t": now.strftime("%Y-%m-%dT%H:%M:%S.%fZ"), "event": "webcam_start"}
         )
@@ -295,29 +319,43 @@ def webcam_toggle(path_prefix: str) -> str | None:
         except subprocess.TimeoutExpired:
             _webcam_proc.terminate()
         _webcam_proc = None
-        if _webcam_log_fh:
-            _webcam_log_fh.close()
-            _webcam_log_fh = None
-        if _webcam_out_path and _webcam_log_path:
-            start = webcam_log.frame_zero_utc(_webcam_log_path)
-            if start is not None:
-                renamed = _webcam_precise_name(_webcam_out_path, start)
-                try:
-                    Path(_webcam_out_path).rename(renamed)
-                except OSError:
-                    pass  # leave it at its original name -- not fatal
-        _webcam_out_path = None
-        _webcam_log_path = None
+        _webcam_finish()
         log_input_event(
             {"t": now.strftime("%Y-%m-%dT%H:%M:%S.%fZ"), "event": "webcam_stop"}
         )
         return "recording stopped"
 
 
-def webcam_recording() -> bool:
-    """Whether a webcam capture is running right now — what the toolbar's REC
-    indicator shows."""
-    return _webcam_proc is not None
+def webcam_status() -> str:
+    """ "recording", "died" (ffmpeg exited without being asked to) or "off" —
+    what the toolbar's webcam block shows. Pure: webcam_reap() is what
+    notices an exit, because the toolbar's redraw check reads this on every
+    tick and must stay free of side effects."""
+    if _webcam_proc is not None:
+        return "recording"
+    return "died" if _webcam_died else "off"
+
+
+def webcam_reap() -> str | None:
+    """Notice a capture that ended on its own and finalize what it left
+    behind; returns a message the first time, None thereafter.
+
+    Without this an ffmpeg that died at 18:20 leaves the toolbar showing
+    ● REC for the rest of the round — the one state where the operator most
+    needs telling is the one a bare `is not None` cannot see."""
+    global _webcam_proc, _webcam_died
+    if _webcam_proc is None or _webcam_proc.poll() is None:
+        return None
+    _webcam_proc = None
+    _webcam_died = True
+    _webcam_finish()
+    log_input_event(
+        {
+            "t": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            "event": "webcam_died",
+        }
+    )
+    return "webcam recording stopped unexpectedly"
 
 
 def webcam_stop_if_running() -> None:

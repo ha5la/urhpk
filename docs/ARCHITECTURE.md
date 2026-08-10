@@ -756,6 +756,7 @@ HA7NS 599 014 JN97WM   → CW with locator
 - Up/Down → navigate log in edit mode; window scrolls to keep focused row centred
 - Escape → exits edit mode (screen redraws immediately) and/or aborts CW transmission
 - Alt+R → point rotator at bearing of selected/typed station (no-op when rotctld offline)
+- Alt+S → confirm the radio's Voice Recorder is running (see **Recording warnings** below)
 - Alt+V → start/stop webcam recording (see **Webcam capture** below); toolbar shows a red
   `● REC` indicator the whole time it's running, plus a transient confirmation message
 
@@ -875,6 +876,33 @@ one forward across the events that don't mention it.
   `contest_video.py`'s `match_qso_times` line them up exactly; it is the fix for
   "weird QSO timing" in a preview, where the EDI's minute-only precision let
   `_snap_to_burst` occasionally pick the wrong neighbouring burst.
+
+**Recording warnings** — the toolbar carries a block per recording that ought to be
+running, because a round that was not recorded cannot be re-run:
+- **`SD ✗` (red) / `SD ●`** — the radio's Voice Recorder, toggled by Alt+S. This
+  one is the operator's word, not a measurement: the IC-9700's CI-V command table
+  has no start/stop and no in-progress status for the recorder (FINDINGS.md), so
+  the block starts red every round and only Alt+S clears it.
+- **`■ REC SET` (yellow)** — the recorder's *settings* are readable, and two of them
+  decide whether the segments are usable: `File Split` must be ON (it is what makes
+  a segment boundary an RX/TX transition, which `qso_windows.py` depends on) and
+  `RX REC Condition` must be `Always`, not the radio's own default `Squelch Auto`.
+  Read once per radio connect via `icom_net`'s `read_param`; Alt+S re-reads and
+  spells out which one is wrong. The connect-time check deliberately posts no
+  notice — the logger's pane is ~95 columns (half of a 191-column terminal, see
+  `run-recorded-contest-session.sh`) and a notice would crowd the clock off it, so
+  nothing appears in this toolbar unbidden.
+- **`● REC` / `NO WEBCAM` (yellow) / `WEBCAM DIED` (red)** — from
+  `recorders.webcam_status()`. `webcam_reap()`, called by `_toolbar_watcher`, is what
+  notices an ffmpeg that exited on its own; without it a capture that died at 18:20
+  would keep showing `● REC` for the rest of the round.
+
+**Glyphs in this toolbar are limited to what DejaVu Sans Mono has** — ● ■ ⚠ ✓ ✗ —
+because the pane is replayed into the video by `cast_render.py`, which draws it with
+that font (`CAST_FONT_PATH`). Emoji like 📷 or 💾 look right in the terminal and come
+out as tofu boxes in the rendered video; they are also double-width in some terminals,
+which shifts every column after them. (Unicode has no SD-card character at all, so
+`SD ✗`/`SD ●` is the closest thing available regardless.)
 
 **Webcam capture** (`YYMMDD-CALL-webcam.mp4` while recording, renamed on stop — see
 below — Alt+V to start/stop, off by default):

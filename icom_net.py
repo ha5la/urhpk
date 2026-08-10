@@ -219,6 +219,37 @@ def civ_clock_payloads(now: datetime) -> list[bytes]:
 
 
 # ============================================================
+# Voice Recorder settings
+#
+# The IC-9700's CI-V command table has no way to start, stop, or ask about
+# the Voice Recorder -- only its settings, as ordinary numbered parameters.
+# So nothing here can tell whether the operator pressed REC; what it can tell
+# is whether what gets recorded will be usable (puskas_logger.recorder_warnings).
+# ============================================================
+
+CIV_PARAM_RX_REC_CONDITION = bytes([0x02, 0x43])  # 00=Always, 01=Squelch Auto
+CIV_PARAM_FILE_SPLIT = bytes([0x02, 0x44])  # 00=OFF, 01=ON
+
+
+def parse_param_reply(frame: bytes, param: bytes) -> int | None:
+    """The value the radio reports for numbered setting `param`, or None if
+    `frame` is not that reply.
+
+    The addressing byte is load-bearing here, unlike in the other parsers: a
+    query and its reply differ only in direction, so without it the bus's echo
+    of our own query reads as an answer to it."""
+    if (
+        len(frame) < 7
+        or frame[0] != CIV_CONTROLLER_ADDR
+        or frame[2] != CIV_CMD_SET_PARAM
+        or frame[3] != CIV_PARAM_SUBCMD
+        or frame[4:6] != param
+    ):
+        return None
+    return frame[6]
+
+
+# ============================================================
 # Scope (spectrum-scope waterfall) frames
 #
 # Not a separate socket/port -- confirmed against real hardware that the
@@ -739,6 +770,31 @@ class IcomNetRig:
         minute boundary (as puskas_logger's Alt+T already does)."""
         for payload in civ_clock_payloads(now):
             self._send_civ_command(CIV_CMD_SET_PARAM, payload)
+
+    async def read_param(self, param: bytes, timeout: float = 2.0) -> int | None:
+        """Read one numbered radio setting, or None if the radio doesn't answer.
+
+        A bounded wait, not a retry loop: this runs on the same event loop as
+        the logger's UI, and a setting nobody could read is worth reporting as
+        unknown rather than worth blocking for."""
+        answer: list[int] = []
+        answered = asyncio.Event()
+
+        def _read_param_listener(frame: bytes) -> None:
+            value = parse_param_reply(frame, param)
+            if value is not None:
+                answer.append(value)
+                answered.set()
+
+        self.on_civ_frame(_read_param_listener)
+        try:
+            self._send_civ_command(CIV_CMD_SET_PARAM, bytes([CIV_PARAM_SUBCMD]) + param)
+            await asyncio.wait_for(answered.wait(), timeout)
+        except TimeoutError:
+            return None
+        finally:
+            self.remove_civ_frame(_read_param_listener)
+        return answer[0]
 
     def on_meters(self, callback) -> None:
         """callback(dict) once per poll cycle, with the latest raw readings."""

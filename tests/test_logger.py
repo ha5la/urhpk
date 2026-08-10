@@ -4,11 +4,13 @@ import asyncio
 import io
 import os
 import signal
+import time
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
 
+import icom_net
 import loc_cache
 import puskas_logger as pl
 import recorders
@@ -36,6 +38,7 @@ from puskas_logger import (
     _print_recent,
     _rig,
     parse_input,
+    recorder_warnings,
 )
 from recorders import (
     _webcam_capture_cmd,
@@ -44,6 +47,8 @@ from recorders import (
     on_buffer_changed,
     telemetry_rig_record,
     telemetry_rot_record,
+    webcam_reap,
+    webcam_status,
     webcam_toggle,
 )
 from tests.helpers import wait_until
@@ -1242,6 +1247,174 @@ class TestWebcamToggleRename:
         assert msg == "recording stopped"
         assert out_path.exists()
         assert out_path.read_bytes() == b"fake mp4 data"
+
+
+class TestWebcamStatus:
+    """What the toolbar's webcam block reads. An ffmpeg that dies mid-round
+    must not keep reporting "recording" -- that is precisely the case the
+    operator needs told about, and the one a bare `is not None` cannot see."""
+
+    def teardown_method(self):
+        recorders._webcam_proc = None
+        recorders._webcam_died = False
+        recorders._webcam_out_path = None
+        recorders._webcam_log_path = None
+        recorders._webcam_log_fh = None
+
+    def _fake_proc(self, exit_code):
+        proc = MagicMock()
+        proc.poll.return_value = exit_code
+        return proc
+
+    def test_off_when_never_started(self):
+        assert webcam_status() == "off"
+        assert webcam_reap() is None
+
+    def test_recording_while_ffmpeg_lives(self):
+        recorders._webcam_proc = self._fake_proc(None)
+        assert webcam_reap() is None
+        assert webcam_status() == "recording"
+
+    def test_died_once_ffmpeg_exits_on_its_own(self):
+        recorders._webcam_proc = self._fake_proc(1)
+        assert webcam_reap() is not None
+        assert webcam_status() == "died"
+
+    def test_death_is_reported_once_not_every_tick(self):
+        # The toolbar watcher calls this 10x/s; a message per tick would
+        # scroll the log away.
+        recorders._webcam_proc = self._fake_proc(1)
+        assert webcam_reap() is not None
+        assert webcam_reap() is None
+
+    def test_death_finalizes_the_mp4_name(self, tmp_path):
+        # A crash still leaves a usable partial recording, and contest_video
+        # finds it by its precise-start name like any other.
+        out_path = tmp_path / "prefix-webcam.mp4"
+        out_path.write_bytes(b"partial mp4 data")
+        log_path = tmp_path / "prefix-webcam.log"
+        log_path.write_text(
+            "Input #0, video4linux2,v4l2, from '/dev/video0':\n"
+            "  Duration: N/A, start: 1784722261.868307, bitrate: 147456 kb/s\n"
+        )
+        recorders._webcam_proc = self._fake_proc(255)
+        recorders._webcam_out_path = str(out_path)
+        recorders._webcam_log_path = str(log_path)
+        webcam_reap()
+        assert (tmp_path / "prefix-webcam-20260722T121101.868307Z.mp4").exists()
+
+
+# ──────────────────────────────────────────────────────────────
+# The radio's own Voice Recorder
+# ──────────────────────────────────────────────────────────────
+
+
+class TestRecorderWarnings:
+    """The two IC-9700 recorder settings that decide whether the segments are
+    usable at all. Values are the CI-V ones: File Split 00=OFF/01=ON, RX REC
+    Condition 00=Always/01=Squelch Auto."""
+
+    def test_silent_when_both_are_what_the_pipeline_needs(self):
+        assert recorder_warnings(file_split=1, rx_rec_condition=0) == []
+
+    def test_warns_when_file_split_is_off(self):
+        # Without it the whole round is one WAV, and qso_windows has no
+        # RX/TX boundaries to snap QSO times to.
+        (warning,) = recorder_warnings(file_split=0, rx_rec_condition=0)
+        assert "File Split" in warning
+
+    def test_warns_when_rx_is_only_recorded_on_squelch(self):
+        # The radio's own default, and it costs the quiet stretches between
+        # QSOs -- plus it splits a segment on every squelch transition.
+        (warning,) = recorder_warnings(file_split=1, rx_rec_condition=1)
+        assert "Squelch" in warning
+
+    def test_reports_both_when_both_are_wrong(self):
+        assert len(recorder_warnings(file_split=0, rx_rec_condition=1)) == 2
+
+    def test_says_nothing_about_a_setting_the_radio_did_not_answer(self):
+        # An unanswered read is not a wrong setting -- claiming otherwise
+        # would train the operator to ignore the block.
+        assert recorder_warnings(file_split=None, rx_rec_condition=None) == []
+        assert len(recorder_warnings(file_split=None, rx_rec_condition=1)) == 1
+
+
+class TestRecorderCheckRun:
+    """_recorder_check_run against a stand-in rig — the link between the CI-V
+    read and what the toolbar shows."""
+
+    def setup_method(self):
+        self._saved = dict(pl._recorder_check)
+        self._saved_rig = pl._radio["rig"]
+
+    def teardown_method(self):
+        pl._recorder_check.clear()
+        pl._recorder_check.update(self._saved)
+        pl._radio["rig"] = self._saved_rig
+
+    class _StubRig:
+        def __init__(self, values):
+            self._values = values
+            self.asked = []
+
+        async def read_param(self, param, timeout=2.0):
+            self.asked.append(param)
+            return self._values.get(param)
+
+    def _run(self, values, notify=False):
+        pl._radio["rig"] = self._StubRig(values)
+        asyncio.run(pl._recorder_check_run(notify=notify))
+
+    def test_reads_both_settings_and_flags_the_bad_one(self):
+        self._run(
+            {
+                icom_net.CIV_PARAM_FILE_SPLIT: 1,
+                icom_net.CIV_PARAM_RX_REC_CONDITION: 1,
+            }
+        )
+        (warning,) = pl._recorder_check["warnings"]
+        assert "Squelch" in warning
+
+    def test_clears_the_flag_once_the_settings_are_fixed(self):
+        self._run({icom_net.CIV_PARAM_FILE_SPLIT: 0})
+        assert pl._recorder_check["warnings"]
+        self._run(
+            {
+                icom_net.CIV_PARAM_FILE_SPLIT: 1,
+                icom_net.CIV_PARAM_RX_REC_CONDITION: 0,
+            }
+        )
+        assert pl._recorder_check["warnings"] == ()
+
+    def test_connect_time_check_posts_no_notice(self):
+        # The toolbar is ~95 columns in the round's tmux layout and a notice
+        # is wide enough to crowd the clock off it. Every notice here is the
+        # answer to a keypress; the connect-time check only sets the flag.
+        pl._recorder_check["until"] = 0.0
+        self._run({icom_net.CIV_PARAM_FILE_SPLIT: 0}, notify=False)
+        assert pl._recorder_check["until"] == 0.0
+
+    def test_alt_s_spells_out_what_is_wrong(self):
+        self._run({icom_net.CIV_PARAM_FILE_SPLIT: 0}, notify=True)
+        assert time.monotonic() < pl._recorder_check["until"]
+        assert "File Split" in pl._recorder_check["notice"]
+
+    def test_alt_s_confirms_settings_that_are_fine(self):
+        # Silence would be indistinguishable from a key that did nothing.
+        self._run(
+            {
+                icom_net.CIV_PARAM_FILE_SPLIT: 1,
+                icom_net.CIV_PARAM_RX_REC_CONDITION: 0,
+            },
+            notify=True,
+        )
+        assert pl._recorder_check["notice"] == "recorder settings OK"
+
+    def test_offline_radio_reports_that_rather_than_a_clean_bill(self):
+        pl._radio["rig"] = None
+        asyncio.run(pl._recorder_check_run(notify=True))
+        assert pl._recorder_check["warnings"] == ()
+        assert "offline" in pl._recorder_check["notice"]
 
 
 # ──────────────────────────────────────────────────────────────

@@ -7,12 +7,17 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from icom_net import (
+    CIV_CONTROLLER_ADDR,
+    CIV_IC9700_ADDR,
+    CIV_PARAM_FILE_SPLIT,
+    CIV_PARAM_RX_REC_CONDITION,
     bcd_decode_freq,
     bcd_encode_freq,
     civ_clock_payloads,
     civ_cw_payload,
     civ_frame,
     parse_civ_update,
+    parse_param_reply,
     parse_scope_frame,
     passcode,
     split_civ_frames,
@@ -243,3 +248,62 @@ def test_civ_clock_payloads_converts_non_utc_input():
     assert civ_clock_payloads(
         datetime(2026, 8, 3, 20, 5, tzinfo=cest)
     ) == civ_clock_payloads(datetime(2026, 8, 3, 18, 5, tzinfo=timezone.utc))
+
+
+def _param_reply(param: bytes, value: int) -> bytes:
+    """A reply frame as split_civ_frames yields it: FE FE/FD already stripped."""
+    return split_civ_frames(
+        civ_frame(
+            CIV_CONTROLLER_ADDR,
+            CIV_IC9700_ADDR,
+            0x1A,
+            bytes([0x05]) + param + bytes([value]),
+        )
+    )[0]
+
+
+def test_parse_param_reply_returns_the_settings_value():
+    assert (
+        parse_param_reply(
+            _param_reply(CIV_PARAM_FILE_SPLIT, 0x01), CIV_PARAM_FILE_SPLIT
+        )
+        == 1
+    )
+    assert (
+        parse_param_reply(
+            _param_reply(CIV_PARAM_RX_REC_CONDITION, 0x00), CIV_PARAM_RX_REC_CONDITION
+        )
+        == 0
+    )
+
+
+def test_parse_param_reply_ignores_a_different_parameter():
+    # 0243 and 0244 are read back-to-back and answered as two separate frames;
+    # matching on the command alone would let one reply answer both queries.
+    frame = _param_reply(CIV_PARAM_RX_REC_CONDITION, 0x01)
+    assert parse_param_reply(frame, CIV_PARAM_FILE_SPLIT) is None
+
+
+def test_parse_param_reply_ignores_the_echo_of_our_own_query():
+    # The CI-V bus echoes what we send back at us, addressed to the radio.
+    # A query for 0244 is `1A 05 02 44` -- byte-identical to a reply whose
+    # value happens to be missing, so only the addressing tells them apart.
+    echo = split_civ_frames(
+        civ_frame(
+            CIV_IC9700_ADDR,
+            CIV_CONTROLLER_ADDR,
+            0x1A,
+            bytes([0x05]) + CIV_PARAM_FILE_SPLIT + bytes([0x01]),
+        )
+    )[0]
+    assert parse_param_reply(echo, CIV_PARAM_FILE_SPLIT) is None
+
+
+def test_parse_param_reply_ignores_unrelated_and_short_frames():
+    assert (
+        parse_param_reply(
+            bytes([CIV_CONTROLLER_ADDR, CIV_IC9700_ADDR, 0x03]), CIV_PARAM_FILE_SPLIT
+        )
+        is None
+    )
+    assert parse_param_reply(b"", CIV_PARAM_FILE_SPLIT) is None

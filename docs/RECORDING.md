@@ -16,6 +16,21 @@ actually use it" companion, with real numbers from real rounds.
 - **Format**: 16 kHz mono PCM WAV, one file per transmission (RX or TX)
 - **Segments are contiguous**: sub-second gaps between files; total duration of
   all WAVs equals the round length
+- **Two settings under `QSO RECORDER > Recorder Set` must be right**, and the
+  radio's own default for the second one is wrong:
+
+  | Setting | Must be | Default | If wrong |
+  |---|---|---|---|
+  | `File Split` | `ON` | ON | one file per 2 GB instead of one per RX/TX switch — `qso_windows.py` loses every boundary it times QSOs from |
+  | `RX REC Condition` | `Always` | **`Squelch Auto`** | quiet stretches missing entirely, and segments cut on squelch transitions too, so RX and TX stop strictly alternating |
+
+  The logger reads both when it connects and flags `■ REC SET` in the toolbar if
+  either is wrong; `Alt+S` says which. Neither failure is otherwise visible
+  until render time, days later.
+- **Press REC before the round, then `Alt+S` in the logger to confirm it.**
+  Nothing on the CI-V bus reports whether the recorder is running (FINDINGS.md),
+  so the logger cannot check this one — it shows a red `SD ✗` block from
+  startup until you say so, and `SD ●` afterwards.
 
 One recording directory per round (e.g. `urhob2026cw/recording/`).
 The matching EDI log lives next to it (`urhob2026cw/260704-HA5LA-2M.edi`).

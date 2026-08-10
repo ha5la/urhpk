@@ -225,6 +225,40 @@ radio's single session slot.
   passive monitor. wfview has a sub-band display, so one capture with dual watch
   enabled would reveal it.
 
+### Dead end: the radio cannot say whether it is recording
+
+The Voice Recorder is started by hand on the front panel, and forgetting to
+press it costs the round's audio — the one thing the pipeline cannot
+reconstruct. So: can the logger notice and warn?
+
+No. The IC-9700's CI-V reference guide command table (checked in full, not
+sampled) exposes the recorder only as **settings** — `1A 05 0242` TX REC Audio,
+`0243` RX REC Condition, `0244` File Split, `0245` REC Operation, `0246` PTT
+Auto REC, `0247` PRE-REC, `0248` Player Skip Time. There is no start command,
+no stop command, and no readable in-progress status anywhere in the table.
+Nothing adjacent substitutes either: `1C 00` is RX/TX only, `1A 0A` is the OVF
+indicator, `1A 0B` is picture TX. The SD card itself is not reachable over the
+LAN session at all.
+
+Hence Alt+S: an acknowledgement the operator gives, not a measurement. It is a
+checklist item with a red block attached, and that is the ceiling of what is
+possible here.
+
+What the settings *do* buy is worth having, because two of them silently ruin
+the recording and neither is visible until render time, days later:
+
+- **`File Split` (0244, default ON)** — ON is what makes the radio cut a new WAV
+  on every RX/TX switch. That boundary is the entire basis of `qso_windows.py`'s
+  QSO timing; with it OFF the round arrives as one file split only at 2 GB.
+- **`RX REC Condition` (0243, default `Squelch Auto`)** — the default is the
+  wrong one. `Squelch Auto` records only while the squelch is open, so every
+  quiet stretch is missing, and (with File Split ON) it also cuts a segment on
+  each squelch transition — so RX and TX no longer strictly alternate, which
+  `qso_windows.py` and RECORDING.md both assume.
+
+A wrong `RX REC Condition` is therefore one factory reset away at any time, and
+costs a round's audio structure without any symptom during the round.
+
 ## contest_video.py
 
 ### The webcam drift diagnosis

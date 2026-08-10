@@ -56,7 +56,9 @@ is what starts and stops everything:
   watch the bridge's connect/drop messages.
 
 Separately and by hand: the **IC-9700's own Voice Recorder** is switched on, and
-it records to its SD card, splitting a new WAV on every RX/TX transition.
+it records to its SD card, splitting a new WAV on every RX/TX transition. Then
+**Alt+S** in the logger, to confirm it — the radio cannot be asked whether it is
+recording, so until you say so the toolbar carries a red `SD ✗`.
 
 While the round runs, the logger is writing five things besides the log: rig and
 rotator telemetry, every keystroke and QSO, the radio's sweeps, and —
@@ -66,7 +68,7 @@ which is why it is all on by default.
 **What must be true before you start**: `~/.netrc` has the ON4KST and radio
 credentials, the radio's Network Control is on, and the radio's clock is close
 (Alt+T syncs it, but see RECORDING.md — it is unreliable when the clock is
-*nearly* right).
+*nearly* right). The toolbar states the rest of it: nothing red, nothing yellow.
 
 ## 3. After the round — render
 

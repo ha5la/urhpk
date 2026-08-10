@@ -59,7 +59,8 @@ from recorders import (
     telemetry_open,
     telemetry_rig_record,
     telemetry_write,
-    webcam_recording,
+    webcam_reap,
+    webcam_status,
     webcam_stop_if_running,
     webcam_toggle,
 )
@@ -172,6 +173,7 @@ async def _radio_task() -> None:
             rig.on_meters(on_radio_meters)
             rig.enable_meters()
             _radio["rig"] = rig
+            _spawn(_recorder_check_run())
             while rig.last_rx_age() < RADIO_STALE_S:
                 await asyncio.sleep(1.0)
         except Exception:
@@ -331,6 +333,75 @@ def _clock_sync() -> None:
     then the result for 5 s once the sync fires. Success = the radio ACKs
     (FB) all three CI-V set commands (UTC offset, time, date)."""
     _spawn(_clock_sync_run())
+
+
+# ──────────────────────────────────────────────────────────────
+# The radio's own Voice Recorder
+#
+# The audio is the one part of a round that cannot be reconstructed
+# afterwards, and it is recorded by the radio to its own SD card, started by
+# hand on the front panel. Nothing on the CI-V bus reports whether that is
+# running (see icom_net's Voice Recorder section), so the toolbar carries an
+# acknowledgement the operator clears with Alt+S and nothing else can.
+#
+# What *is* readable is how the recorder is configured, and two of those
+# settings decide whether the segments are usable at all. Neither failure is
+# visible during the round -- both surface days later, at render time, on the
+# one recording that cannot be made again.
+#
+# Which of them is wrong goes in the notice slot rather than in a block of its
+# own: the logger's pane is half of a 191-column terminal (even-horizontal,
+# see run-recorded-contest-session.sh), and both phrases spelled out
+# permanently push the clock off the right-hand end. What stays is the short
+# flag; Alt+S spells it out, which is the key pressed while the radio's menu
+# is being visited anyway.
+#
+# The connect-time check therefore sets the flag but posts no notice: a notice
+# is wide enough to crowd the clock, and every other one here is the answer to
+# a keypress. Nothing in this toolbar appears unbidden.
+# ──────────────────────────────────────────────────────────────
+_recorder_check: dict = {"warnings": (), "notice": "", "until": 0.0}
+RECORDER_NOTICE_S = 15.0
+
+
+def recorder_warnings(
+    file_split: int | None, rx_rec_condition: int | None
+) -> list[str]:
+    """What is wrong with the Voice Recorder's settings. An unread setting
+    (None) is not a wrong one and says nothing."""
+    warnings = []
+    if file_split == 0:
+        # qso_windows.py's whole model is that a segment boundary is an RX/TX
+        # transition; File Split OFF gives it one 2 GB file with none in it.
+        warnings.append("REC: File Split OFF")
+    if rx_rec_condition == 1:
+        # The radio's own default, and it drops every quiet stretch between
+        # QSOs -- then splits a segment on each squelch transition too, so
+        # RX and TX no longer strictly alternate.
+        warnings.append("REC: RX = Squelch Auto")
+    return warnings
+
+
+def _recorder_report(warnings: tuple, notice: str, notify: bool) -> None:
+    _recorder_check["warnings"] = warnings
+    if notify:
+        _recorder_check.update(
+            notice=notice, until=time.monotonic() + RECORDER_NOTICE_S
+        )
+
+
+async def _recorder_check_run(notify: bool = False) -> None:
+    rig = _radio_rig()
+    if rig is None:
+        _recorder_report((), "recorder settings: radio offline", notify)
+        return
+    try:
+        file_split = await rig.read_param(icom_net.CIV_PARAM_FILE_SPLIT)
+        rx_rec_condition = await rig.read_param(icom_net.CIV_PARAM_RX_REC_CONDITION)
+    except Exception:
+        return  # a session that dropped mid-check says nothing new
+    warnings = tuple(recorder_warnings(file_split, rx_rec_condition))
+    _recorder_report(warnings, " · ".join(warnings) or "recorder settings OK", notify)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -529,6 +600,7 @@ def _handle_command(line: str, lb: LogBook, tname: str):
         print("  Alt+B                    — cycle band (rig offline)")
         print("  Alt+M                    — cycle mode (rig offline)")
         print("  Alt+R                    — point rotator at selected bearing")
+        print("  Alt+S                    — confirm the radio is recording to SD")
         print("  Alt+T                    — sync radio clock to system UTC")
         print("  Alt+V                    — start/stop webcam recording")
         print("  !help                    — this help")
@@ -577,6 +649,9 @@ async def run(lb: LogBook, tname: str):
         "prev_band": None,
         "prev_mode": None,
         "webcam_notice": ("", 0.0),
+        # Starts false every round: the operator's confirmation is about this
+        # round's recording, and a remembered one would be a lie on the next.
+        "sd_ack": False,
     }
     _webcam_path_prefix = (
         f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{lb.my_callsign}"
@@ -628,8 +703,27 @@ async def run(lb: LogBook, tname: str):
         rot_str = f"{rot_az:.0f}°" if rot_online else "---"
         parts.append(("", f"  ROT: {rot_str}  │  "))
 
-        if webcam_recording():
+        if _state["sd_ack"]:
+            parts.append(("", "  SD ●  │  "))
+        else:
+            parts.append(("bg:ansired fg:white", "  SD ✗  │  "))
+
+        if _recorder_check["warnings"]:
+            parts.append(("bg:ansiyellow fg:black", "  ■ REC SET  │  "))
+
+        webcam = webcam_status()
+        if webcam == "recording":
             parts.append(("bg:ansired fg:white", "  ● REC  │  "))
+        elif webcam == "died":
+            parts.append(("bg:ansired fg:white", "  WEBCAM DIED  │  "))
+        else:
+            parts.append(("bg:ansiyellow fg:black", "  NO WEBCAM  │  "))
+
+        if time.monotonic() < _recorder_check["until"]:
+            style = "ansiyellow" if _recorder_check["warnings"] else "ansigreen"
+            parts.append(
+                (f"bg:{style} fg:black", f"  {_recorder_check['notice']}  │  ")
+            )
 
         sync_msg = _clock_sync_notice["msg"]
         sync_until = _clock_sync_notice["until"]
@@ -668,6 +762,8 @@ async def run(lb: LogBook, tname: str):
         webcam_msg, webcam_until = _state["webcam_notice"]
         webcam_active = time.monotonic() < webcam_until
 
+        rec_notice_active = time.monotonic() < _recorder_check["until"]
+
         return (
             band,
             mode,
@@ -677,7 +773,11 @@ async def run(lb: LogBook, tname: str):
             time.monotonic() < _state["warn_until"],
             round(rot_az, 1) if rot_online else None,
             rot_online,
-            webcam_recording(),
+            _state["sd_ack"],
+            _recorder_check["warnings"],
+            rec_notice_active,
+            _recorder_check["notice"] if rec_notice_active else None,
+            webcam_status(),
             sync_active,
             sync_msg,
             webcam_active,
@@ -706,6 +806,9 @@ async def run(lb: LogBook, tname: str):
         current one in this context yet."""
         last = None
         while True:
+            notice = webcam_reap()
+            if notice:
+                _state["webcam_notice"] = (notice, time.monotonic() + 5.0)
             sig = _toolbar_signature()
             if sig != last:
                 last = sig
@@ -937,6 +1040,16 @@ async def run(lb: LogBook, tname: str):
     @kb.add("escape", "t")
     def _on_alt_t(_event):
         _clock_sync()
+
+    @kb.add("escape", "s")
+    def _on_alt_s(event):
+        """Confirm the radio's SD-card recording is running — the one fact
+        about this round the software has no way of finding out for itself.
+        Also re-reads the recorder's settings, since this is the key pressed
+        straight after touching the recorder."""
+        _state["sd_ack"] = not _state["sd_ack"]
+        _spawn(_recorder_check_run(notify=True))
+        event.app.invalidate()
 
     @kb.add("escape", "v")
     def _on_alt_v(_event):
@@ -1210,6 +1323,7 @@ def main():
     input_log_open(_input_log_path)
     print(f"Input log: {_input_log_path}")
     print("Webcam:    Alt+V to start/stop recording")
+    print("Audio:     switch on the radio's Voice Recorder, then Alt+S to confirm")
     print(f"Band/mode: from the radio, {START_BAND} {START_MODE} without one (Alt+B/M)")
 
     print()
