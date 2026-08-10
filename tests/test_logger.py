@@ -17,6 +17,8 @@ import rotator
 import webcam_log
 from geo import haversine_km, initial_bearing, is_locator, maidenhead_to_latlon
 from logbook import (
+    BANDS,
+    MODES,
     QSO,
     LogBook,
     _is_dup_in_log,
@@ -1505,15 +1507,15 @@ class TestRadioUpdate:
 
     def _reset(self):
         _rig.update(band="", mode="", qrg="", online=False)
-        pl._rig_manual.update(band="", mode="")
+        pl._rig_manual.update(band=pl.START_BAND, mode=pl.START_MODE)
 
     def test_partial_update_stays_offline(self):
         # connect() primes freq and mode with separate queries; until both
-        # have arrived the rig must not report online (a half-known state
-        # would show mode "SSB" by fallback for a moment).
+        # have arrived the rig must not report online -- a half-known state
+        # would claim the radio's band while its mode is still a fallback.
         self._reset()
-        pl._on_radio_update(144_174_000, None, "2M")
-        assert pl.current_rig() == ("", "", "", False)
+        pl._on_radio_update(144_174_000, None, "70CM")
+        assert pl.current_rig() == (pl.START_BAND, pl.START_MODE, "", False)
 
     def test_full_update_goes_online_with_formatted_qrg(self):
         self._reset()
@@ -1718,3 +1720,95 @@ async def test_radio_stop_closes_and_clears_the_session(fake_radio_session):
     assert fake_radio_session[0].closed.is_set()
     assert pl._radio_rig() is None
     assert pl._radio["task"] is None
+
+
+def test_the_station_constants_are_values_the_round_can_use():
+    # Nothing checks these at runtime any more: the operator is not asked for
+    # them. A bad locator would miscompute every dist_km and the EDI's PWWLo,
+    # and a band or mode outside the tuples would restart Alt+B/M cycling from
+    # the first entry instead of the next one.
+    assert is_locator(pl.MY_LOCATOR)
+    assert pl.START_BAND in BANDS
+    assert pl.START_MODE in MODES
+
+
+class TestStartingBandAndMode:
+    """Where the round logs before, and after, the radio has its say."""
+
+    async def test_the_round_waits_for_the_first_connect_to_resolve(
+        self, monkeypatch, fake_radio_session
+    ):
+        # The login handshake takes several round trips, so at the instant the
+        # round starts the rig is always still offline. Drawing then would put
+        # the toolbar -- and any QSO logged in that window -- on the starting
+        # band, for a radio that turns out to be on another one.
+        monkeypatch.setitem(pl._rig_manual, "band", pl.START_BAND)
+        monkeypatch.setitem(pl._rig_manual, "mode", pl.START_MODE)
+
+        handshaking = asyncio.Event()
+        answer = asyncio.Event()
+
+        class SlowRig(FakeRig):
+            def on_update(self, cb):
+                self._cb = cb
+
+            async def connect(self, timeout=None):
+                handshaking.set()
+                await answer.wait()
+                self._cb(432_100_000, "CW", "70CM")
+
+        monkeypatch.setattr(pl.icom_net, "IcomNetRig", lambda *a: SlowRig(*a))
+
+        pl._radio_start()
+        waiting = asyncio.create_task(pl._await_radio())
+        assert await wait_until(handshaking.is_set)
+        assert not waiting.done(), "drew the UI while the radio was still connecting"
+
+        answer.set()
+        async with asyncio.timeout(2.0):
+            await waiting
+        assert pl.current_rig() == ("70CM", "CW", "432.100", True)
+
+        await pl._radio_stop()
+
+    async def test_a_failed_connect_releases_the_round(
+        self, monkeypatch, fake_radio_session
+    ):
+        # The other way the first attempt resolves. Without this the round
+        # would never draw when the radio is simply off.
+        monkeypatch.setitem(pl._rig_manual, "band", pl.START_BAND)
+        monkeypatch.setitem(pl._rig_manual, "mode", pl.START_MODE)
+
+        class DeadRig(FakeRig):
+            async def connect(self, timeout=None):
+                raise OSError("no route to host")
+
+        monkeypatch.setattr(pl.icom_net, "IcomNetRig", lambda *a: DeadRig(*a))
+
+        pl._radio_start()
+        async with asyncio.timeout(2.0):
+            await pl._await_radio()
+
+        assert pl.current_rig() == (pl.START_BAND, pl.START_MODE, "", False)
+
+        await pl._radio_stop()
+
+    async def test_a_dropped_session_keeps_the_band_it_was_on(
+        self, monkeypatch, fake_radio_session
+    ):
+        # The manual fallback is what a round logs on once the radio stops
+        # answering. Falling back to the starting band instead would silently
+        # move the log to 2M mid-round, and the EDI is written per band.
+        monkeypatch.setitem(pl._rig_manual, "band", pl.START_BAND)
+        monkeypatch.setitem(pl._rig_manual, "mode", pl.START_MODE)
+
+        pl._radio_start()
+        assert await wait_until(lambda: pl._radio_rig() is not None)
+        pl._on_radio_update(432_100_000, "CW", "70CM")
+        assert pl.current_rig() == ("70CM", "CW", "432.100", True)
+
+        # Cancelling runs the same teardown a stale session does, without the
+        # stale detector's poll interval.
+        await pl._radio_stop()
+
+        assert pl.current_rig() == ("70CM", "CW", "", False)

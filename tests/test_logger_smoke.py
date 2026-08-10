@@ -6,7 +6,7 @@ default run and pre-commit skip it.
 It exists because the logger's UI is verified by running rounds, not by unit
 tests, and `main()` is never called by anything else in the suite. That gap is
 not theoretical: it hid an `UnboundLocalError` in `main()` through 584 green
-tests, and it is the only check that covers the startup wizard, the
+tests, and it is the only check that covers the startup screen, the
 prompt_toolkit application actually starting, and the files a round leaves
 behind.
 
@@ -35,15 +35,14 @@ pytestmark = pytest.mark.smoke
 
 LOGGER = str(Path(__file__).resolve().parent.parent / "puskas_logger.py")
 
-# Answered in the order the logger asks. The band/mode wizard only appears
-# because no radio answered; with one connected the logger takes both from it.
-PROMPTS = [
-    (b"Your locator", b"\r"),
-    (b"Contest name", b"\r"),
-    (b"[Enter to start]", b"\r"),
-    (b"Band [", b"2M\r"),
-    (b"Mode [", b"CW\r"),
-]
+# The only prompt a round with no existing log asks. Callsign, locator and
+# contest name are constants or derived; band and mode come from the radio, or
+# from START_BAND/START_MODE when none answers.
+PROMPTS = [(b"[Enter to start]", b"\r")]
+
+# The input prompt: only the running application prints this. The startup
+# screen's own text is on screen while main() is still opening files.
+APP_UP = "RX ►".encode()
 
 
 class Pty:
@@ -63,6 +62,10 @@ class Pty:
                 "TERM": "xterm-256color",
                 "COLUMNS": "120",
                 "LINES": "40",
+                # Whatever is on this LAN is not part of the test: a real radio
+                # answering here would put the round on its band, and cost it a
+                # session slot.
+                "PUSKAS_RADIO_HOST": "radio.invalid",
             },
         )
         os.close(slave)
@@ -124,7 +127,7 @@ def test_a_whole_round_offline(logger, tmp_path):
         logger.wait_for(marker)
         logger.send(reply)
 
-    logger.wait_for(b"PUSK")  # the toolbar: the application is up
+    logger.wait_for(APP_UP)
     logger.send(b"HA7NS 599 001 JN97WM\r")
     logger.wait_for(b"2M:1q")  # the header scored it
     logger.send(b"\x04")  # Ctrl-D: save and exit
@@ -173,7 +176,7 @@ def test_the_rig_server_answers_while_the_logger_runs(logger):
     for marker, reply in PROMPTS:
         logger.wait_for(marker)
         logger.send(reply)
-    logger.wait_for(b"PUSK")
+    logger.wait_for(APP_UP)
 
     with socket.create_connection(("127.0.0.1", RIG_SERVER_PORT), timeout=5) as s:
         s.sendall(b"f\n")
@@ -192,7 +195,7 @@ def test_sigterm_finishes_instead_of_hanging(logger, tmp_path):
     for marker, reply in PROMPTS:
         logger.wait_for(marker)
         logger.send(reply)
-    logger.wait_for(b"PUSK")
+    logger.wait_for(APP_UP)
 
     logger.proc.send_signal(signal.SIGTERM)
     assert logger.proc.wait(timeout=10) == 128 + signal.SIGTERM
@@ -207,7 +210,7 @@ def test_sighup_with_the_terminal_already_gone_still_runs_teardown(logger):
     for marker, reply in PROMPTS:
         logger.wait_for(marker)
         logger.send(reply)
-    logger.wait_for(b"PUSK")
+    logger.wait_for(APP_UP)
 
     logger.close_terminal()
     logger.proc.send_signal(signal.SIGHUP)

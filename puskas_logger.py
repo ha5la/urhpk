@@ -71,10 +71,17 @@ from wiring import (
 # ──────────────────────────────────────────────────────────────
 # Configuration
 # ──────────────────────────────────────────────────────────────
-RADIO_HOST = "icom9700"  # credentials in ~/.netrc under this machine name
+# Credentials in ~/.netrc under this machine name. Overridable so a test run
+# on this LAN cannot take a session slot from the radio a round is using.
+RADIO_HOST = os.environ.get("PUSKAS_RADIO_HOST", "icom9700")
 RADIO_CONNECT_TIMEOUT_S = 5.0
 RADIO_STALE_S = 5.0  # no CI-V-socket traffic for this long = session dead
 RADIO_RECONNECT_S = 15.0  # quiet time the radio needs before accepting a new session
+
+# Every dist_km and the EDI's PWWLo come from this, so the startup screen prints
+# it: a round from another QTH has to be noticed before the first QSO.
+MY_LOCATOR = "JN97TF"
+START_BAND, START_MODE = "2M", "SSB"
 
 
 _BEARING_ARROWS = "↑↗→↘↓↙←↖"
@@ -95,8 +102,11 @@ def _format_combos(by_band: dict[str, list[str]]) -> str:
 # the radio, not up to a poll interval late.
 # ──────────────────────────────────────────────────────────────
 _rig: dict = {"band": "", "mode": "", "qrg": "", "online": False}
-_rig_manual: dict = {"band": "", "mode": ""}
-_radio: dict = {"rig": None, "task": None}  # live session, None while offline
+# What the round logs on while the radio is not answering: the starting
+# constants until it has been seen, then whatever it was last on.
+_rig_manual: dict = {"band": START_BAND, "mode": START_MODE}
+# "rig" is the live session, None while offline; "probed" is _await_radio's gate.
+_radio: dict = {"rig": None, "task": None, "probed": asyncio.Event()}
 
 # Fire-and-forget tasks, held so the loop cannot collect one mid-flight.
 _pending: set[asyncio.Task] = set()
@@ -124,6 +134,7 @@ def _on_radio_update(freq_hz, mode, band) -> None:
         freq_hz=freq_hz,
         raw_mode=mode,
     )
+    _radio["probed"].set()
     # _apply_update has already filtered out no-op updates, so every call here
     # is a real change.
     telemetry_write(
@@ -167,7 +178,12 @@ async def _radio_task() -> None:
             pass
         finally:
             _radio["rig"] = None
+            _radio["probed"].set()
             was_online = _rig["online"]
+            # The band the operator is on outlives the session that reported
+            # it: a drop goes on logging there, not back at the starting band.
+            if was_online:
+                _rig_manual.update(band=_rig["band"], mode=_rig["mode"])
             _rig.update(band="", mode="", qrg="", online=False, freq_hz=0, raw_mode="")
             # Only on a real online→offline transition: this loop also runs
             # while the radio has simply never been reachable, and a null line
@@ -197,6 +213,8 @@ async def _radio_task() -> None:
 
 
 def _radio_start() -> None:
+    # A fresh Event rather than clear(): it binds to the loop that first awaits it.
+    _radio["probed"] = asyncio.Event()
     _radio["task"] = _spawn(_radio_task())
 
 
@@ -522,54 +540,18 @@ def _handle_command(line: str, lb: LogBook, tname: str):
     input("  [Enter to continue]")
 
 
-# ──────────────────────────────────────────────────────────────
-# Offline setup wizard
-# ──────────────────────────────────────────────────────────────
-async def _ainput(prompt: str) -> str:
-    """input() off the event loop.
+async def _await_radio() -> None:
+    """Hold the round back until the radio's first connect attempt resolves.
 
-    The one place a thread is still right: reading a tty line has no asyncio
-    form, and this holds no lock. Used only by the startup wizard, before the
-    prompt_toolkit application takes over stdin.
+    The login handshake takes several round trips, so the band is not knowable
+    at the instant the round starts -- drawing then would show the starting
+    band for a radio that turns out to be on another one. Bounded by the
+    connect timeout, since a failed attempt resolves this too.
     """
-    return await asyncio.to_thread(input, prompt)
-
-
-async def _offline_setup():
-    """Ask for band and mode interactively when rig is offline at startup.
-    Raises EOFError / KeyboardInterrupt if the user wants to quit.
-
-    The loop re-checks current_rig() every time round, because powering the
-    radio on is the other way out of here -- which is why input() runs off the
-    event loop. Blocking it would starve the radio task the wizard is waiting
-    for, and the operator would be stuck typing a band the radio already knows.
-    """
-    band, mode, _, online = current_rig()
-    if online or (band and mode):
+    if _radio["probed"].is_set():
         return
-    bar = "━" * W
-    print(f"\n\033[1m{bar}\033[0m")
-    print("  RIG OFFLINE — set band and mode to start logging")
-    print(
-        "\033[2m  (power on the radio for automatic control, or enter values below)\033[0m"
-    )
-    print(f"\033[1m{bar}\033[0m")
-    while True:
-        band, mode, _, online = current_rig()
-        if online or (band and mode):
-            return
-        if not band:
-            raw = (await _ainput(f"  Band [{' / '.join(BANDS)}]: ")).strip().upper()
-            if raw in BANDS:
-                _rig_manual["band"] = raw
-            else:
-                print(f"  \033[31m{raw!r} — choose {', '.join(BANDS)}\033[0m")
-        elif not mode:
-            raw = (await _ainput(f"  Mode [{' / '.join(MODES)}]: ")).strip().upper()
-            if raw in MODES:
-                _rig_manual["mode"] = raw
-            else:
-                print(f"  \033[31m{raw!r} — choose {', '.join(MODES)}\033[0m")
+    print(f"\n  Connecting to the radio ({RADIO_HOST})…")
+    await _radio["probed"].wait()
 
 
 _CET = ZoneInfo("Europe/Budapest")
@@ -624,7 +606,7 @@ async def run(lb: LogBook, tname: str):
         parts: list[tuple[str, str]] = []
 
         # During edit, warn when the rig is on a different band/mode than the QSO.
-        if _state["edit_idx"] is not None and band:
+        if _state["edit_idx"] is not None:
             real_idx = len(lb.qsos) - 1 - _state["edit_idx"]
             if 0 <= real_idx < len(lb.qsos):
                 q = lb.qsos[real_idx]
@@ -674,7 +656,7 @@ async def run(lb: LogBook, tname: str):
         rot_az, rot_online = rotator.current()
 
         mismatch = False
-        if _state["edit_idx"] is not None and band:
+        if _state["edit_idx"] is not None:
             real_idx = len(lb.qsos) - 1 - _state["edit_idx"]
             if 0 <= real_idx < len(lb.qsos):
                 q = lb.qsos[real_idx]
@@ -789,7 +771,7 @@ async def run(lb: LogBook, tname: str):
         # and unreadable there. The brighter red stays legible on both the
         # default dark background and the ansired dup background.
         tail = f"  <ansibrightred>{worked_str}</ansibrightred>" if worked_str else ""
-        if band and mode and lb.is_dup(callsign, band, mode):
+        if lb.is_dup(callsign, band, mode):
             return HTML(
                 f"<ansired><b>  DUP  </b></ansired><ansigreen>{geo}  </ansigreen>{tail}"
             )
@@ -804,7 +786,7 @@ async def run(lb: LogBook, tname: str):
             text = get_app().current_buffer.text.upper().split()
             if text and RE_CALLSIGN.match(text[0]):
                 band, mode, *_ = current_rig()
-                if band and mode and lb.is_dup(text[0], band, mode):
+                if lb.is_dup(text[0], band, mode):
                     return Style.from_dict({"": "bg:ansired fg:white"})
         except Exception:
             pass
@@ -982,12 +964,7 @@ async def run(lb: LogBook, tname: str):
     rot_poll = asyncio.create_task(rotator.poll())
     await rig_server.start(RIG_SERVER_PORT, rig_snapshot)
 
-    try:
-        await _offline_setup()
-    except (EOFError, KeyboardInterrupt):
-        watcher.cancel()
-        rot_poll.cancel()
-        return
+    await _await_radio()
 
     while True:
         band, mode, qrg, online = current_rig()
@@ -1019,7 +996,7 @@ async def run(lb: LogBook, tname: str):
                         q = lb.qsos[real_idx]
                         return f"{q.band} {q.mode}  RX ► "
                 b, m, *_ = current_rig()
-                return f"{b or '?'} {m or '?'}  RX ► "
+                return f"{b} {m}  RX ► "
 
             result = await session.prompt_async(
                 _prompt_msg,
@@ -1084,11 +1061,6 @@ async def run(lb: LogBook, tname: str):
         # New QSO — re-read rig at the moment Enter is pressed
         band, mode, qrg, online = current_rig()
 
-        if not band:
-            print("\033[31m  Cannot log: band unknown. Set it with Alt+B\033[0m")
-            input("  [Enter to continue]")
-            continue
-
         callsign = parsed["callsign"]
         nr_r = parsed["nr_r"]
         loc = parsed["loc"]
@@ -1102,7 +1074,7 @@ async def run(lb: LogBook, tname: str):
         qso = QSO(
             dt=now.replace(second=0, microsecond=0),
             band=band,
-            mode=mode or "SSB",
+            mode=mode,
             callsign=callsign,
             rst_s=rst_s,
             nr_s=nr_s,
@@ -1210,16 +1182,13 @@ def main():
 
     if lb is None:
         my_callsign = _load_callsign()
+        tname = tname_for(datetime.now(timezone.utc))
         print(f"Callsign: {my_callsign}")
-        my_loc = input("Your locator [JN97TF]: ").strip().upper() or "JN97TF"
-        if not is_locator(my_loc):
-            print(f"Warning: {my_loc!r} doesn't look like a valid Maidenhead locator")
-        now = datetime.now(timezone.utc)
-        default_tname = tname_for(now)
-        tname = input(f"Contest name [{default_tname}]: ").strip() or default_tname
+        print(f"Locator:  {MY_LOCATOR}")
+        print(f"Contest:  {tname}")
         print("Building locator cache...")
         cache = loc_cache.load()
-        lb = LogBook(my_callsign, my_loc, cache)
+        lb = LogBook(my_callsign, MY_LOCATOR, cache)
 
     # Opened before the radio/rotator threads start: both write to it the
     # moment they have something, and the radio's first push arrives within
@@ -1241,6 +1210,7 @@ def main():
     input_log_open(_input_log_path)
     print(f"Input log: {_input_log_path}")
     print("Webcam:    Alt+V to start/stop recording")
+    print(f"Band/mode: from the radio, {START_BAND} {START_MODE} without one (Alt+B/M)")
 
     print()
     print("Input: CALL RST NR [LOC]   e.g.  HA7NS 59 015   or  HA7NS 59 015 JN97WM")

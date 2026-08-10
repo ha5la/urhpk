@@ -591,8 +591,8 @@ These requirements must be preserved across all future changes:
   EDI/telemetry/input/scope all flush as they are written, so nothing is lost by not
   unwinding), via `loop.add_signal_handler` so the teardown runs as an ordinary loop
   callback rather than between two bytecodes of whatever the main thread was doing;
-  and `_round`'s `finally` covers Ctrl-D, a crash, and the early return from the
-  offline wizard. Both go through `_radio_stop`, which **cancels the radio task and
+  and `_round`'s `finally` covers Ctrl-D and a crash. Both go through
+  `_radio_stop`, which **cancels the radio task and
   awaits it** — the task's own `finally` closes whatever session it had reached,
   including one still inside `connect()`, which is not in `_radio["rig"]` yet and so
   cannot be closed by clearing that slot. Found from a real capture after a
@@ -776,11 +776,20 @@ CI-V 0x17, the radio's own message keyer):
 `<NUMBER>` uses CW abbreviations: `0→T`, `9→N` (e.g. 014 → `T14`).
 Macros silently no-op when the radio is offline. Escape aborts via `stop_cw` (0x17+0xFF).
 
-**Offline setup wizard**: if the radio is not reachable at startup and no manual band/mode
-override is set, the logger shows an interactive prompt asking for band (`2M/70CM/23CM`)
-then mode (`SSB/CW/FM`) before entering the main loop. Ctrl-D exits cleanly.
-Mid-round rig disconnect uses `_rig_manual` values as fallback (set by the wizard or
-**Alt+B / Alt+M** during the round), so the wizard only appears once per round.
+**Band and mode without a radio**: `_rig_manual` is what `current_rig()` answers with
+whenever the rig is not online, and it is never empty — so a QSO can always be logged.
+It holds `START_BAND`/`START_MODE` until a radio has been seen, then whatever band and
+mode the last live session was on, so a mid-round disconnect goes on logging where the
+operator actually is rather than dropping back to the starting band. **Alt+B / Alt+M**
+cycle it while offline, and are ignored (with a toolbar warning) while the rig is online.
+
+**The round waits for the radio's first verdict** (`_await_radio`): the login handshake
+takes several round trips, so at the instant a round starts the rig is always still
+offline. `_radio["probed"]` is set when the first connect attempt resolves — either the
+rig reported freq and mode, or the attempt failed — and the UI is not drawn until then.
+Without it the toolbar shows `START_BAND` for a radio that turns out to be on another
+band, and a QSO logged in that window is filed under the wrong one. Bounded by
+`RADIO_CONNECT_TIMEOUT_S`, since a failed attempt resolves it too.
 
 **rotctld integration** (optional, no-op when rotctld not running):
 - Background poller (`rotator.poll`) queries `ROTCTLD_HOST:ROTCTLD_PORT` (4533) every

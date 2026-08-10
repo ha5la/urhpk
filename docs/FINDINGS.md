@@ -420,11 +420,11 @@ writes inside critical sections are already on whatever thread reaches them.
 ### What it became (August 2026)
 
 Eight threads and seven locks to **zero of either**. Measured on a running
-logger (pty harness, radio absent): four OS threads, of which one is the event
-loop and three are idle `ThreadPoolExecutor` workers left behind by the startup
-wizard's `asyncio.to_thread(input, …)` — the one escape hatch the rule allows.
-Nothing waits on the radio, the rotator, the rig server or a timer in a thread
-any more.
+logger (pty harness, radio absent): two OS threads, the event loop and
+prompt_toolkit's own input reader. The logger calls `asyncio.to_thread` nowhere
+— the one remaining use of the escape hatch anywhere is the bridge's
+`_persist_seen` file write. Nothing waits on the radio, the rotator, the rig
+server or a timer in a thread any more.
 
 Three things worth keeping:
 
