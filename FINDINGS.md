@@ -335,7 +335,10 @@ keep current.
 
 Only `puskas_logger.py` is threaded. `contest_video.py` and its modules have no
 threads at all (they wait on ffmpeg subprocesses); `on4kst_irc_bridge.py` is
-pure asyncio; `hamlib_supervisor.py` runs two, in its own process.
+pure asyncio; `hamlib_supervisor.py` is single-threaded too, blocking on an
+inotify fd and running rotctld as a subprocess. (An earlier draft of this
+section credited it with two threads. That was a scan matching `.start()`,
+which caught `Daemon.start()` — a subprocess, not a thread.)
 
 **Eight threads in the logger's process during a round**, plus transients:
 
