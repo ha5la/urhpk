@@ -24,7 +24,7 @@ are in `docs/`, and are referred to by bare filename everywhere.
 | **docs/RECORDING.md** | Practical how-to for recording a round and producing a video, with real numbers |
 | **docs/FINDINGS.md** | Measurements, protocol archaeology and dead ends — the evidence behind the rules |
 | **docs/operator-setup.md** | This operator's terminal configuration — settings, not project |
-| **docs/hud-artwork-prompt.md** | Generation prompt and layout spec for the HUD artwork |
+| **hud-theme/artwork-prompt.md** | Generation prompt and layout spec for the HUD artwork — beside the artwork it generates, and travels with a copied theme |
 
 ## Housekeeping
 

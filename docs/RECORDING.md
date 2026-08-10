@@ -289,7 +289,7 @@ takes DOOMguy's face slot, and the rest of the panels carry QRG, band/mode,
 an RX/TX lamp, an S-meter, a compass, UTC/rate/ODX and the CW ticker. It is a
 piece of artwork (`hud-theme/`) with values drawn into its recesses — see
 ARCHITECTURE.md's HUD section for what that means when editing, and
-`hud-artwork-prompt.md` for the artwork itself.
+`hud-theme/artwork-prompt.md` for the artwork itself.
 
 Where each value comes from:
 

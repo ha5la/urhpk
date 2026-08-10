@@ -34,9 +34,19 @@ will change what ARCHITECTURE.md has to describe.
 
 ## Answer
 
-The sketch, as written. `docs/` now holds PIPELINE, ARCHITECTURE, RECORDING,
-FINDINGS, hud-artwork-prompt and the new `operator-setup.md`; README, CLAUDE
-and CONTEXT stayed at the root.
+The sketch, with one correction. `docs/` now holds PIPELINE, ARCHITECTURE,
+RECORDING, FINDINGS and the new `operator-setup.md`; README, CLAUDE and
+CONTEXT stayed at the root.
+
+The correction is the artwork prompt, which the sketch sent to `docs/` and
+which belongs in `hud-theme/artwork-prompt.md` instead. It is not narrative
+documentation about the project — it is the *source* `artwork.png` was
+generated from, and the directory already keeps provenance for its own
+contents (`DSEG7Classic-Bold.LICENSE` beside the font). `--hud-theme DIR`
+means a theme can be copied wholesale, and the instructions for regenerating
+its artwork should travel with it. `load_hud_theme` opens named files, so the
+extra markdown file is inert. Renamed on the way in: the `hud-` prefix was
+only earning its keep while the file sat at the root.
 
 Two things worth knowing for the next such move:
 

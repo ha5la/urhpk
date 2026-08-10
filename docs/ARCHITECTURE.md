@@ -510,7 +510,8 @@ The HUD's rule is that the more important a value, the bigger it is drawn.
   artwork against), `--hud-preview OUT.png --hud-preview-t SECONDS` builds real
   state from a real recording. `recdir`/`edi` are optional in argparse purely so
   `--hud-demo` can run standalone.
-- **The artwork's generation prompt is `hud-artwork-prompt.md`** — what the software
+- **The artwork's generation prompt is `hud-theme/artwork-prompt.md`**, beside the
+  artwork it generates — what the software
   draws (and therefore what the artwork must leave empty), why the sprite sheet sits
   on flat magenta, and why a coordinate table baked into the image was rejected (an
   image generator cannot measure its own output raster, so such a table would be
