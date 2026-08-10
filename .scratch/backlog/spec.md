@@ -11,8 +11,9 @@ verifiable come before the work they would verify.** The e2e test and the
 pytest budget are first for that reason, and the e2e test is explicitly wanted
 in the window between the structure refactor and the next round.
 
-The `structure/` effort (compressing the project) is tracked separately and
-takes precedence — several of these touch files it is about to move.
+The `structure/` effort (compressing the project) is tracked separately and is
+finished; 17 is the piece of it that outlived it, deliberately deferred behind
+01.
 
 | # | Ticket | Kind |
 |---|---|---|
@@ -27,3 +28,9 @@ takes precedence — several of these touch files it is about to move.
 | 09 | `webcam-face-tracking` | UX |
 | 10 | `translucent-map-pip` | feature |
 | 11 | `waterfall-text` | fun, out of contest time |
+| 12 | `measure-the-cleanup` | verification |
+| 13 | `error-handling-principle` | principle |
+| 14 | `docs-layout` | structure |
+| 15 | `thread-map` | structure |
+| 16 | `logger-on-one-event-loop` | structure |
+| 17 | `library-package` | structure |
