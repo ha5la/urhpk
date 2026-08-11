@@ -264,14 +264,15 @@ def _webcam_capture_cmd(device: str, audio_source: str, out_path: str) -> list[s
     ]
 
 
-def _webcam_stamp(path: str, start: datetime) -> str:
+def _webcam_stamp(path: str, start: datetime) -> str | None:
     """Rename one of the capture's files to its precise-start name; returns the
-    name it ended up with, unchanged if the rename failed -- not fatal."""
+    name it ended up with, or None if it could not be renamed -- typically
+    because ffmpeg has logged frame 0 but not yet opened the file."""
     renamed = _webcam_precise_name(path, start)
     try:
         Path(path).rename(renamed)
     except OSError:
-        return path
+        return None
     return renamed
 
 
@@ -289,6 +290,10 @@ def webcam_finalize_name() -> None:
     frame_zero_utc find the *previous* capture's frame 0 and stamp the new
     recording with it.
 
+    ffmpeg logs frame 0 about 100ms before it opens the mp4, and this runs
+    10x a second, so a tick regularly lands in between: until the mp4 itself
+    has been renamed nothing is, and the next tick tries again.
+
     Called on every toolbar tick, and once more from _webcam_finish for a
     capture that died before a tick could see its log; a no-op once the rename
     has landed, so the log is parsed only during that first second."""
@@ -298,8 +303,11 @@ def webcam_finalize_name() -> None:
     start = webcam_log.frame_zero_utc(_webcam_log_path)
     if start is None:
         return
-    _webcam_out_path = _webcam_stamp(_webcam_out_path, start)
-    _webcam_log_path = _webcam_stamp(_webcam_log_path, start)
+    renamed = _webcam_stamp(_webcam_out_path, start)
+    if renamed is None:
+        return
+    _webcam_out_path = renamed
+    _webcam_log_path = _webcam_stamp(_webcam_log_path, start) or _webcam_log_path
     _webcam_named = True
 
 

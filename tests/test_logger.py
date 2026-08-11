@@ -1301,6 +1301,23 @@ class TestWebcamFinalizeName:
         assert not log_path.exists()
         assert "start: 1784722261.868307" in renamed.read_text()
 
+    def test_waits_for_the_mp4_ffmpeg_has_not_created_yet(self, tmp_path):
+        # ffmpeg logs frame 0 ~100ms before it opens the output file, and the
+        # toolbar ticks 10x a second: a tick lands in that window regularly.
+        # Stamping the log alone and calling it done leaves the mp4 at the bare
+        # name for the rest of the round -- and the round's next Alt+V capture
+        # then stamps *that* file with its own frame 0, while its own recording
+        # keeps the bare name (or, 100ms the other way, `ffmpeg -y` truncates it).
+        out_path, log_path = self._start_capture(tmp_path)
+        out_path.unlink()
+        self._log_frame_zero(log_path)
+        webcam_finalize_name()
+        assert log_path.exists()  # the log does not go on ahead of the mp4
+        out_path.write_bytes(b"fake mp4 data")
+        webcam_finalize_name()
+        assert (tmp_path / "prefix-webcam-20260722T121101.868307Z.mp4").exists()
+        assert (tmp_path / "prefix-webcam-20260722T121101.868307Z.log").exists()
+
     def test_stop_after_an_early_rename_does_not_stamp_twice(self, tmp_path):
         out_path, log_path = self._start_capture(tmp_path)
         self._log_frame_zero(log_path)
