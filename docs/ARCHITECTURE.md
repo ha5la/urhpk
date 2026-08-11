@@ -937,6 +937,11 @@ start/stop, off by default):
   the moov atom it seeks back to finalize lands in the renamed file (verified by
   renaming a live capture mid-run, then decoding a frame from after that point).
   `_webcam_finish` calls it once more for a capture that died between ticks.
+- **The `*-webcam.log` is renamed with the mp4**, to the same stem. Not
+  cosmetic: a second Alt+V capture in the same round reopens `<prefix>-webcam.log`
+  in append mode, and `frame_zero_utc` takes the *first* `Input #0` start it
+  finds — a log left behind under the un-stamped name would stamp the second
+  recording with the first one's start time.
 - Logs `"event": "webcam_start"` / `"webcam_stop"` to the same `*-input.jsonl` as
   everything else (see **Input-box logging** above) rather than a separate file —
   one more consumer of the same already-precise event log, not a new format.

@@ -264,29 +264,42 @@ def _webcam_capture_cmd(device: str, audio_source: str, out_path: str) -> list[s
     ]
 
 
+def _webcam_stamp(path: str, start: datetime) -> str:
+    """Rename one of the capture's files to its precise-start name; returns the
+    name it ended up with, unchanged if the rename failed -- not fatal."""
+    renamed = _webcam_precise_name(path, start)
+    try:
+        Path(path).rename(renamed)
+    except OSError:
+        return path
+    return renamed
+
+
 def webcam_finalize_name() -> None:
-    """Give the recording its precise-start name as soon as ffmpeg has logged
-    frame 0 -- about a second in, with the capture still running. Renaming an
-    open file is a directory-entry update: ffmpeg keeps writing (and seeks back
-    to finalize the moov atom) through an fd that follows the inode, not the
-    name. Doing it here rather than at stop is what makes the timestamp survive
-    a power cut or a kill -9, where nothing at all gets to run at the end.
+    """Give the recording -- mp4 and ffmpeg log both -- its precise-start name
+    as soon as ffmpeg has logged frame 0, about a second in and with the capture
+    still running. Renaming an open file is a directory-entry update: ffmpeg
+    keeps writing (and seeks back to finalize the moov atom) through fds that
+    follow the inode, not the name. Doing it here rather than at stop is what
+    makes the timestamp survive a power cut or a kill -9, where nothing at all
+    gets to run at the end.
+
+    The log moves with the mp4 because the next Alt+V capture of the round
+    reopens `<prefix>-webcam.log` in append mode: a left-behind log would make
+    frame_zero_utc find the *previous* capture's frame 0 and stamp the new
+    recording with it.
 
     Called on every toolbar tick, and once more from _webcam_finish for a
     capture that died before a tick could see its log; a no-op once the rename
     has landed, so the log is parsed only during that first second."""
-    global _webcam_out_path, _webcam_named
+    global _webcam_out_path, _webcam_log_path, _webcam_named
     if _webcam_named or not (_webcam_out_path and _webcam_log_path):
         return
     start = webcam_log.frame_zero_utc(_webcam_log_path)
     if start is None:
         return
-    renamed = _webcam_precise_name(_webcam_out_path, start)
-    try:
-        Path(_webcam_out_path).rename(renamed)
-    except OSError:
-        return  # leave it at its original name -- not fatal
-    _webcam_out_path = renamed
+    _webcam_out_path = _webcam_stamp(_webcam_out_path, start)
+    _webcam_log_path = _webcam_stamp(_webcam_log_path, start)
     _webcam_named = True
 
 

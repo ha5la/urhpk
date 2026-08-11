@@ -1288,6 +1288,19 @@ class TestWebcamFinalizeName:
         assert not out_path.exists()
         assert renamed.read_bytes() == b"fake mp4 data"
 
+    def test_renames_the_ffmpeg_log_alongside_the_mp4(self, tmp_path):
+        # Leaving the log at the un-stamped name would hand it to the *next*
+        # Alt+V capture of the round, which opens it in append mode: frame 0
+        # of this capture is the first one in the file, so the second
+        # recording would be stamped with the first one's start time.
+        out_path, log_path = self._start_capture(tmp_path)
+        self._log_frame_zero(log_path)
+        webcam_finalize_name()
+        renamed = tmp_path / "prefix-webcam-20260722T121101.868307Z.log"
+        assert renamed.exists()
+        assert not log_path.exists()
+        assert "start: 1784722261.868307" in renamed.read_text()
+
     def test_stop_after_an_early_rename_does_not_stamp_twice(self, tmp_path):
         out_path, log_path = self._start_capture(tmp_path)
         self._log_frame_zero(log_path)
