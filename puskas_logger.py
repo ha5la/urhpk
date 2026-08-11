@@ -630,7 +630,7 @@ async def _await_radio() -> None:
 _CET = ZoneInfo("Europe/Budapest")
 
 
-def _is_contest_time(now: datetime | None = None) -> bool:
+def _is_round_time(now: datetime | None = None) -> bool:
     """True during Puskás URH Kupa: first Monday of month, 18:00–20:00 CET/CEST."""
     if now is None:
         now = datetime.now(timezone.utc)
@@ -736,7 +736,7 @@ async def run(lb: LogBook, tname: str):
             parts.append(("bg:ansigreen fg:black", f"  {webcam_msg}  │  "))
 
         time_style = (
-            "bg:ansigreen fg:black" if _is_contest_time(now) else "bg:ansired fg:white"
+            "bg:ansigreen fg:black" if _is_round_time(now) else "bg:ansired fg:white"
         )
         parts.append((time_style, f" {t}Z "))
         return FormattedText(parts)
@@ -784,7 +784,7 @@ async def run(lb: LogBook, tname: str):
             webcam_active,
             webcam_msg if webcam_active else None,
             now.strftime("%H:%M:%S"),
-            _is_contest_time(now),
+            _is_round_time(now),
         )
 
     async def _toolbar_watcher(app) -> None:

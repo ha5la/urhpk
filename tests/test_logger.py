@@ -33,7 +33,7 @@ from puskas_logger import (
     _bearing_arrow,
     _edi_qso_count,
     _format_combos,
-    _is_contest_time,
+    _is_round_time,
     _predict_nr,
     _print_recent,
     _rig,
@@ -1005,39 +1005,39 @@ class TestUpdateLocCache:
         assert cache["HA7NS"] == ["JN97WM"]
 
 
-class TestIsContestTime:
+class TestIsRoundTime:
     # First Monday of June 2026 = June 1, 18:00–19:59 CET (= UTC+2 in summer)
     def _t(self, y, mo, d, h, mi=0):
         return datetime(y, mo, d, h, mi, tzinfo=timezone.utc)
 
-    def test_during_contest(self):
+    def test_during_round(self):
         # 2026-06-01 is Monday; 18:00 CET = 16:00 UTC (CEST = UTC+2)
-        assert _is_contest_time(self._t(2026, 6, 1, 16, 0)) is True
+        assert _is_round_time(self._t(2026, 6, 1, 16, 0)) is True
 
     def test_one_second_before_start(self):
-        assert _is_contest_time(self._t(2026, 6, 1, 15, 59)) is False
+        assert _is_round_time(self._t(2026, 6, 1, 15, 59)) is False
 
     def test_at_end_boundary(self):
-        # 20:00 CET = 18:00 UTC — contest is over
-        assert _is_contest_time(self._t(2026, 6, 1, 18, 0)) is False
+        # 20:00 CET = 18:00 UTC — the round is over
+        assert _is_round_time(self._t(2026, 6, 1, 18, 0)) is False
 
     def test_one_minute_before_end(self):
-        assert _is_contest_time(self._t(2026, 6, 1, 17, 59)) is True
+        assert _is_round_time(self._t(2026, 6, 1, 17, 59)) is True
 
     def test_wrong_weekday(self):
         # 2026-06-02 is Tuesday
-        assert _is_contest_time(self._t(2026, 6, 2, 16, 0)) is False
+        assert _is_round_time(self._t(2026, 6, 2, 16, 0)) is False
 
     def test_second_monday(self):
         # 2026-06-08 is the second Monday of June
-        assert _is_contest_time(self._t(2026, 6, 8, 16, 0)) is False
+        assert _is_round_time(self._t(2026, 6, 8, 16, 0)) is False
 
     def test_winter_time(self):
         # First Monday of January 2026 = Jan 5; CET = UTC+1, so 18:00 CET = 17:00 UTC
-        assert _is_contest_time(self._t(2026, 1, 5, 17, 0)) is True
+        assert _is_round_time(self._t(2026, 1, 5, 17, 0)) is True
 
     def test_winter_before_start(self):
-        assert _is_contest_time(self._t(2026, 1, 5, 16, 59)) is False
+        assert _is_round_time(self._t(2026, 1, 5, 16, 59)) is False
 
 
 class TestRpromptBearing:

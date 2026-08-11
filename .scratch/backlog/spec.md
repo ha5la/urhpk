@@ -27,7 +27,7 @@ finished; 17 is the piece of it that outlived it, deliberately deferred behind
 | 08 | `hud-chip-animation` | UX |
 | 09 | `webcam-face-tracking` | UX |
 | 10 | `translucent-map-pip` | feature |
-| 11 | `waterfall-text` | fun, out of contest time |
+| 11 | `waterfall-text` | fun, outside the round |
 | 12 | `measure-the-cleanup` | verification |
 | 13 | `error-handling-principle` | principle |
 | 14 | `docs-layout` | structure |

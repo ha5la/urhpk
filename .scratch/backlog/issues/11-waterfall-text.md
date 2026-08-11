@@ -2,7 +2,7 @@
 
 Status: needs-triage
 
-For fun, and explicitly **out of contest time** — the two hours of a round
+For fun, and explicitly **outside the round** — the two hours of a round
 have no room for a game. In SSB an arbitrary audio signal can be transmitted,
 so in principle a shaped signal draws into a receiving station's waterfall.
 
