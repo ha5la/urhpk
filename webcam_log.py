@@ -1,9 +1,10 @@
 """The ffmpeg capture log written next to a logger-recorded webcam.
 
 `*-webcam.log` is the logger's own stderr capture of the ffmpeg process, and
-the only place the webcam's true frame-0 instant is ever written down. Both
-sides of the pipeline need it: the logger, to rename the finished file with a
-precise timestamp, and the video, to place the PiP on the timeline.
+the only place the webcam's true frame-0 instant is ever written down. The
+logger reads it back a second into the capture to rename the recording with
+that timestamp; from there the filename carries it, and the video reads the
+filename to place the PiP on the timeline.
 """
 
 from __future__ import annotations

@@ -1,10 +1,10 @@
 """Lining the webcam up with the radio audio.
 
 The webcam is the one stream with no trustworthy clock of its own. Three
-sources are tried in descending order of precision -- a precise filename
-stamp written by the logger, the container's own creation time, and the
-ffmpeg capture log -- and whatever they give is then refined by
-cross-correlating the webcam's audio against the radio's, segment by segment.
+sources are tried in descending order of precision -- the µs-precise stamp
+the logger renames the file with, the logged webcam_start event, and a phone
+clip's own coarse filename convention -- and whatever they give is then refined
+by cross-correlating the webcam's audio against the radio's, segment by segment.
 
 The refinement fits a line, not a constant: a phone recording for two hours
 drifts, and a single offset that is right at the start is visibly wrong by
@@ -21,7 +21,6 @@ from datetime import datetime, timedelta
 
 import numpy as np
 
-import webcam_log
 from timeline import Qso, Segment, audio_time_for, derive_utc_offset
 from wav import read_wav_range
 
@@ -44,10 +43,9 @@ def parse_webcam_precise_filename(path: str) -> datetime | None:
     """Parse the exact, µs-precise UTC timestamp recorders.webcam_finalize_name
     bakes into the filename a second into the capture (e.g.
     `foo-webcam-20260722T121101.868307Z.mp4`), read from the ffmpeg capture
-    log's own frame-0 wallclock.
-    Preferred over webcam_start_from_log/webcam_start_wall
-    below: same precision, but self-contained in the filename itself -- no
-    dependency on the sidecar `.log` file surviving alongside the video, and
+    log's own frame-0 wallclock. Preferred over webcam_start_wall below: exact
+    where that event is ~1s early, self-contained in the filename itself -- no
+    dependency on the sidecar `.log` file surviving alongside the video -- and
     a rename is free (no second copy of the video data, unlike tagging the
     file's own container metadata after the fact -- see CLAUDE.md). Returns
     None for a recording made before this existed, or the coarse phone-clip
@@ -305,12 +303,3 @@ def webcam_start_wall(path: str) -> datetime | None:
     except OSError:
         return None
     return None
-
-
-def webcam_start_from_log(log_path: str) -> datetime | None:
-    """Precise UTC frame-0 wallclock of a logger-recorded webcam, read from the
-    ffmpeg capture log (`*-webcam.log`) written next to the mp4.
-
-    This is exact where webcam_start_wall (the logged webcam_start event) is
-    stamped ~1s early -- before ffmpeg spawns -- so it takes precedence."""
-    return webcam_log.frame_zero_utc(log_path)

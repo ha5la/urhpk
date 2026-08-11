@@ -232,9 +232,8 @@ def _webcam_capture_cmd(device: str, audio_source: str, out_path: str) -> list[s
     frame with the real gettimeofday wallclock, so ffmpeg logs an exact
     frame-0 UTC start in the *-webcam.log. webcam_finalize_name reads it back
     (webcam_log.frame_zero_utc) to rename the recording with that exact
-    timestamp -- webcam_sync.webcam_start_from_log parsing the
-    same log is only a fallback now, for recordings made before this existed
-    or where the rename didn't happen. Without the flag, v4l2 timestamps are
+    timestamp, which is the only thing that log is for -- contest_video reads
+    the filename. Without the flag, v4l2 timestamps are
     CLOCK_MONOTONIC (uptime), useless as an absolute time -- and the
     logger's own webcam_start event is stamped *before* this subprocess even
     spawns, so it leads real frame 0 by the ffmpeg + camera warmup latency

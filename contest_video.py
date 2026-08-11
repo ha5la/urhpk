@@ -87,7 +87,6 @@ from webcam_sync import (
     parse_webcam_wall,
     refine_webcam_start,
     sync_webcam_start,
-    webcam_start_from_log,
     webcam_start_wall,
 )
 
@@ -562,21 +561,13 @@ def main() -> None:
     webcam_rate = 0.0
     webcam_exact = False
     if args.webcam:
-        # Prefer, in order: the exact timestamp baked into the filename
-        # itself (parse_webcam_precise_filename -- self-contained, no
-        # sidecar file needed); then the ffmpeg log's frame-0 wallclock
-        # (µs-precise, but depends on the *-webcam.log surviving alongside
-        # the video); then the logger's webcam_start event (~1s early,
-        # stamped before ffmpeg spawned). All three are same-machine, so
-        # placement is exact either way, no cross-correlation needed.
+        # Prefer the exact timestamp baked into the filename itself
+        # (parse_webcam_precise_filename -- self-contained, no sidecar file
+        # needed), then the logger's webcam_start event (~1s early, stamped
+        # before ffmpeg spawned). Both are same-machine, so placement is
+        # exact either way, no cross-correlation needed.
         cam_wall = parse_webcam_precise_filename(args.webcam)
         src = "exact timestamp in filename"
-        if cam_wall is None:
-            log_path = os.path.splitext(args.webcam)[0] + ".log"
-            cam_wall = (
-                webcam_start_from_log(log_path) if os.path.exists(log_path) else None
-            )
-            src = "ffmpeg frame-0 wallclock"
         if cam_wall is None and args.input_log:
             cam_wall = webcam_start_wall(args.input_log)
             src = "logged webcam_start event"

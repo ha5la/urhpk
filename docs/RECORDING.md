@@ -393,10 +393,9 @@ corner. Two different sync paths exist depending on how the clip was made:
   full second copy of the file on disk at the same time — too risky right
   when a round ends and disk space is tightest. A rename needs none of
   that (verified: 0.006s on a 3GB file, a directory-entry update
-  independent of size). Falls back to `webcam_start_from_log` (the same
-  precision, parsed from the `*-webcam.log` ffmpeg capture log) or
-  `webcam_start_wall` (the `*-input.jsonl` `webcam_start` event, ~1s early)
-  for a recording made before the rename existed.
+  independent of size). Falls back to `webcam_start_wall` (the
+  `*-input.jsonl` `webcam_start` event, ~1s early) for a recording made
+  before the rename existed.
 - **An independent recording (e.g. a phone propped up separately)**: the
   phone has its own clock convention, not necessarily the WAV recorder's —
   in the first real use of this path the WAV recorder stamped filenames in
@@ -493,8 +492,8 @@ than trusting the toolbar's "synced" message alone.
   260704-HA5LA-telemetry.jsonl  ← rig/rotator telemetry (written by puskas_logger, optional input)
   260704-HA5LA-input.jsonl      ← keystroke + QSO + webcam start/stop events (written by puskas_logger)
   260704-HA5LA.cast             ← asciinema recording of the logger/irssi tmux session
-  260704-HA5LA-webcam.mp4       ← Alt+V webcam capture (written by puskas_logger, optional)
-  260704-HA5LA-webcam.log       ← ffmpeg capture log for the above (exact sync timestamp)
+  260704-HA5LA-webcam-…Z.mp4    ← Alt+V webcam capture (written by puskas_logger, optional)
+  260704-HA5LA-webcam.log       ← ffmpeg capture log; the timestamp in that filename came from it
   260704-HA5LA.scope            ← radio sweeps (written by puskas_logger, optional input)
   urhob2026cw_annotated.mp4     ← rendered video (written by contest_video.py)
   urhob2026cw_annotated.mp4.chapters.txt  ← paste into the YouTube description
