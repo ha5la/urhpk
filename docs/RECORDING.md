@@ -54,7 +54,7 @@ band field, so this only matters for merging QSO lists, not for rendering.
 | `--telemetry FILE` | `*-telemetry.jsonl` — optional; adds the compass needle and the meter panel, mode-gates the CW ticker, recovers CW from long segments, and catches freq/mode changes inside one. The WAV files themselves already give RX/TX and the starting QRG/mode |
 | `--input-log FILE` | `*-input.jsonl` — optional; gives exact (not audio-structure-heuristic) QSO start/end times for chapters/captions where the operator logged the QSO during this recording |
 | `--cast FILE` | asciinema `.cast` recording of the logger/irssi tmux session, shown as a large picture-in-picture |
-| `--webcam FILE` | Webcam/selfie clip, shown as a small picture-in-picture bottom-right |
+| `--webcam FILE` | Webcam/selfie clip, shown as a small picture-in-picture bottom-right; repeat for a round captured in several Alt+V clips |
 | `--webcam-offset SECONDS` | Manual fallback sync correction for `--webcam`, bypassing automatic sync entirely |
 | `--scope FILE` | `.scope` recording (from `puskas_logger.py`) — replaces the audio-derived waterfall with the radio's own spectrum wherever it covers |
 | `--hud-demo OUT.png` | Write one HUD bar with dummy values and exit; needs no recording at all |
@@ -412,6 +412,17 @@ corner. Two different sync paths exist depending on how the clip was made:
 Puskás Kupa rounds should prefer the Alt+V logger-recorded path now that
 it exists — it's simpler and exactly synced by construction; the phone path
 remains for older recordings or if Alt+V wasn't used.
+
+**Several clips in one round.** Alt+V may be pressed any number of times, so
+repeat the flag — `--webcam CLIP1.mp4 --webcam CLIP2.mp4` — and each clip is
+placed by its own timestamp, in time order, into the same recess. Between two
+clips the earlier one's last frame stays frozen on screen. Note that a bare
+shell glob (`--webcam *-webcam-*.mp4`) does *not* work: only the first file
+would reach the flag and the rest would be read as EDI logs.
+
+Clock drift is the round's, not the clip's — one laptop clock against the
+radio's — so it is fitted from the longest clip and the others use that rate,
+each keeping its own exact start. `--webcam-offset` applies to every clip.
 
 ## Telemetry file
 

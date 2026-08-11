@@ -10,6 +10,9 @@ import cast_render
 import contest_video as cv
 import hud_draw
 import video_format
+from webcam_sync import WebcamClip
+
+WEBCAM = WebcamClip("w.mp4", 0.0)
 
 
 def _render_cmd(**kw):
@@ -73,7 +76,7 @@ class TestHudRender:
         face = hud_draw.hud_art(
             hud_draw.load_hud_theme(), 1920, hud_draw.hud_height(1080)
         ).slots["face"]
-        cmd = _render_cmd(hud="h.mp4", webcam="w.mp4", hud_face=face)
+        cmd = _render_cmd(hud="h.mp4", webcams=[WEBCAM], hud_face=face)
         graph = cmd[cmd.index("-filter_complex") + 1]
         assert f"scale={face[2]}:{face[3]}" in graph
         assert f"overlay=x={face[0]}:" in graph
@@ -147,7 +150,7 @@ class TestRenderInputIndices:
         files = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-i"]
         graph = cmd[cmd.index("-filter_complex") + 1]
         out = {}
-        for label in ("scopebg", "hudbar", "castpip", "pip"):
+        for label in ("scopebg", "hudbar", "castpip", "pip0"):
             m = re.search(r"\[(\d+):v\]((?!\[\d+:v\]).)*?\[" + label + r"\]", graph)
             if m:
                 out[label] = files[int(m.group(1))]
@@ -163,12 +166,12 @@ class TestRenderInputIndices:
         # which file each chain reads, not merely that all four are used.
         assert self._sources(
             scope="s.mp4", scope_start=1.0, scope_end=9.0,
-            cast="c.mp4", webcam="w.mp4", hud="h.mp4",
+            cast="c.mp4", webcams=[WEBCAM], hud="h.mp4",
         ) == {
             "scopebg": "s.mp4",
             "hudbar": "h.mp4",
             "castpip": "c.mp4",
-            "pip": "w.mp4",
+            "pip0": "w.mp4",
         }  # fmt: skip
 
     def test_indices_stay_correct_with_only_some_streams(self):
@@ -176,8 +179,8 @@ class TestRenderInputIndices:
             "castpip": "c.mp4",
             "hudbar": "h.mp4",
         }
-        assert self._sources(webcam="w.mp4", hud="h.mp4") == {
-            "pip": "w.mp4",
+        assert self._sources(webcams=[WEBCAM], hud="h.mp4") == {
+            "pip0": "w.mp4",
             "hudbar": "h.mp4",
         }
         assert self._sources(hud="h.mp4") == {"hudbar": "h.mp4"}
@@ -195,8 +198,35 @@ class TestHudLayering:
         assert graph.index("[castpip]overlay") < graph.index("[hudbar]overlay")
 
     def test_the_webcam_is_composited_after_the_bar_to_sit_in_the_recess(self):
-        graph = self._graph(webcam="w.mp4", hud="h.mp4")
-        assert graph.index("[hudbar]overlay") < graph.index("[pip]overlay")
+        graph = self._graph(webcams=[WEBCAM], hud="h.mp4")
+        assert graph.index("[hudbar]overlay") < graph.index("[pip0]overlay")
+
+    def test_several_captures_share_the_recess_in_time_order(self):
+        # A round Alt+V'd more than once is several clips in one recess. Each
+        # is overlaid on the composite so far, so the later clip must come
+        # second in the graph *and* read its own file -- and each takes the
+        # recess only from its own start, leaving the one before it (frozen on
+        # its last frame by tpad) to fill the gap between them.
+        cmd = _render_cmd(
+            webcams=[WebcamClip("a.mp4", 22.497), WebcamClip("b.mp4", 106.52)],
+            hud="h.mp4",
+        )
+        files = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-i"]
+        graph = cmd[cmd.index("-filter_complex") + 1]
+        reads = {
+            label: files[
+                int(re.search(rf"\[(\d+):v\][^;]*\[{label}\]", graph).group(1))
+            ]
+            for label in ("pip0", "pip1")
+        }
+        assert reads == {"pip0": "a.mp4", "pip1": "b.mp4"}
+        assert (
+            graph.index("[hudbar]overlay")
+            < graph.index("[pip0]overlay")
+            < graph.index("[pip1]overlay")
+        )
+        assert "enable='gte(t,22.497)'" in graph
+        assert "enable='gte(t,106.520)'" in graph
 
     def test_the_cast_is_sized_to_the_room_above_the_bar(self):
         # Height-constrained with a HUD: a width fraction picked before the

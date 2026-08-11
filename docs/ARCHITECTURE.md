@@ -362,6 +362,9 @@ RECORDING.md has the cases, and the regression tests name them.
 - **Composite order is background → scope → cast → HUD → webcam.** The HUD is a
   status bar: nothing may overlap it. The webcam goes on top of it, inside the face
   recess.
+- **A round's webcam clips share that one recess, stacked in time order**
+  (`sync_webcams` sorts them; each overlay is enabled from its own start). Between
+  two clips the earlier one's `tpad`-cloned last frame is what stays on screen.
 - **Every side stream needs `tpad=stop_mode=clone`** so a clip shorter than the
   round cannot end the shared filtergraph early and silently truncate the main
   video and audio. This is a real risk class with multi-input filtergraphs.

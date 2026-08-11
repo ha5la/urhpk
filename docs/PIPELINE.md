@@ -78,7 +78,8 @@ then:
 ```
 uv run contest_video.py recording *.edi \
   --telemetry *-telemetry.jsonl --input-log *-input.jsonl \
-  --cast *.cast --webcam *-webcam-*.mp4 --scope *.scope -o out.mp4
+  --cast *.cast --scope *.scope -o out.mp4 \
+  --webcam CALL-webcam-<stamp>.mp4     # repeat the flag per Alt+V capture
 ```
 
 This is the long, unattended step — roughly 1.5× the round's own length at

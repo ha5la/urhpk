@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 from datetime import datetime, timedelta
+from typing import NamedTuple
 
 import numpy as np
 
@@ -25,6 +26,16 @@ from timeline import Qso, Segment, audio_time_for, derive_utc_offset
 from wav import read_wav_range
 
 _WEBCAM_TS_RE = re.compile(r"(\d{8}_\d{6})")
+
+
+class WebcamClip(NamedTuple):
+    """One capture on the output timeline: where its own frame 0 lands
+    (seconds into the video) and the clock-drift rate its timeline is scaled
+    by. A round has one per Alt+V start/stop pair."""
+
+    path: str
+    start: float
+    rate: float = 0.0
 
 
 def parse_webcam_wall(path: str) -> datetime:

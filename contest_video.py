@@ -70,6 +70,7 @@ from rig_state import (
 from scope_render import render_scope_video
 from timeline import (
     GAP_KEEP_S,
+    Qso,
     Segment,
     _eff,
     audio_time_for,
@@ -83,6 +84,7 @@ from timeline import (
 )
 from video_format import RENDER_FPS, RESOLUTIONS
 from webcam_sync import (
+    WebcamClip,
     parse_webcam_precise_filename,
     parse_webcam_wall,
     refine_webcam_start,
@@ -170,9 +172,7 @@ def render(
     out: str,
     W: int,
     H: int,
-    webcam: str | None = None,
-    webcam_start: float = 0.0,
-    webcam_rate: float = 0.0,
+    webcams: list[WebcamClip] | None = None,
     cast: str | None = None,
     cast_start: float = 0.0,
     cast_rate: float = 0.0,
@@ -283,9 +283,9 @@ def render(
             f";[{cur}][hudbar]overlay=x=0:y=main_h-h[vhud]"
         )
         cur = "vhud"
-    if webcam:
+    if webcams:
         # itsoffset delays the whole cam stream's presentation timestamps so
-        # its own frame 0 lands at webcam_start in the output timeline --
+        # its own frame 0 lands at its start in the output timeline --
         # exactly right, since that's the real moment the phone started
         # recording. tpad clones the cam's last frame indefinitely so a clip
         # a little shorter than the round (as here) can never end the
@@ -333,17 +333,25 @@ def render(
         # DOOM's portrait sits. Cropped to the recess's aspect (a centre crop
         # of a webcam pointed at the operator *is* a face portrait) rather
         # than letterboxed, which would leave bars inside the frame.
+        #
+        # A round has one clip per Alt+V start/stop pair, and they share the
+        # single recess: each is overlaid on top of the one before it, in the
+        # chronological order sync_webcams returns them in, and takes the
+        # recess from its own start onwards. Between two clips the earlier
+        # one's tpad-cloned last frame is what stays on screen.
         fx, fy, fw, fh = hud_face
         pip_x, pip_y = fx, H - hud_h + fy
         fit = f"crop=min(iw\\,ih*{fw}/{fh}):min(ih\\,iw*{fh}/{fw}),scale={fw}:{fh}"
-        webcam_idx = add_input(["-itsoffset", f"{webcam_start:.3f}", "-i", webcam])
-        fchain += (
-            f";[{webcam_idx}:v]setpts=PTS/{1 - webcam_rate:.8f},fps={RENDER_FPS},"
-            f"{fit},tpad=stop_mode=clone:stop_duration=99999[pip]"
-            f";[{cur}][pip]overlay=x={pip_x}:y={pip_y}:"
-            f"enable='gte(t,{webcam_start:.3f})'[v]"
-        )
-        cur = "v"
+        for i, clip in enumerate(webcams):
+            last = i == len(webcams) - 1
+            idx = add_input(["-itsoffset", f"{clip.start:.3f}", "-i", clip.path])
+            fchain += (
+                f";[{idx}:v]setpts=PTS/{1 - clip.rate:.8f},fps={RENDER_FPS},"
+                f"{fit},tpad=stop_mode=clone:stop_duration=99999[pip{i}]"
+                f";[{cur}][pip{i}]overlay=x={pip_x}:y={pip_y}:"
+                f"enable='gte(t,{clip.start:.3f})'[{'v' if last else f'v{i}'}]"
+            )
+            cur = "v" if last else f"v{i}"
     if cur != "v":
         fchain += f";[{cur}]null[v]"
     cmd += [
@@ -370,6 +378,132 @@ def render(
 
 
 # ---------------------------------------------------------------------------
+
+
+def _webcam_start(
+    path: str,
+    segs: list[Segment],
+    qsos_all: list[Qso],
+    offset_h: int,
+    input_log: str | None,
+) -> tuple[float, bool, str]:
+    """Where one clip's frame 0 lands in the output, whether that placement is
+    exact, and what it was derived from.
+
+    Prefer the exact timestamp baked into the filename itself
+    (parse_webcam_precise_filename -- self-contained, no sidecar file needed),
+    then the logger's webcam_start event (~1s early, stamped before ffmpeg
+    spawned). Both are same-machine, so placement is exact either way, no
+    cross-correlation needed."""
+    cam_wall = parse_webcam_precise_filename(path)
+    src = "exact timestamp in filename"
+    if cam_wall is None and input_log:
+        cam_wall = webcam_start_wall(input_log)
+        src = "logged webcam_start event"
+    if cam_wall is not None:
+        return audio_time_for(cam_wall + timedelta(hours=offset_h), segs), True, src
+    cam_wall = parse_webcam_wall(path)
+    cam_dur = _ffprobe_duration(path)
+    start = sync_webcam_start(cam_wall, cam_dur, qsos_all, segs, offset_h)
+    return start, False, "coarse, whole-hour only"
+
+
+def sync_webcams(
+    paths: list[str],
+    segs: list[Segment],
+    qsos_all: list[Qso],
+    offset_h: int,
+    input_log: str | None = None,
+    manual_offset: float | None = None,
+) -> tuple[list[WebcamClip], tuple[float, float] | None]:
+    """Place every capture of the round on the output timeline, in
+    chronological order, and return the clock-drift correction the cast PiP
+    shares with them -- (intercept, rate), or None if none could be fitted.
+
+    The drift is this laptop's clock against the radio's, so the round has one
+    rate, fitted from the *longest* clip -- the widest lever arm and the most
+    anchors make it the best-conditioned of the fits. A clip too short or too
+    quiet to fit its own drifts just the same, so it borrows that rate. It does
+    not borrow the intercept, which is only meaningful at the clip it was
+    measured at, and which a µs-precise filename start does not need.
+
+    The webcam_start-event fallback reads the log's *first* such event, so it
+    can only stand in for a single clip; with several, each one's own filename
+    carries its start (every Alt+V capture is renamed with it)."""
+
+    def tag(i: int) -> str:
+        return f"webcam {i + 1}/{len(paths)}" if len(paths) > 1 else "webcam"
+
+    placed = [
+        _webcam_start(
+            p, segs, qsos_all, offset_h, input_log if len(paths) == 1 else None
+        )
+        for p in paths
+    ]
+    for i, (start, exact, src) in enumerate(placed):
+        detail = (
+            f"exact -- {src}, same-machine clock, no cross-correlation needed"
+            if exact
+            else f"{src} -- see refine_webcam_start below"
+        )
+        print(f"  {tag(i)}: synced to start at {start:.0f}s in the output ({detail})")
+
+    if manual_offset is not None:
+        print(
+            f"  webcam: manual offset {manual_offset:+.2f}s applied to every clip "
+            f"(no drift-rate correction -- pass no --webcam-offset to use "
+            f"automatic cross-correlation instead)"
+        )
+        clips = [
+            WebcamClip(p, start + manual_offset)
+            for p, (start, _, _) in zip(paths, placed)
+        ]
+        return sorted(clips, key=lambda c: c.start), None
+
+    # Even an exact filename/log-derived start only fixes the constant offset
+    # -- the webcam capture (this machine's system clock, via gettimeofday) and
+    # the radio recording (the WAV sample clock, an independent crystal in the
+    # IC-9700) still aren't ticking at exactly the same *rate*. Confirmed on a
+    # real ~2h same-machine Alt+V recording: cross-correlation anchors showed a
+    # consistent, low-noise linear drift (~-1.2s intercept, residual std ~0.1s
+    # after outlier rejection) growing to ~+5s by the end -- not measurement
+    # noise, and large enough to be audible/visible. So this runs regardless of
+    # an exact start; that start is still a much better seed for the
+    # correlation search than the coarse whole-hour one.
+    fits: dict[int, tuple[float, float]] = {}
+    for i, (path, (start, exact, _)) in enumerate(zip(paths, placed)):
+        refined, rate, n = refine_webcam_start(path, segs, start)
+        if n:
+            fits[i] = (refined, rate)
+            print(
+                f"  {tag(i)}: audio cross-correlation refined start by "
+                f"{refined - start:+.2f}s and found a "
+                f"{rate * 3600:+.3f}s/hour clock-drift rate using {n} anchor(s) "
+                f"-> starts at {refined:.2f}s"
+            )
+        else:
+            print(
+                f"  {tag(i)}: audio cross-correlation found no confident match "
+                "(no audio track, or no TX segments long enough) -- using "
+                f"{'exact' if exact else 'coarse whole-hour'} sync only; "
+                "pass --webcam-offset to fine-tune manually"
+            )
+
+    drift = None
+    if fits:
+        best = max(fits, key=lambda i: _ffprobe_duration(paths[i]))
+        drift = (fits[best][0] - placed[best][0], fits[best][1])
+        if len(fits) > 1:
+            print(
+                f"  webcam: clock drift taken from {tag(best)}, the longest clip "
+                f"({drift[1] * 3600:+.3f}s/hour)"
+            )
+    borrowed = drift[1] if drift else 0.0
+    clips = [
+        WebcamClip(path, *fits.get(i, (placed[i][0], borrowed)))
+        for i, path in enumerate(paths)
+    ]
+    return sorted(clips, key=lambda c: c.start), drift
 
 
 def main() -> None:
@@ -429,10 +563,14 @@ def main() -> None:
     )
     ap.add_argument(
         "--webcam",
+        action="append",
+        metavar="FILE",
         help="picture-in-picture selfie/webcam clip, synced automatically "
         "from its own filename timestamp (e.g. VID_20260706_180003.mp4), "
         "then refined via audio cross-correlation against the operator's "
-        "own TX audio (see --webcam-offset to override)",
+        "own TX audio (see --webcam-offset to override). Repeat the flag for "
+        "a round recorded in several Alt+V captures: each is placed by its "
+        "own timestamp and they share the one face recess, in time order",
     )
     ap.add_argument(
         "--webcam-offset",
@@ -557,38 +695,6 @@ def main() -> None:
                 f"(exact -- Unix-epoch timestamps, same as --cast)"
             )
 
-    webcam_start = None
-    webcam_rate = 0.0
-    webcam_exact = False
-    if args.webcam:
-        # Prefer the exact timestamp baked into the filename itself
-        # (parse_webcam_precise_filename -- self-contained, no sidecar file
-        # needed), then the logger's webcam_start event (~1s early, stamped
-        # before ffmpeg spawned). Both are same-machine, so placement is
-        # exact either way, no cross-correlation needed.
-        cam_wall = parse_webcam_precise_filename(args.webcam)
-        src = "exact timestamp in filename"
-        if cam_wall is None and args.input_log:
-            cam_wall = webcam_start_wall(args.input_log)
-            src = "logged webcam_start event"
-        if cam_wall is not None:
-            webcam_start = audio_time_for(cam_wall + timedelta(hours=offset_h), segs)
-            webcam_exact = True
-            print(
-                f"  webcam: synced to start at {webcam_start:.0f}s in the output "
-                f"(exact -- {src}, same-machine clock, no cross-correlation needed)"
-            )
-        else:
-            cam_wall = parse_webcam_wall(args.webcam)
-            cam_dur = _ffprobe_duration(args.webcam)
-            webcam_start = sync_webcam_start(
-                cam_wall, cam_dur, qsos_all, segs, offset_h
-            )
-            print(
-                f"  webcam: synced to start at {webcam_start:.0f}s in the output (coarse, "
-                f"whole-hour only -- see refine_webcam_start below)"
-            )
-
     # read_wav_metadata runs before --duration trims segs (unlike the CW
     # decode loop further down, which *should* skip past the cutoff) so the
     # webcam fine-tune below can search for TX anchors across the *full*
@@ -599,64 +705,34 @@ def main() -> None:
     known_wav = sum(1 for s in segs if s.ptt is not None)
     print(f"  WAV metadata: {known_wav}/{len(segs)} segments have IC-9700 rig tags")
 
-    if args.webcam and webcam_start is not None:
-        if args.webcam_offset is not None:
-            webcam_start += args.webcam_offset
+    webcams: list[WebcamClip] = []
+    if args.webcam:
+        webcams, drift = sync_webcams(
+            args.webcam,
+            segs,
+            qsos_all,
+            offset_h,
+            input_log=args.input_log,
+            manual_offset=args.webcam_offset,
+        )
+        # The webcam capture and the cast recording (asciinema, also on this
+        # machine) are timestamped by the *same* laptop system clock -- so the
+        # intercept/rate correction measured against the webcam's own audio
+        # (the only stream with anything to cross-correlate against the radio's
+        # WAV audio) applies to the cast PiP too. Confirmed needed from a real
+        # report: the operator saw the logger's own on-screen mode change
+        # happen visibly before the audio caught up with it, late in the same
+        # round this webcam drift was found in -- consistent with one shared
+        # laptop-clock drift, not two unrelated bugs.
+        if drift and args.cast and cast_start is not None:
+            intercept, rate = drift
+            cast_start += intercept
+            cast_rate = rate
             print(
-                f"  webcam: manual offset {args.webcam_offset:+.2f}s applied -> "
-                f"starts at {webcam_start:.2f}s (no drift-rate correction -- "
-                f"pass no --webcam-offset to use automatic cross-correlation instead)"
+                f"  cast: applying the same clock-drift correction "
+                f"({intercept:+.2f}s, {rate * 3600:+.3f}s/hour) -> "
+                f"starts at {cast_start:.2f}s"
             )
-        else:
-            # Even an exact filename/log-derived start only fixes the
-            # constant offset -- the webcam capture (this machine's system
-            # clock, via gettimeofday) and the radio recording (the WAV
-            # sample clock, an independent crystal in the IC-9700) still
-            # aren't ticking at exactly the same *rate*. Confirmed on a real
-            # ~2h same-machine Alt+V recording: cross-correlation anchors
-            # showed a consistent, low-noise linear drift (~-1.2s intercept,
-            # residual std ~0.1s after outlier rejection) growing to ~+5s by
-            # the end -- not measurement noise, and large enough to be
-            # audible/visible. So refine_webcam_start always runs regardless
-            # of webcam_exact; the exact start is still a much better seed
-            # for the correlation search than the coarse whole-hour one.
-            refined, rate, n = refine_webcam_start(args.webcam, segs, webcam_start)
-            if n:
-                intercept = refined - webcam_start
-                print(
-                    f"  webcam: audio cross-correlation refined start by "
-                    f"{intercept:+.2f}s and found a "
-                    f"{rate * 3600:+.3f}s/hour clock-drift rate using {n} anchor(s) "
-                    f"-> starts at {refined:.2f}s"
-                )
-                webcam_start = refined
-                webcam_rate = rate
-                # The webcam capture and the cast recording (asciinema, also
-                # on this machine) are timestamped by the *same* laptop
-                # system clock -- so the same intercept/rate correction
-                # measured against the webcam's own audio (the only stream
-                # with anything to cross-correlate against the radio's WAV
-                # audio) applies to the cast PiP too. Confirmed needed from
-                # a real report: the operator saw the logger's own on-screen
-                # mode change happen visibly before the audio caught up with
-                # it, late in the same round this webcam drift was found
-                # in -- consistent with one shared laptop-clock drift, not
-                # two unrelated bugs.
-                if args.cast and cast_start is not None:
-                    cast_start += intercept
-                    cast_rate = rate
-                    print(
-                        f"  cast: applying the same clock-drift correction "
-                        f"({intercept:+.2f}s, {rate * 3600:+.3f}s/hour) -> "
-                        f"starts at {cast_start:.2f}s"
-                    )
-            else:
-                print(
-                    "  webcam: audio cross-correlation found no confident match "
-                    "(no audio track, or no TX segments long enough) -- using "
-                    f"{'exact' if webcam_exact else 'coarse whole-hour'} sync only; "
-                    "pass --webcam-offset to fine-tune manually"
-                )
 
     if args.duration:
         segs = trim_to_duration(segs, args.duration)
@@ -720,9 +796,10 @@ def main() -> None:
     if len(qsos) < len(qsos_all):
         print(f"  {len(qsos)}/{len(qsos_all)} QSOs fall within the {total:.0f}s cut")
 
-    if webcam_start is not None and webcam_start >= total:
-        print("  webcam starts after the cut ends -- dropping the PiP overlay")
-        webcam_start = None
+    dropped = [c for c in webcams if c.start >= total]
+    if dropped:
+        print(f"  {len(dropped)} webcam clip(s) start after the cut ends -- dropped")
+        webcams = [c for c in webcams if c.start < total]
 
     if cast_start is not None and cast_start >= total:
         print("  cast starts after the cut ends -- dropping the PiP overlay")
@@ -838,9 +915,7 @@ def main() -> None:
         args.out,
         W,
         H,
-        webcam=args.webcam if webcam_start is not None else None,
-        webcam_start=webcam_start or 0.0,
-        webcam_rate=webcam_rate,
+        webcams=webcams,
         cast=cast_video,
         cast_start=cast_start or 0.0,
         cast_rate=cast_rate,

@@ -13,6 +13,7 @@ from timeline import (
     derive_utc_offset,
 )
 from webcam_sync import (
+    WebcamClip,
     _find_offset_correction,
     _rms_envelope,
     parse_webcam_precise_filename,
@@ -47,11 +48,10 @@ class TestRenderWebcamSync:
             str(tmp_path / "out.mp4"),
             1920,
             1080,
-            webcam=str(tmp_path / "cam.mp4"),
-            webcam_start=10.0,
+            webcams=[WebcamClip(str(tmp_path / "cam.mp4"), 10.0)],
         )
         fchain = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
-        pip_chain = fchain.split("[1:v]")[1].split("[pip]")[0]
+        pip_chain = fchain.split("[1:v]")[1].split("[pip0]")[0]
         assert f"fps={video_format.RENDER_FPS}" in pip_chain
 
     def test_pip_branch_stretches_timeline_by_webcam_rate(self, monkeypatch, tmp_path):
@@ -75,12 +75,10 @@ class TestRenderWebcamSync:
             str(tmp_path / "out.mp4"),
             1920,
             1080,
-            webcam=str(tmp_path / "cam.mp4"),
-            webcam_start=10.0,
-            webcam_rate=0.0005,
+            webcams=[WebcamClip(str(tmp_path / "cam.mp4"), 10.0, 0.0005)],
         )
         fchain = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
-        pip_chain = fchain.split("[1:v]")[1].split("[pip]")[0]
+        pip_chain = fchain.split("[1:v]")[1].split("[pip0]")[0]
         assert pip_chain.startswith("setpts=PTS/0.9995")
         assert pip_chain.index("setpts=") < pip_chain.index(
             f"fps={video_format.RENDER_FPS}"
@@ -98,8 +96,7 @@ class TestRenderWebcamSync:
             str(tmp_path / "out.mp4"),
             1280,
             720,
-            webcam=str(tmp_path / "cam.mp4"),
-            webcam_start=10.0,
+            webcams=[WebcamClip(str(tmp_path / "cam.mp4"), 10.0)],
         )
         fchain = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
         assert "hflip" not in fchain
@@ -416,3 +413,84 @@ class TestParseWebcamPreciseFilename:
 
     def test_none_for_the_coarse_phone_clip_convention(self):
         assert parse_webcam_precise_filename("VID_20260706_180003.mp4") is None
+
+
+class TestSyncWebcams:
+    """A round is one clip per Alt+V start/stop pair, and they share the single
+    face recess. Each is placed by its own µs-precise filename stamp; the
+    clock-drift rate is the round's, not the clip's."""
+
+    CAM1 = "r-webcam-20260811T191622.497368Z.mp4"  # 22.497s into the round
+    CAM2 = "r-webcam-20260811T191746.519807Z.mp4"  # 106.520s into the round
+
+    def _segs(self):
+        return [
+            Segment("a", datetime(2026, 8, 11, 21, 16, 0), 120.0, 0.0),
+            Segment("b", datetime(2026, 8, 11, 21, 18, 0), 120.0, 120.0),
+        ]
+
+    def _fake_refine(self, monkeypatch, by_path):
+        """Stub refine_webcam_start with a per-path (intercept, rate, anchors)."""
+
+        def fake(path, segs, start, **kw):
+            intercept, rate, n = by_path[path]
+            return start + intercept, rate, n
+
+        monkeypatch.setattr(cv, "refine_webcam_start", fake)
+
+    def _fake_durations(self, monkeypatch, by_path):
+        monkeypatch.setattr(cv, "_ffprobe_duration", lambda p: by_path[p])
+
+    def test_clips_come_back_in_time_order_whatever_order_they_were_given(
+        self, monkeypatch
+    ):
+        # They are overlaid in list order, each on top of the one before, so a
+        # command line listing the second capture first would otherwise hide it
+        # under the first capture's frozen last frame for the rest of the round.
+        self._fake_refine(
+            monkeypatch, {self.CAM1: (0.0, 0.0, 0), self.CAM2: (0.0, 0.0, 0)}
+        )
+        clips, _ = cv.sync_webcams([self.CAM2, self.CAM1], self._segs(), [], 2)
+        assert [c.path for c in clips] == [self.CAM1, self.CAM2]
+        assert [round(c.start, 3) for c in clips] == [22.497, 106.520]
+
+    def test_drift_is_taken_from_the_longest_clip(self, monkeypatch):
+        # The rate is one laptop clock against the radio's, fitted per clip
+        # over its own span: the longest clip has the widest lever arm and the
+        # most anchors, so its fit is the round's -- and the cast PiP, on that
+        # same clock, is corrected with it.
+        self._fake_refine(
+            monkeypatch, {self.CAM1: (-0.5, 0.001, 3), self.CAM2: (+0.25, 0.002, 9)}
+        )
+        self._fake_durations(monkeypatch, {self.CAM1: 80.8, self.CAM2: 300.0})
+        clips, drift = cv.sync_webcams([self.CAM1, self.CAM2], self._segs(), [], 2)
+        assert drift == (0.25, 0.002)
+        assert [c.rate for c in clips] == [0.001, 0.002]  # each keeps its own fit
+
+    def test_a_clip_that_cannot_fit_its_own_drift_borrows_the_rounds(self, monkeypatch):
+        # Too short or too quiet to cross-correlate does not mean it does not
+        # drift. Its start is already exact from the filename, so it borrows
+        # the rate alone -- the intercept belongs to the clip it was measured at.
+        self._fake_refine(
+            monkeypatch, {self.CAM1: (-0.5, 0.002, 7), self.CAM2: (0.0, 0.0, 0)}
+        )
+        self._fake_durations(monkeypatch, {self.CAM1: 300.0, self.CAM2: 20.0})
+        clips, drift = cv.sync_webcams([self.CAM1, self.CAM2], self._segs(), [], 2)
+        assert drift == (-0.5, 0.002)
+        assert clips[0].start == 21.997368 and clips[0].rate == 0.002
+        assert clips[1].start == 106.519807 and clips[1].rate == 0.002
+
+    def test_a_manual_offset_shifts_every_clip_and_skips_correlation(self, monkeypatch):
+        # --webcam-offset is the escape hatch for when correlation cannot work,
+        # and corrects a per-machine offset -- so it applies to all the clips
+        # that machine recorded.
+        def boom(*a, **kw):
+            raise AssertionError("cross-correlation must not run")
+
+        monkeypatch.setattr(cv, "refine_webcam_start", boom)
+        clips, drift = cv.sync_webcams(
+            [self.CAM1, self.CAM2], self._segs(), [], 2, manual_offset=-1.5
+        )
+        assert drift is None
+        assert [round(c.start, 3) for c in clips] == [20.997, 105.020]
+        assert [c.rate for c in clips] == [0.0, 0.0]

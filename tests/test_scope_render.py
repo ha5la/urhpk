@@ -15,6 +15,7 @@ from scope_render import (
 from timeline import (
     Segment,
 )
+from webcam_sync import WebcamClip
 
 
 def _epoch(y, mo, d, h, mi, s):
@@ -153,8 +154,7 @@ class TestRenderScopeBackground:
             scope_end=10.0,
             cast=str(tmp_path / "cast.mp4"),
             cast_start=1.0,
-            webcam=str(tmp_path / "cam.mp4"),
-            webcam_start=2.0,
+            webcams=[WebcamClip(str(tmp_path / "cam.mp4"), 2.0)],
         )
         fchain = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
         # scope=input 1, cast=input 2, webcam=input 3 -- confirms indices
