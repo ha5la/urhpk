@@ -4,7 +4,7 @@ d=$(dirname "$0")
 
 # Preflight: contest_video.py's audio/webcam/cast sync assumes this
 # machine's system clock rate is trustworthy for the whole round. Real
-# case: systemd-timesyncd restarted ~2 min before a contest round started
+# case: systemd-timesyncd restarted ~2 min before a round started
 # (journalctl showed "Initial clock synchronization" right at that
 # restart), resetting its learned frequency-drift compensation from
 # scratch -- unlike chrony, it has no persistent drift file. The clock
@@ -14,8 +14,8 @@ d=$(dirname "$0")
 # "synchronized: yes" check doesn't catch this -- it flips true on the
 # very first poll, well before frequency compensation has converged.
 # Service uptime is a better proxy: warn if the active time-sync service
-# has been running for under 10 minutes. Non-blocking -- the contest
-# window is fixed, this is just visibility, not a gate.
+# has been running for under 10 minutes. Non-blocking -- the round's
+# start and end are fixed, this is just visibility, not a gate.
 svc_found=""
 for svc in chrony chronyd systemd-timesyncd; do
     if systemctl is-active --quiet "$svc" 2>/dev/null; then

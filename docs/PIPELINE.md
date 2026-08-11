@@ -41,7 +41,7 @@ network access at all**. Run it once, days ahead; it caches API responses in
 
 ```
 ./sync-clock.sh                     # chrony resync, right before
-./run-recorded-round.sh   # right before — nothing earlier
+./run-recorded-round.sh             # right before — nothing earlier
 ```
 
 The second script is the entrypoint, and starting/stopping that one tmux session
