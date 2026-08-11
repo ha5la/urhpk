@@ -9,7 +9,7 @@ flowchart TD
     H["<b>1. Harvest</b><br/>uv run puskas_harvester.py<br/><i>days before</i>"]
     --> HDB[("~/.puskas/<br/>puskas-seen-stations.json")]
 
-    C["<b>2. Run the round</b><br/>./sync-clock.sh<br/>./run-recorded-contest-session.sh<br/><i>18:00–20:00, first Monday</i>"]
+    C["<b>2. Run the round</b><br/>./sync-clock.sh<br/>./run-recorded-round.sh<br/><i>18:00–20:00, first Monday</i>"]
     HDB -.locator cache.-> C
 
     C --> EDI["*.edi<br/><i>the log — this is what gets submitted</i>"]
@@ -41,7 +41,7 @@ network access at all**. Run it once, days ahead; it caches API responses in
 
 ```
 ./sync-clock.sh                     # chrony resync, right before
-./run-recorded-contest-session.sh   # right before — nothing earlier
+./run-recorded-round.sh   # right before — nothing earlier
 ```
 
 The second script is the entrypoint, and starting/stopping that one tmux session
@@ -124,7 +124,7 @@ youtubeuploader \
 
 ### Why the logger's pane is recorded with asciinema
 
-`run-recorded-contest-session.sh` records the logger's pane with
+`run-recorded-round.sh` records the logger's pane with
 [asciinema](https://asciinema.org/) — not the irssi pane, and not a
 screen-capture tool like `recordmydesktop`. The console UI is plain text, so a graphical
 screen recording would just be lossy video of something that's already

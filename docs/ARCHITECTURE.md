@@ -381,7 +381,7 @@ RECORDING.md has the cases, and the regression tests name them.
   to t=0.** `stream_start` differs from `audio_time_for` for exactly this case, and
   `_stream_input_args` turns a negative start into an `-ss` seek into that input
   (ffmpeg has no meaning for a negative `-itsoffset`). This is the **normal** case:
-  `run-recorded-contest-session.sh` starts asciinema before the radio recorder, and
+  `run-recorded-round.sh` starts asciinema before the radio recorder, and
   the `.scope` recorder starts when the radio connects. Clamping instead showed up
   as the cast PiP's clock lagging the round by 25 s.
 - **Filter-graph string assertions cannot catch how branches combine.** Three real
@@ -890,7 +890,7 @@ running, because a round that was not recorded cannot be re-run:
   Read once per radio connect via `icom_net`'s `read_param`; Alt+S re-reads and
   spells out which one is wrong. The connect-time check deliberately posts no
   notice — the logger's pane is ~95 columns (half of a 191-column terminal, see
-  `run-recorded-contest-session.sh`) and a notice would crowd the clock off it, so
+  `run-recorded-round.sh`) and a notice would crowd the clock off it, so
   nothing appears in this toolbar unbidden.
 - **`● REC` / `NO WEBCAM` (yellow) / `WEBCAM DIED` (red)** — from
   `recorders.webcam_status()`. `webcam_reap()`, called by `_toolbar_watcher`, is what

@@ -193,7 +193,7 @@ def stream_start(wall: datetime, segs: list[Segment]) -> float:
     everything in it reads late by the whole cast-to-WAV gap (25 s in the
     dry-run that caught it, as the cast PiP's clock lagging the round).
 
-    This is the normal case, not an edge case: run-recorded-contest-session.sh
+    This is the normal case, not an edge case: run-recorded-round.sh
     starts asciinema before the radio recorder is switched on, so every cast
     made through the documented entrypoint begins ahead of the audio.
     render() turns the negative value into an -ss seek *into* the stream."""

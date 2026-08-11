@@ -3,13 +3,13 @@
 d=$(dirname "$0")
 
 # Preflight: contest_video.py's audio/webcam/cast sync assumes this
-# machine's system clock rate is trustworthy for the whole session. Real
+# machine's system clock rate is trustworthy for the whole round. Real
 # case: systemd-timesyncd restarted ~2 min before a contest round started
 # (journalctl showed "Initial clock synchronization" right at that
 # restart), resetting its learned frequency-drift compensation from
 # scratch -- unlike chrony, it has no persistent drift file. The clock
 # then drifted ~2.5s/hour against the radio recorder for the whole ~2h
-# session while it relearned, visible in the rendered video as the
+# round while it relearned, visible in the rendered video as the
 # webcam/cast PiPs sliding out of sync with the audio. A plain
 # "synchronized: yes" check doesn't catch this -- it flips true on the
 # very first poll, well before frequency compensation has converged.
@@ -25,7 +25,7 @@ for svc in chrony chronyd systemd-timesyncd; do
         if [ "$up_s" -ge 0 ] && [ "$up_s" -lt 600 ]; then
             echo "WARNING: $svc has only been running for ${up_s}s -- its clock-drift" >&2
             echo "  compensation may not have converged yet. webcam/cast PiP sync in" >&2
-            echo "  contest_video.py may drift over a long session -- see CLAUDE.md" >&2
+            echo "  contest_video.py may drift over a long round -- see CLAUDE.md" >&2
             echo "  ('systemd-timesyncd restart' note). Not blocking; just be aware." >&2
         fi
         break

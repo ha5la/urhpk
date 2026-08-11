@@ -368,7 +368,7 @@ Pillow to draw them), producing a standalone intermediate mp4 that the main
 pass then composites — the same pattern the scope and HUD stages use.
 
 See PIPELINE.md for how the recording is actually made
-(`run-recorded-contest-session.sh` does it automatically) and
+(`run-recorded-round.sh` does it automatically) and
 ARCHITECTURE.md's `--cast` notes for the tmux/pyte implementation details (dirty-row-only redraw for render speed, the
 DECSLRM/SU/SD terminal-emulation fixes needed because the recording is made
 *inside* tmux, and the PiP's aspect-ratio/layout constants).

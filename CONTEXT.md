@@ -227,7 +227,6 @@ nowhere hard-coded.
 Names on disk and in muscle memory that predate this glossary, kept
 deliberately. They are *imprecise*, not *wrong* — do not "fix" them:
 
-- `contest_video.py`, `run-recorded-contest-session.sh`, "contest directory" —
-  all mean one **round**.
+- `contest_video.py`, "contest directory" — both mean one **round**.
 - `~/.puskas/`, `.puskas_cache/`, `puskas_logger.py`, `puskas_harvester.py` —
   the project's own prefix, not a statement that a tool is Puskás-only.

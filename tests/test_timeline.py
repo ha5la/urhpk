@@ -184,7 +184,7 @@ class TestStreamPrecedesAudio:
     """A cast/scope stream that began *before* the first WAV segment must be
     entered partway in, not clamped to video t=0 -- the clamp showed up as
     the cast PiP's clock lagging the session by exactly cast-to-WAV gap
-    (25 s in the dry-run that caught it). run-recorded-contest-session.sh
+    (25 s in the dry-run that caught it). run-recorded-round.sh
     guarantees this ordering: asciinema starts before the radio recorder."""
 
     def _segs(self):

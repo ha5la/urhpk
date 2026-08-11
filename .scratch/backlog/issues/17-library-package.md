@@ -7,7 +7,7 @@ Blocked by: 01 (end-to-end test)
 The root holds 27 Python files with no visible line between the six a person
 runs and the twenty-one they import. Move the libraries into a `urhpk/`
 package; leave the entry points where every documented command, every shebang
-and `run-recorded-contest-session.sh` already names them.
+and `run-recorded-round.sh` already names them.
 
 **Stay at the root** (6, 4,830 lines): `contest_video.py`, `puskas_logger.py`,
 `on4kst_irc_bridge.py`, `puskas_harvester.py`, `hamlib_supervisor.py`,

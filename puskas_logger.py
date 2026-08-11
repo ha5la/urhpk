@@ -242,7 +242,7 @@ async def _radio_stop() -> None:
 
 def _install_signal_handlers() -> None:
     """A contest round ends by killing the tmux session that runs the logger
-    (see run-recorded-contest-session.sh), so SIGTERM/SIGHUP is an ordinary
+    (see run-recorded-round.sh), so SIGTERM/SIGHUP is an ordinary
     exit path here -- and the one that used to leave the radio streaming to a
     dead socket, refusing new sessions. EDI/telemetry/input logs are all
     flushed as they are written, so exiting straight from the handler loses
@@ -352,7 +352,7 @@ def _clock_sync() -> None:
 #
 # Which of them is wrong goes in the notice slot rather than in a block of its
 # own: the logger's pane is half of a 191-column terminal (even-horizontal,
-# see run-recorded-contest-session.sh), and both phrases spelled out
+# see run-recorded-round.sh), and both phrases spelled out
 # permanently push the clock off the right-hand end. What stays is the short
 # flag; Alt+S spells it out, which is the key pressed while the radio's menu
 # is being visited anyway.

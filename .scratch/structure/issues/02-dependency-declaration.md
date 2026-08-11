@@ -28,7 +28,7 @@ own directory — verified: a sibling import works from an arbitrary CWD under a
 **(a) Full uv project.** Runtime deps move to `[project] dependencies`, scripts
 lose their PEP 723 headers, `uv.lock` covers everything. One declaration, one
 resolution, one lock.
-Cost: the standalone-script property goes. `run-recorded-contest-session.sh`
+Cost: the standalone-script property goes. `run-recorded-round.sh`
 launches the logger as `$d/puskas_logger.py` from a contest directory; that
 keeps working while the directory is inside the repo (uv walks up to find
 `pyproject.toml`), but a script copied elsewhere no longer runs. CLAUDE.md

@@ -21,7 +21,7 @@ number is exactly what changes across a replug.
 Usage:
     uv run hamlib_supervisor.py
     Run for the duration of a contest round only, not as a persistent
-    service — see run-recorded-contest-session.sh, which starts this in
+    service — see run-recorded-round.sh, which starts this in
     a tmux window alongside the logger/bridge and tears it down with the
     rest of the session. Handles SIGHUP as well as SIGTERM/SIGINT so
     killing that tmux window/session stops rotctld cleanly too.
