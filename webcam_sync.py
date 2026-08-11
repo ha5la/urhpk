@@ -41,11 +41,11 @@ _WEBCAM_PRECISE_RE = re.compile(r"-webcam-(\d{8}T\d{6}\.\d+Z)\.")
 
 
 def parse_webcam_precise_filename(path: str) -> datetime | None:
-    """Parse the exact, µs-precise UTC timestamp recorders.webcam_toggle
-    bakes into the filename on stop (e.g.
+    """Parse the exact, µs-precise UTC timestamp recorders.webcam_finalize_name
+    bakes into the filename a second into the capture (e.g.
     `foo-webcam-20260722T121101.868307Z.mp4`), read from the ffmpeg capture
-    log's own frame-0 wallclock at the time (see _webcam_precise_start in
-    puskas_logger.py). Preferred over webcam_start_from_log/webcam_start_wall
+    log's own frame-0 wallclock.
+    Preferred over webcam_start_from_log/webcam_start_wall
     below: same precision, but self-contained in the filename itself -- no
     dependency on the sidecar `.log` file surviving alongside the video, and
     a rename is free (no second copy of the video data, unlike tagging the

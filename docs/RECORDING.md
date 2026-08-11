@@ -380,11 +380,14 @@ corner. Two different sync paths exist depending on how the clip was made:
 
 - **Recorded via `puskas_logger.py`'s own Alt+V capture** (same machine as
   the logger, same `datetime.now(timezone.utc)` clock as every QSO/keystroke):
-  exact sync, no cross-correlation needed. The file itself is renamed on
-  stop with a µs-precise UTC timestamp baked into the filename (e.g.
+  exact sync, no cross-correlation needed. The file itself is renamed about
+  a second in with a µs-precise UTC timestamp baked into the filename (e.g.
   `foo-webcam.mp4` -> `foo-webcam-20260706T160037.123456Z.mp4`) —
   `parse_webcam_precise_filename` reads it straight off the filename, no
-  extra file needed. This was chosen over tagging the timestamp into the
+  extra file needed. Renaming that early — the moment ffmpeg logs frame 0,
+  with the capture still running — is what makes the timestamp survive a
+  power cut or a `kill -9`, where nothing runs at the end to apply it. This
+  was chosen over tagging the timestamp into the
   mp4's own container metadata after capture: that was tested against a
   real ~2h/3GB file and does work (a 15s stream-copy remux), but needs a
   full second copy of the file on disk at the same time — too risky right

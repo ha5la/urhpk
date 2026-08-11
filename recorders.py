@@ -209,6 +209,7 @@ _webcam_died = False
 _webcam_log_fh = None
 _webcam_out_path = None
 _webcam_log_path = None
+_webcam_named = False
 
 
 def _webcam_precise_name(out_path: str, start: datetime) -> str:
@@ -229,9 +230,9 @@ def _webcam_capture_cmd(device: str, audio_source: str, out_path: str) -> list[s
 
     -use_wallclock_as_timestamps 1 on the v4l2 input stamps every captured
     frame with the real gettimeofday wallclock, so ffmpeg logs an exact
-    frame-0 UTC start in the *-webcam.log. webcam_toggle's stop branch reads
-    it back (webcam_log.frame_zero_utc) to rename the finished file with that
-    exact timestamp -- webcam_sync.webcam_start_from_log parsing the
+    frame-0 UTC start in the *-webcam.log. webcam_finalize_name reads it back
+    (webcam_log.frame_zero_utc) to rename the recording with that exact
+    timestamp -- webcam_sync.webcam_start_from_log parsing the
     same log is only a fallback now, for recordings made before this existed
     or where the rename didn't happen. Without the flag, v4l2 timestamps are
     CLOCK_MONOTONIC (uptime), useless as an absolute time -- and the
@@ -264,23 +265,42 @@ def _webcam_capture_cmd(device: str, audio_source: str, out_path: str) -> list[s
     ]
 
 
+def webcam_finalize_name() -> None:
+    """Give the recording its precise-start name as soon as ffmpeg has logged
+    frame 0 -- about a second in, with the capture still running. Renaming an
+    open file is a directory-entry update: ffmpeg keeps writing (and seeks back
+    to finalize the moov atom) through an fd that follows the inode, not the
+    name. Doing it here rather than at stop is what makes the timestamp survive
+    a power cut or a kill -9, where nothing at all gets to run at the end.
+
+    Called on every toolbar tick, and once more from _webcam_finish for a
+    capture that died before a tick could see its log; a no-op once the rename
+    has landed, so the log is parsed only during that first second."""
+    global _webcam_out_path, _webcam_named
+    if _webcam_named or not (_webcam_out_path and _webcam_log_path):
+        return
+    start = webcam_log.frame_zero_utc(_webcam_log_path)
+    if start is None:
+        return
+    renamed = _webcam_precise_name(_webcam_out_path, start)
+    try:
+        Path(_webcam_out_path).rename(renamed)
+    except OSError:
+        return  # leave it at its original name -- not fatal
+    _webcam_out_path = renamed
+    _webcam_named = True
+
+
 def _webcam_finish() -> None:
-    """Close the ffmpeg log and give the finished mp4 its precise-start name.
-    Shared by the deliberate stop and by webcam_reap: a capture that crashed
-    still leaves a playable prefix, and contest_video finds it by that name
-    like any other."""
+    """Close the ffmpeg log and make sure the mp4 carries its precise-start
+    name. Shared by the deliberate stop and by webcam_reap: a capture that
+    crashed still leaves a playable prefix, and contest_video finds it by that
+    name like any other."""
     global _webcam_log_fh, _webcam_out_path, _webcam_log_path
     if _webcam_log_fh:
         _webcam_log_fh.close()
         _webcam_log_fh = None
-    if _webcam_out_path and _webcam_log_path:
-        start = webcam_log.frame_zero_utc(_webcam_log_path)
-        if start is not None:
-            renamed = _webcam_precise_name(_webcam_out_path, start)
-            try:
-                Path(_webcam_out_path).rename(renamed)
-            except OSError:
-                pass  # leave it at its original name -- not fatal
+    webcam_finalize_name()
     _webcam_out_path = None
     _webcam_log_path = None
 
@@ -289,7 +309,7 @@ def webcam_toggle(path_prefix: str) -> str | None:
     """Start or stop webcam capture; returns a status message for the
     toolbar/notice area, or None if nothing changed (e.g. ffmpeg missing)."""
     global _webcam_proc, _webcam_died, _webcam_log_fh, _webcam_out_path
-    global _webcam_log_path
+    global _webcam_log_path, _webcam_named
     now = datetime.now(timezone.utc)
     if _webcam_proc is None:
         out_path = f"{path_prefix}-webcam.mp4"
@@ -307,6 +327,7 @@ def webcam_toggle(path_prefix: str) -> str | None:
             return f"webcam start failed: {e}"
         _webcam_out_path = out_path
         _webcam_log_path = log_path
+        _webcam_named = False
         _webcam_died = False
         log_input_event(
             {"t": now.strftime("%Y-%m-%dT%H:%M:%S.%fZ"), "event": "webcam_start"}

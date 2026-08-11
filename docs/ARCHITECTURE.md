@@ -904,8 +904,8 @@ out as tofu boxes in the rendered video; they are also double-width in some term
 which shifts every column after them. (Unicode has no SD-card character at all, so
 `SD ✗`/`SD ●` is the closest thing available regardless.)
 
-**Webcam capture** (`YYMMDD-CALL-webcam.mp4` while recording, renamed on stop — see
-below — Alt+V to start/stop, off by default):
+**Webcam capture** (`YYMMDD-CALL-webcam.mp4`, renamed ~1 s in — see below — Alt+V to
+start/stop, off by default):
 - Capturing on the *same machine* that runs the logger is the whole point: a
   phone propped up separately has its own clock, which `contest_video.py` then
   has to reconcile by audio cross-correlation (see FINDINGS.md). Here the start
@@ -921,7 +921,7 @@ below — Alt+V to start/stop, off by default):
   triggered automatically on exit (`_webcam_stop_if_running`, both the normal
   Ctrl-D path and the crash-handler path in `main()`) so a still-running capture
   is never left orphaned or its output file unfinalized.
-- **Renamed on stop with a µs-precise timestamp** (`_webcam_precise_start` +
+- **Renamed with a µs-precise timestamp** (`webcam_finalize_name` +
   `_webcam_precise_name`), e.g. `260706-HA5LA-webcam-20260706T160037.123456Z.mp4`.
   The true frame-0 wallclock isn't known until the camera has actually opened
   (~1 s after spawn, variable), so it cannot be passed to ffmpeg up front; tagging
@@ -930,6 +930,13 @@ below — Alt+V to start/stop, off by default):
   directory-entry update, independent of size. `contest_video.py`'s
   `parse_webcam_precise_filename` prefers this over the `*-webcam.log` sidecar
   (same precision, but depends on that file surviving alongside the video).
+- **The rename happens while the capture runs**, on the toolbar's 10 Hz tick, as
+  soon as the log carries frame 0 — not at stop, so a power cut or a `kill -9`
+  (where nothing gets to run at the end) still leaves the timestamp on the file.
+  ffmpeg writes on through it: an open fd follows the inode, not the name, and
+  the moov atom it seeks back to finalize lands in the renamed file (verified by
+  renaming a live capture mid-run, then decoding a frame from after that point).
+  `_webcam_finish` calls it once more for a capture that died between ticks.
 - Logs `"event": "webcam_start"` / `"webcam_stop"` to the same `*-input.jsonl` as
   everything else (see **Input-box logging** above) rather than a separate file —
   one more consumer of the same already-precise event log, not a new format.

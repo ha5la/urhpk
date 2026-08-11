@@ -47,6 +47,7 @@ from recorders import (
     on_buffer_changed,
     telemetry_rig_record,
     telemetry_rot_record,
+    webcam_finalize_name,
     webcam_reap,
     webcam_status,
     webcam_toggle,
@@ -1247,6 +1248,61 @@ class TestWebcamToggleRename:
         assert msg == "recording stopped"
         assert out_path.exists()
         assert out_path.read_bytes() == b"fake mp4 data"
+
+
+class TestWebcamFinalizeName:
+    """The precise-start rename happens while the capture is still running, so
+    a round that ends in a power cut or a kill -9 -- where nothing runs to do it
+    at stop -- still leaves a correctly stamped file behind."""
+
+    def teardown_method(self):
+        recorders._webcam_out_path = None
+        recorders._webcam_log_path = None
+        recorders._webcam_named = False
+
+    def _start_capture(self, tmp_path):
+        out_path = tmp_path / "prefix-webcam.mp4"
+        out_path.write_bytes(b"fake mp4 data")
+        log_path = tmp_path / "prefix-webcam.log"
+        log_path.write_text("ffmpeg version 7.1.5\n")
+        recorders._webcam_out_path = str(out_path)
+        recorders._webcam_log_path = str(log_path)
+        recorders._webcam_named = False
+        return out_path, log_path
+
+    def _log_frame_zero(self, log_path):
+        with open(log_path, "a") as fh:
+            fh.write(
+                "Input #0, video4linux2,v4l2, from '/dev/video0':\n"
+                "  Duration: N/A, start: 1784722261.868307, bitrate: 147456 kb/s\n"
+            )
+
+    def test_renames_as_soon_as_ffmpeg_logs_frame_zero(self, tmp_path):
+        out_path, log_path = self._start_capture(tmp_path)
+        webcam_finalize_name()
+        assert out_path.exists()  # nothing logged yet -- nothing to stamp with
+        self._log_frame_zero(log_path)
+        webcam_finalize_name()
+        renamed = tmp_path / "prefix-webcam-20260722T121101.868307Z.mp4"
+        assert renamed.exists()
+        assert not out_path.exists()
+        assert renamed.read_bytes() == b"fake mp4 data"
+
+    def test_stop_after_an_early_rename_does_not_stamp_twice(self, tmp_path):
+        out_path, log_path = self._start_capture(tmp_path)
+        self._log_frame_zero(log_path)
+        webcam_finalize_name()
+        fake_proc = MagicMock()
+        fake_proc.wait.return_value = 0
+        recorders._webcam_proc = fake_proc
+        recorders._webcam_log_fh = None
+        try:
+            webcam_toggle("")
+        finally:
+            recorders._webcam_proc = None
+        assert sorted(p.name for p in tmp_path.glob("*.mp4")) == [
+            "prefix-webcam-20260722T121101.868307Z.mp4"
+        ]
 
 
 class TestWebcamStatus:

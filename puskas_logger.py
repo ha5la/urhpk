@@ -59,6 +59,7 @@ from recorders import (
     telemetry_open,
     telemetry_rig_record,
     telemetry_write,
+    webcam_finalize_name,
     webcam_reap,
     webcam_status,
     webcam_stop_if_running,
@@ -806,6 +807,7 @@ async def run(lb: LogBook, tname: str):
         current one in this context yet."""
         last = None
         while True:
+            webcam_finalize_name()
             notice = webcam_reap()
             if notice:
                 _state["webcam_notice"] = (notice, time.monotonic() + 5.0)
