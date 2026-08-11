@@ -1,6 +1,6 @@
 # The pipeline, end to end
 
-One contest round, from before it starts to a published video. Everything here
+One round, from before it starts to a published video. Everything here
 is the *story*; ARCHITECTURE.md has the components, RECORDING.md the practical
 detail of recording and rendering.
 
@@ -120,7 +120,7 @@ youtubeuploader \
 - The OAuth consent screen is left in "Testing" mode (no Google verification review needed
   for personal single-channel use) — the tradeoff is the refresh token expires after 7 days,
   requiring a re-click through the browser consent screen. Irrelevant in practice since
-  contests are monthly.
+  rounds are monthly.
 
 ### Why the logger's pane is recorded with asciinema
 

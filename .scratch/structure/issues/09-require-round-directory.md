@@ -24,7 +24,7 @@ round lives in its own subdirectory of the project.
   plausibly from the root. Probably exempt; decide before implementing.
 - The guard runs at startup, before the radio and the recorders come up. It
   must be impossible for it to refuse a *legitimate* launch — a false positive
-  here costs a contest round, which is worse than the pile it prevents.
+  here costs a round, which is worse than the pile it prevents.
 - Needs a test with a pinned fake root rather than one that depends on where
   the suite happens to run.
 

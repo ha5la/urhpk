@@ -59,7 +59,7 @@ class TestRenderWebcamSync:
         # drop one above: the phone and the radio recorder are independent
         # devices whose clocks don't tick at exactly the same *rate* -- a
         # linear drift that grew smoothly to several seconds over a ~2 hour
-        # session, which a constant -itsoffset shift cannot correct (see
+        # round, which a constant -itsoffset shift cannot correct (see
         # refine_webcam_start). setpts=PTS/(1-webcam_rate) stretches or
         # compresses the PiP's own timeline to compensate; it must run
         # *before* fps resamples onto a clean grid, so the resampling
@@ -214,9 +214,9 @@ class TestWebcamSync:
                 False,
             )
         ]
-        # cam wall-clock a full day earlier than the session -- however its
+        # cam wall-clock a full day earlier than the round -- however its
         # own offset resolves, the real recording predates segs[0], so the
-        # result clamps to the session's own start rather than going negative.
+        # result clamps to the round's own start rather than going negative.
         cam_wall = datetime(2026, 7, 3, 8, 0, 0)
         start = sync_webcam_start(
             cam_wall, cam_dur=30.0, qsos=qsos, segs=segs, offset_h=2
@@ -276,7 +276,7 @@ class TestWebcamDriftCorrection:
     clocks don't tick at exactly the same rate -- refine_webcam_start finds
     this from audio cross-correlation against the operator's own TX audio
     (see its docstring for the real case this was found from: a webcam PiP
-    that looked correctly synced at the start of a session but was several
+    that looked correctly synced at the start of a round but was several
     seconds off by the end, confirmed by ear to be the same words reaching
     the phone's own mic and the radio mic at different points on the
     output timeline)."""
@@ -313,7 +313,7 @@ class TestWebcamDriftCorrection:
 
     def test_refine_webcam_start_fits_linear_drift(self, monkeypatch):
         # Regression test built directly from a real case: sampling
-        # confident anchors across a ~2-hour session found the needed
+        # confident anchors across a ~2-hour round found the needed
         # correction growing smoothly from ~0s near the start to ~+3.2s
         # near the end -- a linear drift a single constant offset cannot
         # express. This synthesizes that same shape (known intercept and

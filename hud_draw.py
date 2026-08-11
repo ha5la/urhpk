@@ -50,7 +50,7 @@ from video_format import RENDER_FPS
 # separated from it, so those were read by hand -- which is why the check tool
 # exists at all.
 #
-# Script-relative, not CWD-relative: contest renders are run from a contest
+# Script-relative, not CWD-relative: renders are run from a contest
 # directory (`cd 26augusztus && uv run ../contest_video.py ...`), where a
 # relative "hud-theme" would not exist.
 HUD_THEME_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hud-theme")
@@ -283,7 +283,7 @@ def _seven_seg(draw, text, x, y, max_w, max_h, colour, anchor="mm", field=None) 
     `field` is the display's *physical* set of cells, e.g. "18888" for a
     four-and-a-half digit readout. Given one, the value is drawn right-aligned
     within it at a fixed size and position, so a score gaining a digit
-    mid-contest no longer resizes and reflows the whole panel -- which is both
+    mid-round no longer resizes and reflows the whole panel -- which is both
     what a real instrument does and the only way the unlit backdrop can show
     the cells that aren't currently in use. A leading '1' is the half digit a
     real panel gives you for a leading 1 without paying for a full cell.

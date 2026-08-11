@@ -59,7 +59,7 @@ quick start is in README.md.
 
 ## puskas_harvester.py – Pre-contest station harvester
 
-Run once before the contest to build `~/.puskas/puskas-seen-stations.json`:
+Run once before a round to build `~/.puskas/puskas-seen-stations.json`:
 ```
 uv run puskas_harvester.py
 ```
@@ -152,7 +152,7 @@ real radio; the evidence is in FINDINGS.md.
   half-connected session, so `connect()`'s failure path just calls it.
 - **The radio holds exactly one session.** A second connect silently kills the
   first. So every consumer goes through the one session owner (`puskas_logger.py`
-  during a contest — see its rig server), and the CLI harness must never run while
+  during a round — see its rig server), and the CLI harness must never run while
   the logger is up.
 
 **rigctld-parity commands**, as plain CI-V writes: `send_cw()` (0x17 + ASCII, 30-char
@@ -225,7 +225,7 @@ them are in FINDINGS.md.
 
 ## contest_video.py – Annotated CW contest video
 
-Turns a contest recording plus its EDI log into a YouTube-ready MP4: a scrolling
+Turns a round's recording plus its EDI log into a YouTube-ready MP4: a scrolling
 waterfall background, a DOOM-style HUD status bar, and picture-in-picture of the
 logger's own terminal and the operator's webcam.
 
@@ -456,7 +456,7 @@ The HUD's rule is that the more important a value, the bigger it is drawn.
   CI-V's polled `15 02`. 475 bins across a 1 MHz span makes one bin ~2.1 kHz, close
   enough to an SSB passband to be a real reading rather than a proxy; `hud_s_marks`
   takes a *max* over the centre bins so a signal in one bin isn't diluted. Not
-  retroactive: no contest round recorded so far has a `.scope` file, so the meter
+  retroactive: no round recorded so far has a `.scope` file, so the meter
   reads empty until the next one.
 - **PWR renders placeholders rather than hiding** when Vd/Id are absent, which is
   every recording to date — panels appearing and disappearing between recordings
@@ -539,7 +539,7 @@ These requirements must be preserved across all future changes:
   second (bounded by `_toolbar_watcher`'s 10Hz poll of `current_rig()`).
   **Do not move RST or NR into the prompt prefix** — they are TX fields; mixing them
   into `RX ►` was tried and rejected as confusing.
-- **Live rig status**: QRG and contest-clock update every second in the bottom toolbar.
+- **Live rig status**: QRG and round clock update every second in the bottom toolbar.
   A band/mode change on the radio must be visible immediately in the prompt — never require
   Enter to see the updated state.
 - **Toolbar redraws only on change, not on a fixed timer**: `session.prompt()` used to
@@ -548,7 +548,7 @@ These requirements must be preserved across all future changes:
   byte-for-byte identical output (the clock only changes once a second; rig/rotator/
   webcam state changes far less often). Under `--cast` (asciinema recording of this
   terminal, see `contest_video.py`) every redraw is a recorded terminal-output event,
-  so this meant ~10 recorded events/s for the whole contest, nearly all redundant.
+  so this meant ~10 recorded events/s for the whole round, nearly all redundant.
   `_toolbar_signature()` is a pure (no side effects) tuple of everything `_toolbar()`
   reads; `_toolbar_watcher(app)` polls it at the same 10Hz cadence (so a real
   second-boundary is still caught within ~100ms — why 10Hz was chosen over 1Hz in the
@@ -582,7 +582,7 @@ These requirements must be preserved across all future changes:
   sessions for a while after an uncleanly-dropped one), so a transient radio/network
   error cannot kill rig state permanently. Liveness comes from `last_rx_age()`
   (no CI-V-socket traffic for `RADIO_STALE_S` = session dead), not from polling.
-- **The radio session is closed on every exit path, signals included**: a contest round
+- **The radio session is closed on every exit path, signals included**: a round
   ends by killing the tmux session (SIGHUP), which used to skip teardown entirely and
   leave exactly the abandoned session `icom_net.close`'s notes describe — the radio then
   streamed to a dead socket and refused the restarted logger for a minute or more, which
@@ -649,7 +649,7 @@ These requirements must be preserved across all future changes:
   substitute `0→T` and `9→N` (e.g. serial 014 → `T14`). This is standard contest CW.
 - **Toolbar layout**: bottom toolbar shows QRG (e.g. `144.174 MHz`) when rig is online, or
   `offline`, plus `ROT: 045°` (current rotator azimuth) or `ROT: ---` when rotctld is
-  offline, plus a colour-coded UTC clock. Clock background is **green** during the contest
+  offline, plus a colour-coded UTC clock. Clock background is **green** during the round
   window (first Monday of each month, 18:00–20:00 CET/CEST) and **red** at all other times.
   Band and mode are intentionally absent from the toolbar — they live in the prompt prefix.
 - **Alt+B / Alt+M**: cycle band / mode through `_BANDS`/`_MODES` tuples when rig is offline.
@@ -710,7 +710,7 @@ logger's `_rig`, which is what lets it live outside the file holding that state.
 `loc_cache.merge_sources(*sources)` takes sources highest-priority-first; each locator
 appears once at the position of its highest-priority source. `loc_cache.remember(cache,
 callsign, loc)` inserts `loc` at the front of `cache[callsign]` (most recently used first).
-No API calls during contest.
+No API calls during a round.
 
 **Crash recovery**: at startup, scans `*.edi` / `*.EDI` (case-insensitive) in the current
 directory. If found, shows a summary and offers to resume — all QSOs, serials, and dup state

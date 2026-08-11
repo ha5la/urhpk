@@ -39,7 +39,7 @@ class TestEdi:
         assert qsos[1].dup is True and qsos[1].pts == 0
 
     def test_merge_edi_combines_and_sorts_multiple_bands(self, tmp_path):
-        # A session worked on two bands writes two EDI files -- one physical
+        # A round worked on two bands writes two EDI files -- one physical
         # recording still needs a single chronological QSO list.
         band_2m = tmp_path / "2m.edi"
         band_2m.write_text(
@@ -183,7 +183,7 @@ class TestTimeline:
 class TestStreamPrecedesAudio:
     """A cast/scope stream that began *before* the first WAV segment must be
     entered partway in, not clamped to video t=0 -- the clamp showed up as
-    the cast PiP's clock lagging the session by exactly cast-to-WAV gap
+    the cast PiP's clock lagging the round by exactly cast-to-WAV gap
     (25 s in the dry-run that caught it). run-recorded-round.sh
     guarantees this ordering: asciinema starts before the radio recorder."""
 

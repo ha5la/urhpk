@@ -7,7 +7,7 @@ Only submitters are recorded — partner callsigns and locators from uploaded
 logs are skipped because they are typed by someone else and prone to typos.
 QSO records are still fetched to learn which bands each submitter operated on.
 
-Output: ~/puskas-seen-stations.json  (home directory, shared across contest rounds)
+Output: ~/puskas-seen-stations.json  (home directory, shared across rounds)
 
 Usage:  uv run puskas_harvester.py
         Delete .puskas_cache/ to force a fresh fetch from the API.

@@ -1,6 +1,6 @@
 #!/bin/sh
-# Force an immediate, verified clock sync -- run this right before a contest
-# round starts (chrony must already be running; see CLAUDE.md's laptop-
+# Force an immediate, verified clock sync -- run this right before a round
+# starts (chrony must already be running; see CLAUDE.md's laptop-
 # clock-drift note for why chrony over systemd-timesyncd).
 #
 # chrony's normal poll ramp (starts at 32s, grows to minutes) is fine for

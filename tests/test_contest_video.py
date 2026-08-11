@@ -93,7 +93,7 @@ class TestSideStreamTrimming:
     def test_cast_render_stops_at_the_cut_instead_of_replaying_it_all(
         self, tmp_path, monkeypatch
     ):
-        # A --duration preview shows the first minutes of a session, so
+        # A --duration preview shows the first minutes of a round, so
         # replaying the whole cast is wasted work -- and it is the slowest
         # stage, so it dominates exactly the case the flag exists to speed up.
         frames = []

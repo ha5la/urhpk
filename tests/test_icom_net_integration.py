@@ -450,7 +450,7 @@ async def test_close_says_goodbye_on_both_sockets(fake_radio):
 async def test_close_deregisters_the_session_token(fake_radio):
     # Without this the radio holds the abandoned session for tens of
     # seconds (observed on real hardware) and refuses the next connect --
-    # fatal for a logger restart mid-contest.
+    # fatal for a logger restart mid-round.
     rig = IcomNetRig(
         "127.0.0.1",
         "testuser",

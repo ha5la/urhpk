@@ -225,7 +225,7 @@ def _webcam_precise_name(out_path: str, start: datetime) -> str:
 def _webcam_capture_cmd(device: str, audio_source: str, out_path: str) -> list[str]:
     """The ffmpeg command to capture the local webcam + mic to `out_path`.
     -preset ultrafast keeps this cheap enough to run alongside the logger
-    for a multi-hour session without competing for CPU with the radio/rotator
+    for a multi-hour round without competing for CPU with the radio/rotator
     threads or the UI itself.
 
     -use_wallclock_as_timestamps 1 on the v4l2 input stamps every captured

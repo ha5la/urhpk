@@ -68,7 +68,7 @@ To run everything ad hoc: `uv run pre-commit run --all-files`.
 
 | File | What's in it |
 |---|---|
-| [docs/PIPELINE.md](docs/PIPELINE.md) | The end-to-end story of a contest round, harvest to upload |
+| [docs/PIPELINE.md](docs/PIPELINE.md) | The end-to-end story of a round, harvest to upload |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Component by component, and the constraints each carries |
 | [docs/RECORDING.md](docs/RECORDING.md) | Recording a round and producing the video, with real numbers |
 | [docs/FINDINGS.md](docs/FINDINGS.md) | Hardware measurements, protocol archaeology, dead ends |

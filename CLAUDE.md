@@ -147,7 +147,7 @@ used in.
 The scripts carried their own PEP 723 headers until the same four packages
 were *also* listed in `pyproject.toml` with a different version policy and
 only that side locked — so the test suite could resolve differently from a
-contest round, and nothing would say so.
+round, and nothing would say so.
 
 ## Testing
 

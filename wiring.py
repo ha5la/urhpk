@@ -38,7 +38,7 @@ def round_directory_error(cwd: Path, project_root: Path | None = None) -> str | 
     project, is the operator's business.
 
     Pure, and both inputs are arguments, because a false positive here costs a
-    contest round: this has to be testable against a pinned root rather than
+    round: this has to be testable against a pinned root rather than
     against wherever the suite happens to run.
     """
     root = PROJECT_ROOT if project_root is None else project_root

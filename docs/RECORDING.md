@@ -1,4 +1,4 @@
-# Contest recording and video production
+# Round recording and video production
 
 Started as notes from the URH Országos Bajnokság 2026-07-04 round (first
 test run) — kept up to date since as `contest_video.py` gained features.
@@ -266,12 +266,12 @@ remain an open problem.
 This also makes the pipeline far more tolerant of clock skew between the
 radio and the PC. The WAV filenames' timestamps come from the **radio's own
 clock** (the IC-9700 records straight to its SD card; the WAVs are copied
-off after the contest), while the EDI timestamp comes from the **PC's**
+off after the round), while the EDI timestamp comes from the **PC's**
 clock, via `puskas_logger` — two independent clocks, which is exactly why
 `Alt+T` (radio clock sync, see below) exists. Snapping to the nearest
 `burst_starts()` burst only needs the EDI time to land closer to the
 *right* real over than to any other one — comfortably true even with
-several seconds, or low tens of seconds, of drift, since QSOs in a contest
+several seconds, or low tens of seconds, of drift, since QSOs in a round
 are normally well over a minute apart. `Alt+T` is still worth pressing
 periodically to keep that margin comfortable (and for the radio's own
 displayed clock to be correct), but this timing fix no longer depends on
@@ -353,7 +353,7 @@ above wherever a matching event exists, not just the audio-structure fallback.
 
 `--cast FILE` takes an [asciinema](https://asciinema.org/) (cast v2)
 recording of the tmux session running irssi + `puskas_logger.py` during the
-contest, and shows it as a large picture-in-picture — the dominant visual
+round, and shows it as a large picture-in-picture — the dominant visual
 element, since the terminal is most of what there is to watch. It
 replaces what used to be separate QSO panels, running-score header, UTC
 clock, and typewriter overlay, all of which are just visible directly in the
@@ -415,7 +415,7 @@ remains for older recordings or if Alt+V wasn't used.
 
 ## Telemetry file
 
-`puskas_logger.py` writes `YYMMDD-CALL-telemetry.jsonl` to the contest CWD,
+`puskas_logger.py` writes `YYMMDD-CALL-telemetry.jsonl` to the round's CWD,
 **one line per actual change**, with microsecond timestamps. Records are
 *partial* by source — the rig writes one kind, the rotator another:
 
@@ -479,11 +479,11 @@ own clock display (the menu, not `get_clock`, shows live seconds).
 **Reliability quirk**: `\set_clock` over CAT is not reliable when the radio's
 clock is already close to correct (only 2-3 s off) — the set silently doesn't
 take. It worked fine when the clock had been deliberately desynced further via
-the radio's own menu first. Needs watching before the contest: check the
+the radio's own menu first. Needs watching before the round: check the
 radio's menu clock (which does show seconds) after pressing `Alt+T` rather
 than trusting the toolbar's "synced" message alone.
 
-## File layout for a contest round
+## File layout for a round
 
 ```
 ~/contest-dir/

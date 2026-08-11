@@ -14,7 +14,7 @@ Today every runtime dependency is declared **twice**:
 | pillow | `>=10.0` | unpinned |
 
 `uv.lock` locks the project side only. The scripts resolve independently at
-run time. So the suite can pass against one numpy while a contest round runs
+run time. So the suite can pass against one numpy while a round runs
 against another, and nothing would report the difference — the same divergence
 this effort is removing from the code, one level down.
 

@@ -1,7 +1,7 @@
 """Tests for the shared contracts, and for the round-directory guard.
 
 The guard runs at startup, before the radio and the recorders come up. A false
-positive costs a contest round, which is worse than the pile of files it
+positive costs a round, which is worse than the pile of files it
 prevents — so the negative cases matter more here than the positive one.
 """
 

@@ -241,7 +241,7 @@ async def _radio_stop() -> None:
 
 
 def _install_signal_handlers() -> None:
-    """A contest round ends by killing the tmux session that runs the logger
+    """A round ends by killing the tmux session that runs the logger
     (see run-recorded-round.sh), so SIGTERM/SIGHUP is an ordinary
     exit path here -- and the one that used to leave the radio streaming to a
     dead socket, refusing new sessions. EDI/telemetry/input logs are all
@@ -796,7 +796,7 @@ async def run(lb: LogBook, tname: str):
         that). Each redraw still emits terminal escape codes (at minimum a
         cursor-repositioning sequence) even when no visible cell changes --
         under asciinema this means 10 recorded output events per second for
-        the whole contest, most of them redundant. Polling at the same 10Hz
+        the whole round, most of them redundant. Polling at the same 10Hz
         cadence (so a real second-boundary is still caught within ~100ms,
         preserving why 10Hz was chosen over 1Hz in the first place) but only
         calling invalidate() when the signature actually differs cuts this

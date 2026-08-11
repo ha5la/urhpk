@@ -29,7 +29,7 @@ every current thread as a task. Eight threads and seven locks go to zero locks.
 Not on anything technical. Every step above has a direct API, and the bridge
 already proves the pattern in this repo. It is blocked because the logger's UI
 is verified by running rounds, this touches every thread it has, and a mistake
-costs a contest round. The pty harness sketched on issue 01 is the thing that
+costs a round. The pty harness sketched on issue 01 is the thing that
 makes it checkable; do that first.
 
 ## Order, if it runs
