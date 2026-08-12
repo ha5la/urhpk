@@ -168,11 +168,10 @@ def band_from_hz(hz: int) -> str:
 
 
 # ============================================================
-# CW keying + clock -- the remaining CI-V commands puskas_logger needs
-# to drop rigctld entirely. Byte layouts transcribed from Hamlib's
-# icom_send_morse/icom_stop_morse/icom_set_clock (rigs/icom/icom.c) and
-# the IC-9700's parameter numbers (ic9700_clock_cmds in rigs/icom/ic7300.c),
-# the exact code paths rigctld's 'b' / 0xBB / \set_clock commands take.
+# CW keying -- the remaining CI-V commands puskas_logger needs to drop
+# rigctld entirely. Byte layouts transcribed from Hamlib's
+# icom_send_morse/icom_stop_morse (rigs/icom/icom.c), the exact code paths
+# rigctld's 'b' / 0xBB commands take.
 # ============================================================
 
 CIV_CMD_SEND_CW = 0x17
@@ -180,42 +179,52 @@ CIV_CW_STOP = 0xFF  # as the message payload: abort the in-progress message
 CIV_CW_MAX_CHARS = 30
 CIV_CMD_SET_PARAM = 0x1A  # with subcommand 0x05: numbered radio setting
 CIV_PARAM_SUBCMD = 0x05
-CIV_PARAM_DATE = bytes([0x01, 0x79])
-CIV_PARAM_TIME = bytes([0x01, 0x80])
-CIV_PARAM_UTC_OFFSET = bytes([0x01, 0x84])
-
-
-def _bcd2(v: int) -> int:
-    return ((v // 10) << 4) | (v % 10)
 
 
 def civ_cw_payload(message: str) -> bytes:
     return message[:CIV_CW_MAX_CHARS].encode("ascii")
 
 
-def civ_clock_payloads(now: datetime) -> list[bytes]:
-    """Data payloads (for CI-V command 0x1A) that set the radio's clock.
+# ============================================================
+# The radio's clock, read only.
+#
+# The radio keeps itself right over NTP (see FINDINGS.md), so nothing here
+# sets it; what the logger needs is to notice if that ever stops being true.
+# The awkward part is that the radio reports only HH:MM -- its seconds are
+# never readable -- so the offset is observable at exactly one instant per
+# minute: the one where the reported minute increments.
+# ============================================================
 
-    Always sets UTC (offset 0000), matching the logger's existing
-    `\\set_clock ...+00:00` rigctld usage; the IC-9700 ignores seconds.
-    Hamlib's own send order: UTC offset, time, date.
+CIV_PARAM_TIME = bytes([0x01, 0x80])
+
+
+def parse_clock_reply(frame: bytes) -> tuple[int, int] | None:
+    """(hour, minute) the radio reports, or None if `frame` is not that reply."""
+    if (
+        len(frame) < 8
+        or frame[0] != CIV_CONTROLLER_ADDR
+        or frame[2] != CIV_CMD_SET_PARAM
+        or frame[3] != CIV_PARAM_SUBCMD
+        or frame[4:6] != CIV_PARAM_TIME
+    ):
+        return None
+    return _bcd_byte(frame[6]), _bcd_byte(frame[7])
+
+
+def clock_offset_s(bracket_start: datetime, bracket_end: datetime) -> float:
+    """Seconds the radio's clock leads the laptop's (negative: it lags).
+
+    Takes the two poll replies that bracket the radio's minute rollover -- the
+    last one still reporting the old minute and the first reporting the new.
+    The rollover lies between them, so their midpoint is the radio's `:00`,
+    and its distance from the laptop's own `:00` is the offset. Taking the
+    midpoint rather than either end is what keeps the estimate unbiased: the
+    error is then half the poll interval either way instead of a full one late.
     """
-    now = now.astimezone(timezone.utc)
-    sub = bytes([CIV_PARAM_SUBCMD])
-    return [
-        sub + CIV_PARAM_UTC_OFFSET + bytes([0x00, 0x00, 0x00]),
-        sub + CIV_PARAM_TIME + bytes([_bcd2(now.hour), _bcd2(now.minute)]),
-        sub
-        + CIV_PARAM_DATE
-        + bytes(
-            [
-                _bcd2(now.year // 100),
-                _bcd2(now.year % 100),
-                _bcd2(now.month),
-                _bcd2(now.day),
-            ]
-        ),
-    ]
+    mid = bracket_start + (bracket_end - bracket_start) / 2
+    mid = mid.astimezone(timezone.utc)
+    lag = ((mid.second + mid.microsecond / 1e6) + 30) % 60 - 30
+    return -lag
 
 
 # ============================================================
@@ -764,37 +773,42 @@ class IcomNetRig:
         same command rigctld's 0xBB (stop_morse) issues."""
         self._send_civ_command(CIV_CMD_SEND_CW, bytes([CIV_CW_STOP]))
 
-    def set_clock(self, now: datetime) -> None:
-        """Set the radio's clock + UTC offset -- what rigctld's \\set_clock
-        does. The IC-9700 ignores seconds, so callers should fire this on a
-        minute boundary (as puskas_logger's Alt+T already does)."""
-        for payload in civ_clock_payloads(now):
-            self._send_civ_command(CIV_CMD_SET_PARAM, payload)
-
-    async def read_param(self, param: bytes, timeout: float = 2.0) -> int | None:
-        """Read one numbered radio setting, or None if the radio doesn't answer.
+    async def _read_setting(self, param: bytes, parse, timeout: float):
+        """Query numbered setting `param` and return what `parse` makes of the
+        reply, or None if the radio doesn't answer.
 
         A bounded wait, not a retry loop: this runs on the same event loop as
         the logger's UI, and a setting nobody could read is worth reporting as
         unknown rather than worth blocking for."""
-        answer: list[int] = []
+        answer: list = []
         answered = asyncio.Event()
 
-        def _read_param_listener(frame: bytes) -> None:
-            value = parse_param_reply(frame, param)
+        def _reply_listener(frame: bytes) -> None:
+            value = parse(frame)
             if value is not None:
                 answer.append(value)
                 answered.set()
 
-        self.on_civ_frame(_read_param_listener)
+        self.on_civ_frame(_reply_listener)
         try:
             self._send_civ_command(CIV_CMD_SET_PARAM, bytes([CIV_PARAM_SUBCMD]) + param)
             await asyncio.wait_for(answered.wait(), timeout)
         except TimeoutError:
             return None
         finally:
-            self.remove_civ_frame(_read_param_listener)
+            self.remove_civ_frame(_reply_listener)
         return answer[0]
+
+    async def read_param(self, param: bytes, timeout: float = 2.0) -> int | None:
+        """Read one numbered radio setting, or None if the radio doesn't answer."""
+        return await self._read_setting(
+            param, lambda frame: parse_param_reply(frame, param), timeout
+        )
+
+    async def read_clock(self, timeout: float = 2.0) -> tuple[int, int] | None:
+        """The (hour, minute) the radio's own clock reads. Its seconds are not
+        readable at all -- see clock_offset_s for what to do about that."""
+        return await self._read_setting(CIV_PARAM_TIME, parse_clock_reply, timeout)
 
     def on_meters(self, callback) -> None:
         """callback(dict) once per poll cycle, with the latest raw readings."""

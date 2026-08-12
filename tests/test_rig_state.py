@@ -92,6 +92,39 @@ class TestTelemetryAlignment:
         assert st.freq_hz == 144174000
         assert st.mode == "CW"
 
+    def test_a_clock_offset_record_disturbs_nothing_that_reads_telemetry(
+        self, tmp_path
+    ):
+        # puskas_logger writes {"t", "clock_offset_s"} lines into the same
+        # file. They mention none of the fields the render reads, and a
+        # missing field means "nothing changed" -- but a *rig-offline* record
+        # is an explicit {"freq_hz": null, "mode": null}, which parses to the
+        # same all-None sample. Nothing downstream may confuse the two.
+        rig_line = '{"t": "2026-07-04T11:00:02Z", "freq_hz": 144174000, "mode": "CW"}\n'
+        clock_line = '{"t": "2026-07-04T11:00:04Z", "clock_offset_s": -0.19}\n'
+
+        without = tmp_path / "without.jsonl"
+        without.write_text(rig_line)
+        with_clock = tmp_path / "with.jsonl"
+        with_clock.write_text(rig_line + clock_line)
+
+        segs = [
+            self._wav_seg(
+                datetime(2026, 7, 4, 11, 0, 0), 10.0, 0.0, 144174000, "CW", True
+            )
+        ]
+        assert build_state_events(
+            segs, load_telemetry(str(with_clock)), offset_h=0
+        ) == build_state_events(segs, load_telemetry(str(without)), offset_h=0)
+
+        # and it claims neither a rotator nor a meter reading, which the HUD
+        # series select on
+        (clock_sample,) = [
+            t for t in load_telemetry(str(with_clock)) if t.t.second == 4
+        ]
+        assert clock_sample.az is None and not clock_sample.az_offline
+        assert clock_sample.vd is None and not clock_sample.meters_offline
+
     def test_load_telemetry_distinguishes_absent_az_from_null_az(self, tmp_path):
         # Both land as az=None, but they mean opposite things: an absent key
         # is silence, an explicit null is "the rotator went offline".

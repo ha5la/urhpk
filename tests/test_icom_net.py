@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from icom_net import (
     CIV_CONTROLLER_ADDR,
     CIV_IC9700_ADDR,
@@ -13,10 +15,11 @@ from icom_net import (
     CIV_PARAM_RX_REC_CONDITION,
     bcd_decode_freq,
     bcd_encode_freq,
-    civ_clock_payloads,
     civ_cw_payload,
     civ_frame,
+    clock_offset_s,
     parse_civ_update,
+    parse_clock_reply,
     parse_param_reply,
     parse_scope_frame,
     passcode,
@@ -229,25 +232,50 @@ def test_civ_cw_payload_truncates_to_the_radios_30_char_limit():
     assert civ_cw_payload(msg) == msg[:30].encode("ascii")
 
 
-def test_civ_clock_payloads_known_datetime():
-    # Parameter numbers 0184 (UTC offset) / 0180 (time) / 0179 (date) and
-    # packed-BCD values, per Hamlib's ic9700_clock_cmds + icom_set_clock,
-    # in Hamlib's own send order: offset, time, date.
-    payloads = civ_clock_payloads(datetime(2026, 8, 3, 18, 5, tzinfo=timezone.utc))
-    assert payloads == [
-        bytes([0x05, 0x01, 0x84, 0x00, 0x00, 0x00]),
-        bytes([0x05, 0x01, 0x80, 0x18, 0x05]),
-        bytes([0x05, 0x01, 0x79, 0x20, 0x26, 0x08, 0x03]),
-    ]
+def test_parse_clock_reply_decodes_bcd_hours_and_minutes():
+    # The radio answers 1A 05 0180 with packed BCD, and only ever HH:MM --
+    # there is no seconds field to read.
+    frame = split_civ_frames(
+        civ_frame(
+            CIV_CONTROLLER_ADDR,
+            CIV_IC9700_ADDR,
+            0x1A,
+            bytes([0x05, 0x01, 0x80, 0x18, 0x05]),
+        )
+    )[0]
+    assert parse_clock_reply(frame) == (18, 5)
 
 
-def test_civ_clock_payloads_converts_non_utc_input():
-    # 20:05 CEST is 18:05 UTC -- the radio is always set to UTC (offset 0000),
-    # matching the logger's existing `\set_clock ...+00:00` rigctld call.
-    cest = timezone(timedelta(hours=2))
-    assert civ_clock_payloads(
-        datetime(2026, 8, 3, 20, 5, tzinfo=cest)
-    ) == civ_clock_payloads(datetime(2026, 8, 3, 18, 5, tzinfo=timezone.utc))
+def test_parse_clock_reply_ignores_our_own_echoed_query():
+    # The bus echoes the controller's own frames back; a query and its reply
+    # differ only in direction, so without the address check the echo of
+    # "what time is it" would read as an answer to it.
+    echo = split_civ_frames(
+        civ_frame(CIV_IC9700_ADDR, CIV_CONTROLLER_ADDR, 0x1A, bytes([0x05, 0x01, 0x80]))
+    )[0]
+    assert parse_clock_reply(echo) is None
+
+
+def test_clock_offset_s_is_the_bracket_midpoint_against_the_laptop_minute():
+    # The radio's minute rolled over between two polls that straddle the
+    # laptop's own :00 -- so the two clocks agree.
+    base = datetime(2026, 8, 3, 18, 5, tzinfo=timezone.utc)
+    assert clock_offset_s(
+        base - timedelta(milliseconds=500), base + timedelta(milliseconds=500)
+    ) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_clock_offset_s_is_positive_when_the_radio_runs_ahead():
+    # The radio's minute rolled over at laptop :59.0, i.e. a second before the
+    # laptop's own -- the radio's clock is one second ahead.
+    base = datetime(2026, 8, 3, 18, 4, 59, tzinfo=timezone.utc)
+    assert clock_offset_s(base, base) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_clock_offset_s_is_negative_when_the_radio_lags():
+    # Rollover two seconds after the laptop's :00 -- the radio is behind.
+    base = datetime(2026, 8, 3, 18, 5, 2, tzinfo=timezone.utc)
+    assert clock_offset_s(base, base) == pytest.approx(-2.0, abs=1e-6)
 
 
 def _param_reply(param: bytes, value: int) -> bytes:

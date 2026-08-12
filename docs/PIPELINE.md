@@ -66,9 +66,9 @@ if Alt+V was pressed — a webcam capture. None of it is recoverable afterwards,
 which is why it is all on by default.
 
 **What must be true before you start**: `~/.netrc` has the ON4KST and radio
-credentials, the radio's Network Control is on, and the radio's clock is close
-(Alt+T syncs it, but see RECORDING.md — it is unreliable when the clock is
-*nearly* right). The toolbar states the rest of it: nothing red, nothing yellow.
+credentials, the radio's Network Control is on, and the radio's NTP points at
+the laptop (see RECORDING.md — the laptop serves it time). The toolbar states
+the rest of it: nothing red, nothing yellow, and the `CLK` chip near zero.
 
 ## 3. After the round — render
 

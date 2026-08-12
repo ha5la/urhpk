@@ -113,7 +113,7 @@ interface; it is also usable standalone (`uv run icom_net.py <radio-ip>`).
 **Asynchronous throughout**: `connect()` and `close()` are coroutines, the two
 receive loops are tasks over `loop.create_datagram_endpoint`, and there is no thread
 and no lock. Sends stay synchronous — `transport.sendto()` never blocks — so
-`send_cw`/`stop_cw`/`set_clock`/`enable_scope` can still be called straight from a
+`send_cw`/`stop_cw`/`enable_scope` can still be called straight from a
 key binding.
 
 **Why it beats polling**: with `SET > CONNECTORS > CI-V > CI-V Transceive: ON` the
@@ -156,10 +156,11 @@ real radio; the evidence is in FINDINGS.md.
   the logger is up.
 
 **rigctld-parity commands**, as plain CI-V writes: `send_cw()` (0x17 + ASCII, 30-char
-limit), `stop_cw()` (0x17 + 0xFF), `set_clock()` (0x1A 0x05, IC-9700 parameters 0184
-UTC-offset / 0180 time / 0179 date, packed BCD) — byte layouts transcribed from
-Hamlib's own `icom_send_morse`/`icom_stop_morse`/`icom_set_clock`. `set_clock` was
-verified against the radio: all three commands ACKed and the read-back matched.
+limit) and `stop_cw()` (0x17 + 0xFF) — byte layouts transcribed from Hamlib's own
+`icom_send_morse`/`icom_stop_morse`. Nothing here sets the radio's clock: it keeps
+itself right over NTP (FINDINGS.md), so the clock is read only, via `read_clock()`
+— the one setting whose reply is two bytes rather than one, which is why it does
+not go through `read_param()`.
 `on_civ_frame()` exposes every raw inbound CI-V frame, which is how a caller sees
 ACKs (FB ok / FA rejected); note the radio echoes the client's own frames back, so
 distinguish direction by the address bytes.
@@ -545,6 +546,22 @@ These requirements must be preserved across all future changes:
 - **Live rig status**: QRG and round clock update every second in the bottom toolbar.
   A band/mode change on the radio must be visible immediately in the prompt — never require
   Enter to see the updated state.
+- **The `CLK` chip is a measurement, not a setting read**: the radio syncs itself
+  from this laptop over NTP (FINDINGS.md), and `_clock_monitor_run` checks that it
+  worked rather than that it is configured. Since the radio reports only HH:MM, the
+  offset exists to be read at exactly one instant a minute -- the rollover -- and
+  the offset is the midpoint of the two replies that bracket it. Only the *first*
+  rollover is hunted for at 1 Hz; after that the next one is predictable, so
+  `_clock_window_wait` sleeps until just before it and a 20 Hz burst pins it to
+  ±25 ms. Measured on the real radio: 53 queries in 200 s against ~200 for a
+  continuous 1 Hz poll, and the burst's value differed from the same session's
+  1 Hz acquire by 0.17 s -- the bracket error the burst removes. A burst that
+  sees no rollover means the radio's clock stepped, so the offset drops to
+  unknown and the next pass re-acquires.
+  `CLK —` until the first rollover, yellow past `CLOCK_WARN_S`. The monitor outlives
+  any one radio session (unlike the meter poller, which belongs to its session) and
+  drops the reading to `None` while the radio is offline, because a stale offset
+  would go on claiming the clocks agree.
 - **Toolbar redraws only on change, not on a fixed timer**: `session.prompt()` used to
   pass `refresh_interval=0.1` (10Hz), which called `_toolbar()` — and therefore redrew
   the screen — unconditionally 10x/s, even though almost every tick produced
@@ -847,6 +864,11 @@ one forward across the events that don't mention it.
   write to it the moment they have something and the radio's first push lands
   within a second of connecting. No lock: both writers are tasks on the one
   event loop, so an append cannot interleave with another.
+- **`clock_offset_s` is the one record written on a timer rather than on a
+  change**, every few minutes: how far the radio's clock leads this laptop's. It
+  is a measurement, not a state -- its noise floor is half the monitor's burst
+  interval, so change-gating it would gate on noise, and a flat line is exactly
+  the reassurance wanted afterwards when a WAV and the EDI seem to disagree.
 - No `ptt` field: it used to be queried and recorded here too, but the WAV
   recordings' own IC-9700 metadata already carries it straight from the rig
   with zero polling lag (see `contest_video.py`'s `read_wav_metadata`) -- this

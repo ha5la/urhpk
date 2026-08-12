@@ -5,7 +5,7 @@ import io
 import os
 import signal
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -1501,6 +1501,201 @@ class TestRecorderCheckRun:
         asyncio.run(pl._recorder_check_run(notify=True))
         assert pl._recorder_check["warnings"] == ()
         assert "offline" in pl._recorder_check["notice"]
+
+
+class TestClockMonitor:
+    """_clock_monitor_run: the radio reports only HH:MM, so the offset is
+    readable at exactly one instant a minute — the rollover between two polls."""
+
+    def setup_method(self):
+        self._saved_rig = pl._radio["rig"]
+        self._saved_offset = dict(pl._clock_offset)
+
+    def teardown_method(self):
+        pl._radio["rig"] = self._saved_rig
+        pl._clock_offset.clear()
+        pl._clock_offset.update(self._saved_offset)
+
+    class _StubRig:
+        def __init__(self, replies):
+            self._replies = list(replies)
+
+        async def read_clock(self, timeout=2.0):
+            return self._replies.pop(0) if self._replies else None
+
+    def _run(self, replies, stamps, monkeypatch):
+        """One monitor pass per scripted reply, with time pinned per poll."""
+        written = []
+        monkeypatch.setattr(pl, "telemetry_write", written.append)
+        monkeypatch.setattr(pl, "CLOCK_ACQUIRE_POLL_S", 0)
+        monkeypatch.setattr(pl, "CLOCK_BURST_POLL_S", 0)
+        monkeypatch.setattr(pl, "CLOCK_SAMPLE_S", 0)
+        # The window maths is a pure function tested on its own; here it would
+        # only make the loop sleep up to a real minute.
+        monkeypatch.setattr(pl, "_clock_window_wait", lambda offset, now: 0)
+        pl._radio["rig"] = self._StubRig(replies)
+        clock = iter(stamps)
+
+        async def drive():
+            task = asyncio.ensure_future(
+                pl._clock_monitor_run(now_fn=lambda: next(clock))
+            )
+            try:
+                await wait_until(lambda: written or task.done(), timeout=2.0)
+            finally:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, StopIteration, RuntimeError):
+                    pass
+
+        asyncio.run(drive())
+        return written
+
+    def test_measures_the_offset_at_the_rollover_and_records_it(self, monkeypatch):
+        pl._clock_offset["offset_s"] = None
+        # The radio's minute turns over between a poll at :59.5 and one at
+        # :00.5, so its :00 sits on the laptop's — the clocks agree.
+        base = datetime(2026, 8, 3, 18, 4, 59, 500000, tzinfo=timezone.utc)
+        written = self._run(
+            [(18, 4), (18, 5), (18, 5)],
+            [base, base + timedelta(seconds=1), base + timedelta(seconds=2)],
+            monkeypatch,
+        )
+        assert pl._clock_offset["offset_s"] == pytest.approx(0.0, abs=1e-6)
+        assert written == [{"t": "2026-08-03T18:05:00.500000Z", "clock_offset_s": 0.0}]
+
+    def test_a_lagging_radio_reads_negative(self, monkeypatch):
+        pl._clock_offset["offset_s"] = None
+        # Rollover bracketed at :02 — the radio's minute starts two seconds
+        # after the laptop's, so it is two seconds behind.
+        base = datetime(2026, 8, 3, 18, 5, 2, tzinfo=timezone.utc)
+        self._run([(18, 4), (18, 5)], [base, base], monkeypatch)
+        assert pl._clock_offset["offset_s"] == pytest.approx(-2.0, abs=1e-6)
+
+    def test_says_nothing_until_a_rollover_is_actually_seen(self, monkeypatch):
+        # Every poll inside one minute reports the same HH:MM, which carries
+        # no timing information at all — publishing one would be inventing it.
+        base = datetime(2026, 8, 3, 18, 5, 30, tzinfo=timezone.utc)
+        pl._clock_offset["offset_s"] = None
+        written = self._run(
+            [(18, 5), (18, 5), (18, 5)],
+            [base, base + timedelta(seconds=1), base + timedelta(seconds=2)],
+            monkeypatch,
+        )
+        assert written == []
+        assert pl._clock_offset["offset_s"] is None
+
+    def test_a_burst_that_misses_falls_back_to_re_acquiring(self, monkeypatch):
+        # A rollover that is not where it was predicted means the radio's clock
+        # stepped. The offset must go back to unknown so the next pass hunts
+        # for it at the slow rate, rather than bursting at the wrong instant
+        # forever and reporting nothing.
+        monkeypatch.setattr(pl, "telemetry_write", lambda rec: None)
+        monkeypatch.setattr(pl, "CLOCK_ACQUIRE_POLL_S", 0)
+        monkeypatch.setattr(pl, "CLOCK_BURST_POLL_S", 0)
+        monkeypatch.setattr(pl, "CLOCK_SAMPLE_S", 0)
+        monkeypatch.setattr(pl, "_clock_window_wait", lambda offset, now: 0)
+        pl._clock_offset["offset_s"] = 0.0
+        pl._radio["rig"] = self._StubRig([(18, 5)] * 100)
+        base = datetime(2026, 8, 3, 18, 5, tzinfo=timezone.utc)
+        clock = iter(base + timedelta(seconds=i) for i in range(100))
+
+        async def drive():
+            task = asyncio.ensure_future(
+                pl._clock_monitor_run(now_fn=lambda: next(clock))
+            )
+            try:
+                await wait_until(
+                    lambda: pl._clock_offset["offset_s"] is None or task.done(),
+                    timeout=2.0,
+                )
+            finally:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, StopIteration, RuntimeError):
+                    pass
+
+        asyncio.run(drive())
+        assert pl._clock_offset["offset_s"] is None
+
+    def test_an_offline_radio_drops_the_reading_rather_than_holding_it(
+        self, monkeypatch
+    ):
+        # A stale offset would keep saying the clocks agree long after the
+        # session that measured it is gone.
+        pl._clock_offset["offset_s"] = 0.2
+        monkeypatch.setattr(pl, "CLOCK_ACQUIRE_POLL_S", 0)
+        pl._radio["rig"] = None
+
+        async def drive():
+            task = asyncio.ensure_future(pl._clock_monitor_run())
+            try:
+                await wait_until(
+                    lambda: pl._clock_offset["offset_s"] is None, timeout=2.0
+                )
+            finally:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+        asyncio.run(drive())
+        assert pl._clock_offset["offset_s"] is None
+
+
+class TestClockWindowWait:
+    """_clock_window_wait: where the next rollover is, given a known offset."""
+
+    def test_waits_for_the_window_before_the_laptops_own_minute(self):
+        # The clocks agree, so the radio turns its minute over at the laptop's
+        # :00 — 30 s away, and the burst starts CLOCK_WINDOW_S before that.
+        now = datetime(2026, 8, 3, 18, 5, 30, tzinfo=timezone.utc)
+        assert pl._clock_window_wait(0.0, now) == pytest.approx(30 - pl.CLOCK_WINDOW_S)
+
+    def test_a_radio_running_ahead_rolls_over_before_the_laptop(self):
+        # 2 s ahead means its :00 lands at laptop :58, two seconds earlier.
+        now = datetime(2026, 8, 3, 18, 5, 30, tzinfo=timezone.utc)
+        assert pl._clock_window_wait(2.0, now) == pytest.approx(28 - pl.CLOCK_WINDOW_S)
+
+    def test_never_returns_a_wait_into_a_rollover_already_past(self):
+        # Called from inside the window it must aim at the *next* minute, not
+        # sleep a negative time and burst at a rollover that already happened.
+        for second in range(60):
+            for offset in (-2.0, -0.2, 0.0, 0.2, 2.0):
+                now = datetime(2026, 8, 3, 18, 5, second, tzinfo=timezone.utc)
+                assert pl._clock_window_wait(offset, now) >= 0
+
+
+class TestClockChip:
+    """What the toolbar draws for the measured offset."""
+
+    def setup_method(self):
+        self._saved = dict(pl._clock_offset)
+
+    def teardown_method(self):
+        pl._clock_offset.clear()
+        pl._clock_offset.update(self._saved)
+
+    def test_no_measurement_yet_shows_a_dash_unhighlighted(self):
+        pl._clock_offset["offset_s"] = None
+        style, text = pl._clock_chip()
+        assert style == ""
+        assert "CLK —" in text
+
+    def test_a_small_offset_is_shown_but_not_flagged(self):
+        pl._clock_offset["offset_s"] = -0.04
+        style, text = pl._clock_chip()
+        assert style == ""
+        assert "CLK -0.0s" in text
+
+    def test_an_offset_past_the_threshold_goes_yellow(self):
+        pl._clock_offset["offset_s"] = pl.CLOCK_WARN_S
+        style, text = pl._clock_chip()
+        assert "ansiyellow" in style
+        assert "CLK +2.0s" in text
 
 
 # ──────────────────────────────────────────────────────────────

@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import os
 import struct
-from datetime import datetime, timezone
 
 import pytest
 
@@ -23,6 +22,7 @@ from icom_net import (
     CIV_IC9700_ADDR,
     CIV_PARAM_FILE_SPLIT,
     CIV_PARAM_RX_REC_CONDITION,
+    CIV_PARAM_TIME,
     IcomNetRig,
     bcd_encode_freq,
     civ_data_packet,
@@ -118,7 +118,8 @@ class FakeIcomRadio:
         self._cur_freq = 144_174_000
         self._cur_mode = 0x01  # USB
         # Numbered settings (CI-V 0x1A 0x05), keyed by their two BCD bytes.
-        self.params: dict[bytes, int] = {}
+        # Values are one byte, or several for a setting like the clock.
+        self.params: dict[bytes, int | bytes] = {}
         self._ctrl_transport = None
         self._civ_transport = None
 
@@ -243,12 +244,13 @@ class FakeIcomRadio:
                     elif len(frame) == 6 and frame[2:4] == b"\x1a\x05":  # read setting
                         value = self.params.get(bytes(frame[4:6]))
                         if value is not None:
+                            data = bytes([value]) if isinstance(value, int) else value
                             self._send_civ(
                                 civ_frame(
                                     CIV_CONTROLLER_ADDR,
                                     CIV_IC9700_ADDR,
                                     0x1A,
-                                    bytes([0x05]) + frame[4:6] + bytes([value]),
+                                    bytes([0x05]) + frame[4:6] + data,
                                 )
                             )
 
@@ -321,10 +323,10 @@ async def test_connect_and_receive_unsolicited_transceive_update(fake_radio):
         await rig.close()
 
 
-async def test_send_cw_stop_cw_and_set_clock_reach_the_radio_as_civ_frames(fake_radio):
-    # The three rigctld operations puskas_logger uses besides freq/mode
-    # reads: CW macro send ('b'), CW abort (0xBB), clock sync (\set_clock).
-    # Each must land on the radio as the exact CI-V frame Hamlib would send.
+async def test_send_cw_and_stop_cw_reach_the_radio_as_civ_frames(fake_radio):
+    # The two rigctld operations puskas_logger uses besides freq/mode reads:
+    # CW macro send ('b') and CW abort (0xBB). Each must land on the radio as
+    # the exact CI-V frame Hamlib would send.
     rig = IcomNetRig(
         "127.0.0.1",
         "testuser",
@@ -338,15 +340,11 @@ async def test_send_cw_stop_cw_and_set_clock_reach_the_radio_as_civ_frames(fake_
 
         rig.send_cw("TU")
         rig.stop_cw()
-        rig.set_clock(datetime(2026, 8, 3, 18, 5, tzinfo=timezone.utc))
 
         to_radio = bytes([CIV_IC9700_ADDR, CIV_CONTROLLER_ADDR])
         expected = [
             to_radio + bytes([0x17]) + b"TU",
             to_radio + bytes([0x17, 0xFF]),
-            to_radio + bytes([0x1A, 0x05, 0x01, 0x84, 0x00, 0x00, 0x00]),
-            to_radio + bytes([0x1A, 0x05, 0x01, 0x80, 0x18, 0x05]),
-            to_radio + bytes([0x1A, 0x05, 0x01, 0x79, 0x20, 0x26, 0x08, 0x03]),
         ]
         assert await wait_until(
             lambda: all(f in fake_radio.received_civ for f in expected), timeout=2.0
@@ -378,6 +376,24 @@ async def test_read_param_returns_the_radios_recorder_settings(fake_radio):
         await rig.close()
 
 
+async def test_read_clock_returns_the_radios_hours_and_minutes(fake_radio):
+    # The clock is the one setting whose reply is two bytes rather than one,
+    # which is why it does not go through read_param.
+    fake_radio.params = {CIV_PARAM_TIME: bytes([0x18, 0x05])}
+    rig = IcomNetRig(
+        "127.0.0.1",
+        "testuser",
+        "testpass",
+        control_port=fake_radio.control_port,
+        civ_port=fake_radio.civ_port,
+    )
+    try:
+        await rig.connect(timeout=5.0)
+        assert await rig.read_clock() == (18, 5)
+    finally:
+        await rig.close()
+
+
 async def test_read_param_gives_up_rather_than_hanging_on_a_silent_radio(fake_radio):
     # A radio that answers nothing must not wedge the check -- it runs on the
     # UI's own event loop.
@@ -393,7 +409,7 @@ async def test_read_param_gives_up_rather_than_hanging_on_a_silent_radio(fake_ra
         assert await rig.read_param(CIV_PARAM_FILE_SPLIT, timeout=0.2) is None
         # and the one-shot listener is gone again, not left accumulating
         assert not any(
-            "read_param" in getattr(cb, "__qualname__", "")
+            "_read_setting" in getattr(cb, "__qualname__", "")
             for cb in rig._frame_listeners
         )
     finally:

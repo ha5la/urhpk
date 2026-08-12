@@ -142,6 +142,16 @@ def forget_meters() -> None:
     _telem_meters["last"] = None
 
 
+def telemetry_clock_record(now: datetime, offset_s: float) -> dict:
+    """How far the radio's clock leads this laptop's, every few minutes.
+
+    The one sampled record that is written even when nothing changed: it is a
+    measurement rather than a state, its noise floor is half the monitor's burst
+    interval (so change-gating it would gate on noise), and a flat line is the
+    reassurance wanted afterwards when a WAV and the EDI disagree."""
+    return {"t": _utc_stamp(now), "clock_offset_s": round(offset_s, 2)}
+
+
 def telemetry_rot_record(now: datetime, az: float | None) -> dict:
     return {"t": _utc_stamp(now), "az": round(az, 1) if az is not None else None}
 

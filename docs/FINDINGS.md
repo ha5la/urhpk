@@ -259,6 +259,59 @@ the recording and neither is visible until render time, days later:
 A wrong `RX REC Condition` is therefore one factory reset away at any time, and
 costs a round's audio structure without any symptom during the round.
 
+## The radio's clock
+
+Every timestamp in the pipeline is joined on the assumption that the radio's
+clock and the laptop's agree: the WAV filenames carry the radio's clock, the EDI
+carries the laptop's. The radio was believed to be the weak half, drifting, with
+a manual CI-V clock-set as its unreliable patch. Measurement says otherwise on
+both counts, and the patch is gone.
+
+**Seeing the radio's seconds at all.** The radio reports only HH:MM — `get_clock`
+and CI-V `1A 05 0180` alike always read `:00` seconds — so the seconds could only
+be read off the radio's own menu by eye. They can be measured instead: poll
+`1A 05 0180` at 20 Hz and record the laptop time at which the reported minute
+*increments*. That instant is the radio's `:00`, located to a few tens of ms, and
+it is what every claim below rests on.
+
+**A time-set zeroes the radio's seconds — it is not ignored, ever.** The
+documented quirk was that the radio ignores the seconds field, and the folklore
+was that a set "silently doesn't take" when the clock is only 2-3 s off. What a
+set actually does is zero the seconds counter at the moment the frame lands.
+Sending `16:14` — the very minute the radio already displayed — at laptop `:30`
+moved its rollover from `:00` to `:30.016`. So a set fired on a `:00` boundary
+is accurate to the frame's flight time, a few tens of ms, and always was. The
+old belief is what you get from verifying with `get_clock`, whose seconds field
+is zero regardless of the truth.
+
+**The radio has an NTP client, and it was pointed nowhere.** Scanning the
+numbered settings either side of the clock parameters found it:
+
+| Setting | Meaning | Factory value |
+|---|---|---|
+| `1A 05 0181` | NTP Function, ON/OFF, persistent | `01` |
+| `1A 05 0182` | NTP server address, 64-byte space-padded ASCII | `time.nist.gov` |
+| `1A 05 0183` | the other NTP flag (reads `01`, unchanged by writes) | `01` |
+
+`time.nist.gov` is unreachable: the radio's only link is the direct cable to the
+laptop, with no route off it. So NTP was enabled and failing silently for the
+project's whole history — which is the entire explanation for the drift the
+manual sync existed to patch.
+
+**Pointing it at the laptop fixes it, continuously.** With `chronyd` serving the
+radio's subnet and `0182` written to the laptop's address, a clock left
+deliberately 30 s wrong corrected itself to **+0.014 s** with nothing pressed;
+`sudo chronyc clients` shows `icom9700` as a querying row. An off→on toggle of
+`0181` forces an immediate poll, which is worth knowing because the radio does
+not otherwise re-poll promptly after a settings change.
+
+The failure mode this leaves is the same one the Voice Recorder settings have: a
+factory reset restores `time.nist.gov`, and nothing during a round would say so.
+Hence the logger's clock monitor, which measures the offset by the rollover trick
+above rather than trusting the settings, shows it in the toolbar and records it to
+telemetry. Measured drift with NTP working: four samples over 18 minutes spanned
+19-49 ms, with no trend — below what one poll of the monitor can even resolve.
+
 ## contest_video.py
 
 ### The webcam drift diagnosis

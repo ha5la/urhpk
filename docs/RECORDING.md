@@ -267,14 +267,14 @@ This also makes the pipeline far more tolerant of clock skew between the
 radio and the PC. The WAV filenames' timestamps come from the **radio's own
 clock** (the IC-9700 records straight to its SD card; the WAVs are copied
 off after the round), while the EDI timestamp comes from the **PC's**
-clock, via `puskas_logger` — two independent clocks, which is exactly why
-`Alt+T` (radio clock sync, see below) exists. Snapping to the nearest
+clock, via `puskas_logger` — two independent clocks, which is why the radio
+syncs itself from the laptop over NTP (see below). Snapping to the nearest
 `burst_starts()` burst only needs the EDI time to land closer to the
 *right* real over than to any other one — comfortably true even with
 several seconds, or low tens of seconds, of drift, since QSOs in a round
-are normally well over a minute apart. `Alt+T` is still worth pressing
-periodically to keep that margin comfortable (and for the radio's own
-displayed clock to be correct), but this timing fix no longer depends on
+are normally well over a minute apart. Keeping the two clocks together is
+still worth doing (not least so the radio's own displayed clock is right),
+but this timing fix no longer depends on
 the radio and PC agreeing to the second the way the old EDI-time-minus-lead
 calculation implicitly did.
 
@@ -458,41 +458,50 @@ any retune shorter than its interval. Keep the file: it is optional for
 `contest_video.py` (see the HUD section above) but everything it adds is
 unrecoverable afterwards.
 
-## IC-9700 clock sync via rigctld
+## IC-9700 clock sync
 
-**Hamlib model number**: `3081` (not 3730 as one might expect).
+The radio keeps itself right: it has an NTP client, and the laptop serves it
+time over the direct radio link. Nothing needs pressing during a round.
 
-```
-rigctl -m 3081 -r /dev/ttyUSB0 get_clock
-# → 2026-07-04T20:47:00.000+00:00
-```
-
-**Quirk**: the radio ignores the seconds field when setting the clock. Always
-sync on a minute boundary or the set has no effect.
-
-**In the logger**: `Alt+T` sleeps to the next `:00` boundary, then sends:
+**The laptop's half** — `chronyd` serves the radio's subnet, in
+`/etc/chrony/conf.d/radio-ntp.conf`:
 
 ```
-\set_clock 2026-07-04T20:48:00.000+00:00
+allow 192.168.125.0/24
+local stratum 10
 ```
 
-to rigctld and expects `RPRT 0` back. The toolbar shows
-`clock sync: waiting for :00…` immediately (so you know the key registered),
-then `clock synced 20:48Z` for 5 s on success.
+`./sync-clock.sh` still only talks to `chronyc` — it fixes the laptop, and the
+radio follows whenever it next polls. How long that is has not been measured
+(the radio was not seen re-polling for ~25 minutes once), so a step right before
+a round is not guaranteed to have reached the radio by the time it starts. The
+`CLK` chip is what says whether it has.
 
-Worst-case wait after pressing `Alt+T`: 59 s. Press it just before a minute
-rolls over to minimise the wait.
+`local stratum 10` is what keeps the round covered: it serves the laptop's own
+clock when the laptop's upstream is unreachable, which is the normal state at a
+portable site. Check the radio is actually asking with `sudo chronyc clients` —
+`icom9700` appears as a row with a non-zero NTP count.
 
-**Verification**: after syncing, `get_clock` still shows `:00` seconds — that
-field is always zero on read regardless. Cross-check by watching the radio's
-own clock display (the menu, not `get_clock`, shows live seconds).
+**The radio's half** — SET > Time Set: NTP Function ON, NTP Server Address
+`192.168.125.1` (the laptop). The factory default is `time.nist.gov`, which
+never answers, since the radio has no route off the link. Both are ordinary
+numbered CI-V settings (0181 and 0182), so `icom_net` can read and write them,
+and the logger warns at startup if they are not what a round needs.
 
-**Reliability quirk**: `\set_clock` over CAT is not reliable when the radio's
-clock is already close to correct (only 2-3 s off) — the set silently doesn't
-take. It worked fine when the clock had been deliberately desynced further via
-the radio's own menu first. Needs watching before the round: check the
-radio's menu clock (which does show seconds) after pressing `Alt+T` rather
-than trusting the toolbar's "synced" message alone.
+**Measured**: pointing the radio at the laptop pulled a deliberately 30 s-wrong
+clock back to +0.014 s, unprompted. See FINDINGS.md for how that was measured —
+the radio only ever reports HH:MM, so the seconds have to be inferred.
+
+**The toolbar shows the difference**, as a `CLK` chip: `CLK -0.2s` while the
+two clocks agree, turning yellow past 2 s. `CLK —` means no measurement yet —
+expect it for up to a minute after the radio connects, since the offset is only
+readable at a minute rollover. Every measurement also goes to
+`*-telemetry.jsonl` as `clock_offset_s`, so the round's clock agreement can be
+checked afterwards rather than remembered.
+
+There is no key to sync the clock by hand any more. If the chip goes yellow and
+stays there, the radio's NTP settings are what to check — a factory reset
+restores `time.nist.gov`, and that is the one way this quietly comes undone.
 
 ## File layout for a round
 

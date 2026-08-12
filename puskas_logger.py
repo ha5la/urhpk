@@ -55,6 +55,7 @@ from recorders import (
     on_radio_meters,
     on_scope,
     scope_open,
+    telemetry_clock_record,
     telemetry_meter_record,
     telemetry_open,
     telemetry_rig_record,
@@ -219,6 +220,9 @@ def _radio_start() -> None:
     # A fresh Event rather than clear(): it binds to the loop that first awaits it.
     _radio["probed"] = asyncio.Event()
     _radio["task"] = _spawn(_radio_task())
+    # Outlives any one session, unlike the meter poller: it has its own idle
+    # state for "radio offline" and picks the next session up by itself.
+    _spawn(_clock_monitor_run())
 
 
 def _radio_rig() -> icom_net.IcomNetRig | None:
@@ -280,60 +284,120 @@ def current_rig() -> tuple[str, str, str, bool]:
     return _rig_manual["band"], _rig_manual["mode"], "", False
 
 
-_clock_sync_notice: dict = {"msg": "", "until": 0.0}
+# ──────────────────────────────────────────────────────────────
+# Radio clock monitor
+#
+# The radio syncs itself over NTP from this laptop (RECORDING.md sets it up),
+# which leaves one job here: notice if it ever stops. Every timestamp in the
+# pipeline is joined on the two clocks agreeing, and the way that assumption
+# used to break was silent -- so the offset is measured continuously, shown in
+# the toolbar, and recorded to telemetry rather than checked once at startup.
+#
+# Measuring it needs the poll: the radio reports HH:MM and no seconds, so the
+# only observable instant is the minute rollover, and the only way to catch it
+# is to be asking when it happens.
+#
+# But only the *first* rollover has to be hunted for. Once the offset is known
+# the next one is predictable, so the monitor sleeps until just before it and
+# asks in a short burst instead of polling the whole time: ~40 queries every
+# CLOCK_SAMPLE_S rather than one a second, and a 20 Hz burst pins the rollover
+# to ±25 ms where a 1 Hz stream could only bracket it to ±0.5 s. Cheaper and
+# sharper at once.
+#
+# A burst that sees no rollover means the prediction was wrong -- the radio's
+# clock stepped, which is the interesting case -- so the offset goes back to
+# unknown and the next pass re-acquires from scratch.
+# ──────────────────────────────────────────────────────────────
+CLOCK_ACQUIRE_POLL_S = 1.0  # hunting the first rollover, blind to its timing
+CLOCK_ACQUIRE_S = 70.0  # one full minute plus slack to catch one
+CLOCK_BURST_POLL_S = 0.05
+CLOCK_WINDOW_S = 1.0  # half-width of the burst around the predicted rollover
+CLOCK_SAMPLE_S = 300.0  # at least this between measurements, then the next rollover
+CLOCK_WARN_S = 2.0  # beyond this the toolbar goes yellow
+
+_clock_offset: dict = {"offset_s": None}
 
 
-async def _clock_sync_run() -> None:
-    _clock_sync_notice["msg"] = "clock sync: waiting for :00…"
-    _clock_sync_notice["until"] = time.monotonic() + 120.0
-    now = datetime.now(timezone.utc)
-    await asyncio.sleep(60 - now.second - now.microsecond / 1e6)
-    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-    rig = _radio_rig()
-    if rig is None:
-        msg = "clock sync failed: radio offline"
-    else:
-        # Only frames FROM the radio count -- it echoes our own back too.
-        from_radio = bytes([icom_net.CIV_CONTROLLER_ADDR, icom_net.CIV_IC9700_ADDR])
-        acks: list[int] = []
-        all_acked = asyncio.Event()
+def _clock_chip() -> tuple[str, str]:
+    """(style, text) for the toolbar's clock chip -- one function so the
+    redraw signature cannot drift from what is actually drawn."""
+    offset = _clock_offset["offset_s"]
+    if offset is None:
+        return "", "  CLK —  │  "
+    style = "bg:ansiyellow fg:black" if abs(offset) >= CLOCK_WARN_S else ""
+    return style, f"  CLK {offset:+.1f}s  │  "
 
-        def _on_frame(frame: bytes) -> None:
-            if len(frame) >= 3 and frame[:2] == from_radio and frame[2] in (0xFB, 0xFA):
-                acks.append(frame[2])
-                if len(acks) >= 3:
-                    all_acked.set()
 
-        rig.on_civ_frame(_on_frame)
+def _clock_window_wait(offset_s: float, now: datetime) -> float:
+    """Seconds to sleep so a burst starts CLOCK_WINDOW_S before the radio's
+    next minute rollover.
+
+    A radio running `offset_s` ahead turns its minute over that much *before*
+    the laptop's own `:00`, so the rollover lands at second `-offset_s` of the
+    laptop's minute. Always waits for a rollover still in the future, even when
+    called from inside one's window."""
+    target = (-offset_s) % 60
+    second = now.second + now.microsecond / 1e6
+    wait = (target - second) % 60 - CLOCK_WINDOW_S
+    return wait if wait >= 0 else wait + 60
+
+
+async def _measure_clock_offset(rig, now_fn, interval: float, window_s: float):
+    """Poll the radio's clock until its minute increments, and return the
+    offset that rollover implies together with the instant it was measured.
+    None if it doesn't happen within `window_s` -- with a burst that means the
+    rollover was not where it was predicted."""
+    started = None
+    last_hhmm = None
+    last_reply_at = None
+    while True:
         try:
-            rig.set_clock(now)
-            try:
-                await asyncio.wait_for(all_acked.wait(), 2.0)
-            except TimeoutError:
-                pass
-        except Exception as exc:
-            msg = f"clock sync failed: {exc}"
+            hhmm = await rig.read_clock()
+        except Exception:
+            hhmm = None
+        now = now_fn()
+        if started is None:
+            started = now
+        if hhmm is not None:
+            if last_hhmm is not None and hhmm != last_hhmm:
+                return icom_net.clock_offset_s(last_reply_at, now), now
+            last_hhmm, last_reply_at = hhmm, now
+        if (now - started).total_seconds() >= window_s:
+            return None
+        await asyncio.sleep(interval)
+
+
+async def _clock_monitor_run(now_fn=None) -> None:
+    now_fn = now_fn or (lambda: datetime.now(timezone.utc))
+    while True:
+        rig = _radio_rig()
+        if rig is None:
+            # Nothing to report rather than a stale number: the next session
+            # re-measures from its own first rollover.
+            _clock_offset["offset_s"] = None
+            await asyncio.sleep(CLOCK_ACQUIRE_POLL_S)
+            continue
+
+        known = _clock_offset["offset_s"]
+        if known is None:
+            measured = await _measure_clock_offset(
+                rig, now_fn, CLOCK_ACQUIRE_POLL_S, CLOCK_ACQUIRE_S
+            )
         else:
-            if acks.count(0xFB) == 3:
-                msg = f"clock synced {now:%H:%M}Z"
-            elif 0xFA in acks:
-                msg = "clock sync failed: radio rejected a set command"
-            else:
-                msg = f"clock sync failed: {acks.count(0xFB)}/3 acks"
-        finally:
-            rig.remove_civ_frame(_on_frame)
-    _clock_sync_notice["msg"] = msg
-    _clock_sync_notice["until"] = time.monotonic() + 5.0
+            await asyncio.sleep(_clock_window_wait(known, now_fn()))
+            measured = await _measure_clock_offset(
+                rig, now_fn, CLOCK_BURST_POLL_S, 2 * CLOCK_WINDOW_S
+            )
 
-
-def _clock_sync() -> None:
-    """Sleep to the next minute boundary, then push UTC time to the radio.
-
-    The IC-9700 ignores the seconds field, so we sync on :00 for reliability.
-    Shows "waiting…" immediately so the operator knows the key was registered,
-    then the result for 5 s once the sync fires. Success = the radio ACKs
-    (FB) all three CI-V set commands (UTC offset, time, date)."""
-    _spawn(_clock_sync_run())
+        if measured is None:
+            _clock_offset["offset_s"] = None
+            continue
+        offset, at = measured
+        _clock_offset["offset_s"] = offset
+        # Stamped at the rollover it measured, not at whenever this loop got
+        # round to writing it.
+        telemetry_write(telemetry_clock_record(at, offset))
+        await asyncio.sleep(CLOCK_SAMPLE_S)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -602,7 +666,6 @@ def _handle_command(line: str, lb: LogBook, tname: str):
         print("  Alt+M                    — cycle mode (rig offline)")
         print("  Alt+R                    — point rotator at selected bearing")
         print("  Alt+S                    — confirm the radio is recording to SD")
-        print("  Alt+T                    — sync radio clock to system UTC")
         print("  Alt+V                    — start/stop webcam recording")
         print("  !help                    — this help")
         print("  Ctrl-D                   — save and exit")
@@ -712,6 +775,8 @@ async def run(lb: LogBook, tname: str):
         if _recorder_check["warnings"]:
             parts.append(("bg:ansiyellow fg:black", "  ■ REC SET  │  "))
 
+        parts.append(_clock_chip())
+
         webcam = webcam_status()
         if webcam == "recording":
             parts.append(("bg:ansired fg:white", "  ● REC  │  "))
@@ -725,11 +790,6 @@ async def run(lb: LogBook, tname: str):
             parts.append(
                 (f"bg:{style} fg:black", f"  {_recorder_check['notice']}  │  ")
             )
-
-        sync_msg = _clock_sync_notice["msg"]
-        sync_until = _clock_sync_notice["until"]
-        if time.monotonic() < sync_until:
-            parts.append(("bg:ansigreen fg:black", f"  {sync_msg}  │  "))
 
         webcam_msg, webcam_until = _state["webcam_notice"]
         if time.monotonic() < webcam_until:
@@ -757,9 +817,6 @@ async def run(lb: LogBook, tname: str):
                 q = lb.qsos[real_idx]
                 mismatch = band != q.band or mode != q.mode
 
-        sync_active = time.monotonic() < _clock_sync_notice["until"]
-        sync_msg = _clock_sync_notice["msg"] if sync_active else None
-
         webcam_msg, webcam_until = _state["webcam_notice"]
         webcam_active = time.monotonic() < webcam_until
 
@@ -779,8 +836,7 @@ async def run(lb: LogBook, tname: str):
             rec_notice_active,
             _recorder_check["notice"] if rec_notice_active else None,
             webcam_status(),
-            sync_active,
-            sync_msg,
+            _clock_chip(),
             webcam_active,
             webcam_msg if webcam_active else None,
             now.strftime("%H:%M:%S"),
@@ -1038,10 +1094,6 @@ async def run(lb: LogBook, tname: str):
                 pass
         if loc:
             rotator.point_at(lb.bearing(loc))
-
-    @kb.add("escape", "t")
-    def _on_alt_t(_event):
-        _clock_sync()
 
     @kb.add("escape", "s")
     def _on_alt_s(event):
