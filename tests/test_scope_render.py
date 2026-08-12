@@ -109,6 +109,44 @@ class TestRenderScopeVideoTiming:
         assert (last[2] == lut[40]).all()
         assert (last[3] == 0).all()  # canvas still not fully filled by t=1.0
 
+    def test_a_stalled_stream_draws_black_rows_not_a_held_one(
+        self, monkeypatch, tmp_path
+    ):
+        # Sweeps 2s apart against a 1s stall threshold: the rows within
+        # SCOPE_STALL_S of a sweep hold it, the ones past it go black, so a
+        # blackout reads as a gap in the waterfall instead of a smear.
+        scope_path = tmp_path / "t.scope"
+        with open(scope_path, "wb") as f:
+            write_scope_record(f, 1000.0, 144_000_000, 146_000_000, bytes([40]))
+            write_scope_record(f, 1002.0, 144_000_000, 146_000_000, bytes([160]))
+
+        frames = []
+
+        class FakeStdin:
+            def write(self, data):
+                frames.append(np.frombuffer(data, dtype=np.uint8).reshape(4, 2, 3))
+
+            def close(self):
+                pass
+
+        class FakeProc:
+            stdin = FakeStdin()
+
+            def wait(self):
+                return 0
+
+        monkeypatch.setattr(cv.subprocess, "Popen", lambda cmd, stdin=None: FakeProc())
+        render_scope_video(
+            str(scope_path), str(tmp_path / "out.mp4"), W=2, H=4, fps=2, span_s=2.0
+        )
+
+        lut = _scope_colormap()
+        last = frames[-1]
+        assert (last[0] == lut[160]).all()  # the sweep at t=2.0
+        assert (last[1] == 0).all()  # t=1.5, 1.5s since the last sweep
+        assert (last[2] == lut[40]).all()  # t=1.0, still inside the threshold
+        assert (last[3] == lut[40]).all()  # t=0.5
+
 
 class TestRenderScopeBackground:
     def test_scope_branch_overlays_onto_the_audio_background(

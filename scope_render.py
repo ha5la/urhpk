@@ -23,6 +23,9 @@ SCOPE_WATERFALL_SPAN_S = 10.0  # seconds of history the canvas height represents
 # matching the real IC-9700 display: a signal takes ~4-5s to
 # scroll through half the physical waterfall's height there.
 
+SCOPE_STALL_S = 1.0  # no sweep for this long = the stream stopped, not a slow one:
+# they arrive at ~29/s, so a second of silence is ~29 missing.
+
 # Classic SDR waterfall gradient: black -> blue -> cyan -> green -> yellow -> red.
 _SCOPE_COLORMAP_STOPS = [
     (0, (0, 0, 0)),
@@ -84,8 +87,12 @@ def render_scope_video(
     arrived faster than the row rate (only the latest-before-the-tick one
     is shown, the rest are skipped) and holds the display steady
     (duplicating the last row) through any stretch slower than the row
-    rate or where sweeps stop arriving entirely -- the same way a real
-    waterfall display behaves when its input momentarily stalls.
+    rate -- the same way a real waterfall display behaves when its input
+    momentarily stalls. Past SCOPE_STALL_S with no sweep at all the rows
+    go black instead: the stream stopped (the radio's own menu closes the
+    scope, so this happens whenever the operator goes into it), and a
+    black gap says so where a smear of the last sweep would claim signal
+    that was never received.
     """
     records = read_scope_records(scope_path)
     if len(records) < 2:
@@ -148,7 +155,8 @@ def render_scope_video(
                     canvas[1:] = canvas[
                         :-1
                     ]  # scroll down; newest row enters at the top
-                    canvas[0] = row
+                    stalled = next_row_t - (records[idx][0] - t0) > SCOPE_STALL_S
+                    canvas[0] = 0 if stalled else row
                 next_row_t += row_dt
             proc.stdin.write(canvas.tobytes())
             t += frame_dt
