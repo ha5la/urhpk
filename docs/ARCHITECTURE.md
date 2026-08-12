@@ -161,6 +161,9 @@ limit) and `stop_cw()` (0x17 + 0xFF) — byte layouts transcribed from Hamlib's 
 itself right over NTP (FINDINGS.md), so the clock is read only, via `read_clock()`
 — the one setting whose reply is two bytes rather than one, which is why it does
 not go through `read_param()`.
+The NTP client's own settings are readable the same way: `read_param()` for
+0181 (Function), `read_ntp_server()` for 0182, whose reply is a 64-byte
+space-padded string rather than one byte.
 `on_civ_frame()` exposes every raw inbound CI-V frame, which is how a caller sees
 ACKs (FB ok / FA rejected); note the radio echoes the client's own frames back, so
 distinguish direction by the address bytes.
@@ -546,6 +549,16 @@ These requirements must be preserved across all future changes:
 - **Live rig status**: QRG and round clock update every second in the bottom toolbar.
   A band/mode change on the radio must be visible immediately in the prompt — never require
   Enter to see the updated state.
+- **`■ NTP` is the settings half of the same question, and not redundant with
+  `CLK`**: read at connect like the recorder settings. A radio whose server
+  address has been reset still keeps good time for hours, drifting far too
+  slowly to see, so `CLK` stays quiet while the sync is already gone -- the
+  address is wrong the moment it is read. The address to expect is
+  `IcomNetRig.local_addr`, the CI-V socket's own local address: whatever the
+  radio reaches us on is by construction where its NTP queries must go, so
+  there is no configured IP to fall out of date. `Alt+S` re-reads recorder and
+  NTP settings together (`_settings_check_run`) and puts both in the one notice
+  slot -- the chips stay separate so a lit one still says which subsystem.
 - **The `CLK` chip is a measurement, not a setting read**: the radio syncs itself
   from this laptop over NTP (FINDINGS.md), and `_clock_monitor_run` checks that it
   worked rather than that it is configured. Since the radio reports only HH:MM, the

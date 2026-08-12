@@ -227,6 +227,29 @@ def clock_offset_s(bracket_start: datetime, bracket_end: datetime) -> float:
     return -lag
 
 
+# The NTP client that keeps the clock right. Both settings are persistent, and
+# a factory reset restores the server to time.nist.gov -- which the radio
+# cannot reach from its own link, so it is a silent failure. Hence readable:
+# the clock's offset only reveals a *lost* sync hours later, but a wrong
+# server address is wrong the moment it is read.
+CIV_PARAM_NTP_FUNCTION = bytes([0x01, 0x81])  # 00=OFF, 01=ON
+CIV_PARAM_NTP_SERVER = bytes([0x01, 0x82])  # 64-byte space-padded ASCII
+
+
+def parse_ntp_server_reply(frame: bytes) -> str | None:
+    """The NTP server address the radio reports, or None if `frame` is not
+    that reply. The field is a fixed 64 bytes, padded with spaces."""
+    if (
+        len(frame) < 7
+        or frame[0] != CIV_CONTROLLER_ADDR
+        or frame[2] != CIV_CMD_SET_PARAM
+        or frame[3] != CIV_PARAM_SUBCMD
+        or frame[4:6] != CIV_PARAM_NTP_SERVER
+    ):
+        return None
+    return frame[6:].decode("ascii", "replace").rstrip()
+
+
 # ============================================================
 # Voice Recorder settings
 #
@@ -601,6 +624,10 @@ class _UdpChannel(asyncio.DatagramProtocol):
         return self.transport.get_extra_info("sockname")[1]
 
     @property
+    def host(self) -> str:
+        return self.transport.get_extra_info("sockname")[0]
+
+    @property
     def peer(self) -> tuple[str, int]:
         return self.transport.get_extra_info("peername")
 
@@ -803,6 +830,22 @@ class IcomNetRig:
         """Read one numbered radio setting, or None if the radio doesn't answer."""
         return await self._read_setting(
             param, lambda frame: parse_param_reply(frame, param), timeout
+        )
+
+    @property
+    def local_addr(self) -> str | None:
+        """This laptop's address on the radio's own link, as the kernel picked
+        it for the CI-V socket -- which is by construction the address the
+        radio's NTP client has to be pointed at. Derived rather than
+        configured: an address written down somewhere is one more thing that
+        can quietly stop being true."""
+        return self._civ.host if self._civ is not None else None
+
+    async def read_ntp_server(self, timeout: float = 2.0) -> str | None:
+        """The NTP server address the radio is set to, or None if unreadable.
+        Its reply is a 64-byte string, so it does not go through read_param."""
+        return await self._read_setting(
+            CIV_PARAM_NTP_SERVER, parse_ntp_server_reply, timeout
         )
 
     async def read_clock(self, timeout: float = 2.0) -> tuple[int, int] | None:

@@ -65,10 +65,24 @@ rotator telemetry, every keystroke and QSO, the radio's sweeps, and —
 if Alt+V was pressed — a webcam capture. None of it is recoverable afterwards,
 which is why it is all on by default.
 
-**What must be true before you start**: `~/.netrc` has the ON4KST and radio
-credentials, the radio's Network Control is on, and the radio's NTP points at
-the laptop (see RECORDING.md — the laptop serves it time). The toolbar states
-the rest of it: nothing red, nothing yellow, and the `CLK` chip near zero.
+**What must be true before you start** — most of it the logger checks for
+itself once the radio connects, so the last column is what to look at rather
+than what to remember:
+
+| Must be true | Where it is set | How you know |
+|---|---|---|
+| `~/.netrc` has the ON4KST and radio credentials | `~/.netrc` | the logger and bridge fail loudly without them |
+| Radio Network Control on, CI-V Transceive on | radio: SET > Network, SET > Connectors | band/mode go live in the toolbar |
+| Radio NTP Function on, server = this laptop | radio: SET > Time Set | yellow `■ NTP` if not |
+| `chronyd` serving the radio's subnet | `/etc/chrony/conf.d/radio-ntp.conf` | `sudo chronyc clients` lists `icom9700` |
+| Laptop's own clock stepped and converged | `./sync-clock.sh` | `chronyc tracking` |
+| Voice Recorder running | radio front panel | red `SD ✗` until `Alt+S` |
+| File Split on, RX REC Condition = Always | radio: QSO RECORDER > Recorder Set | yellow `■ REC SET` if not |
+| Rotator powered, rotctld up | `hamlib_supervisor.py`, window `bg` | `ROT:` reads degrees, not `---` |
+
+RECORDING.md has the how-to for each. The short version at the start of a
+round: **nothing red, nothing yellow, `CLK` near zero.** `Alt+S` re-reads the
+radio's settings and spells out anything wrong in one notice.
 
 ## 3. After the round — render
 

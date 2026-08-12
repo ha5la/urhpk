@@ -1431,25 +1431,33 @@ class TestRecorderCheckRun:
 
     def setup_method(self):
         self._saved = dict(pl._recorder_check)
+        self._saved_ntp = dict(pl._ntp_check)
         self._saved_rig = pl._radio["rig"]
 
     def teardown_method(self):
         pl._recorder_check.clear()
         pl._recorder_check.update(self._saved)
+        pl._ntp_check.clear()
+        pl._ntp_check.update(self._saved_ntp)
         pl._radio["rig"] = self._saved_rig
 
     class _StubRig:
-        def __init__(self, values):
+        def __init__(self, values, server="192.168.125.1"):
             self._values = values
             self.asked = []
+            self.local_addr = "192.168.125.1"
+            self._server = server
 
         async def read_param(self, param, timeout=2.0):
             self.asked.append(param)
             return self._values.get(param)
 
+        async def read_ntp_server(self, timeout=2.0):
+            return self._server
+
     def _run(self, values, notify=False):
         pl._radio["rig"] = self._StubRig(values)
-        asyncio.run(pl._recorder_check_run(notify=notify))
+        asyncio.run(pl._settings_check_run() if notify else pl._recorder_check_run())
 
     def test_reads_both_settings_and_flags_the_bad_one(self):
         self._run(
@@ -1491,16 +1499,91 @@ class TestRecorderCheckRun:
             {
                 icom_net.CIV_PARAM_FILE_SPLIT: 1,
                 icom_net.CIV_PARAM_RX_REC_CONDITION: 0,
+                icom_net.CIV_PARAM_NTP_FUNCTION: 1,
             },
             notify=True,
         )
-        assert pl._recorder_check["notice"] == "recorder settings OK"
+        assert pl._recorder_check["notice"] == "radio settings OK"
 
     def test_offline_radio_reports_that_rather_than_a_clean_bill(self):
         pl._radio["rig"] = None
-        asyncio.run(pl._recorder_check_run(notify=True))
+        asyncio.run(pl._settings_check_run())
         assert pl._recorder_check["warnings"] == ()
         assert "offline" in pl._recorder_check["notice"]
+
+
+class TestNtpWarnings:
+    """What counts as a wrongly-configured NTP client."""
+
+    LAPTOP = "192.168.125.1"
+
+    def test_correctly_pointed_radio_says_nothing(self):
+        assert pl.ntp_warnings(1, self.LAPTOP, self.LAPTOP) == []
+
+    def test_the_factory_server_is_flagged(self):
+        # The value a factory reset restores, and the radio has no route to
+        # it — the exact silent failure this check exists for.
+        (warning,) = pl.ntp_warnings(1, "time.nist.gov", self.LAPTOP)
+        assert "time.nist.gov" in warning
+        assert self.LAPTOP in warning
+
+    def test_function_off_is_flagged(self):
+        (warning,) = pl.ntp_warnings(0, self.LAPTOP, self.LAPTOP)
+        assert "OFF" in warning
+
+    def test_both_wrong_reports_both(self):
+        assert len(pl.ntp_warnings(0, "time.nist.gov", self.LAPTOP)) == 2
+
+    def test_an_unread_setting_is_not_a_wrong_one(self):
+        # A radio that did not answer says nothing, exactly as the recorder
+        # check treats an unreadable setting.
+        assert pl.ntp_warnings(None, None, self.LAPTOP) == []
+
+
+class TestNtpCheckRun:
+    """_ntp_check_run against a stand-in rig — what lights the ■ NTP chip."""
+
+    def setup_method(self):
+        self._saved = dict(pl._ntp_check)
+        self._saved_rig = pl._radio["rig"]
+
+    def teardown_method(self):
+        pl._ntp_check.clear()
+        pl._ntp_check.update(self._saved)
+        pl._radio["rig"] = self._saved_rig
+
+    class _StubRig:
+        def __init__(self, function, server, local_addr="192.168.125.1"):
+            self._function = function
+            self._server = server
+            self.local_addr = local_addr
+
+        async def read_param(self, param, timeout=2.0):
+            return self._function
+
+        async def read_ntp_server(self, timeout=2.0):
+            return self._server
+
+    def test_expects_the_address_the_radio_reaches_us_on(self):
+        # Not a configured constant: whatever local address the CI-V socket
+        # got is by construction where the radio must send its NTP queries.
+        pl._radio["rig"] = self._StubRig(1, "10.0.0.5", local_addr="10.0.0.5")
+        asyncio.run(pl._ntp_check_run())
+        assert pl._ntp_check["warnings"] == ()
+
+    def test_a_radio_pointed_elsewhere_lights_the_chip(self):
+        pl._radio["rig"] = self._StubRig(1, "time.nist.gov")
+        asyncio.run(pl._ntp_check_run())
+        (warning,) = pl._ntp_check["warnings"]
+        assert "time.nist.gov" in warning
+
+    def test_an_offline_radio_makes_no_complaint(self):
+        # The chip must not accuse a radio that was never asked. Reporting the
+        # outage is _settings_check_run's job, and it has its own test.
+        pl._ntp_check["warnings"] = ("NTP: Function OFF",)
+        pl._radio["rig"] = None
+        asyncio.run(pl._ntp_check_run())
+        assert pl._ntp_check["warnings"] == ()
 
 
 class TestClockMonitor:

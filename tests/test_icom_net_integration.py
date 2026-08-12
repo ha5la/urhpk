@@ -21,6 +21,7 @@ from icom_net import (
     CIV_CONTROLLER_ADDR,
     CIV_IC9700_ADDR,
     CIV_PARAM_FILE_SPLIT,
+    CIV_PARAM_NTP_SERVER,
     CIV_PARAM_RX_REC_CONDITION,
     CIV_PARAM_TIME,
     IcomNetRig,
@@ -390,6 +391,25 @@ async def test_read_clock_returns_the_radios_hours_and_minutes(fake_radio):
     try:
         await rig.connect(timeout=5.0)
         assert await rig.read_clock() == (18, 5)
+    finally:
+        await rig.close()
+
+
+async def test_read_ntp_server_and_local_addr(fake_radio):
+    # The address the radio must be pointed at is the one this end of the
+    # CI-V socket actually has -- read from the socket, never configured.
+    fake_radio.params = {CIV_PARAM_NTP_SERVER: b"time.nist.gov".ljust(64, b" ")}
+    rig = IcomNetRig(
+        "127.0.0.1",
+        "testuser",
+        "testpass",
+        control_port=fake_radio.control_port,
+        civ_port=fake_radio.civ_port,
+    )
+    try:
+        await rig.connect(timeout=5.0)
+        assert await rig.read_ntp_server() == "time.nist.gov"
+        assert rig.local_addr == "127.0.0.1"
     finally:
         await rig.close()
 

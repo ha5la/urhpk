@@ -176,6 +176,7 @@ async def _radio_task() -> None:
             rig.enable_meters()
             _radio["rig"] = rig
             _spawn(_recorder_check_run())
+            _spawn(_ntp_check_run())
             while rig.last_rx_age() < RADIO_STALE_S:
                 await asyncio.sleep(1.0)
         except Exception:
@@ -447,26 +448,75 @@ def recorder_warnings(
     return warnings
 
 
-def _recorder_report(warnings: tuple, notice: str, notify: bool) -> None:
-    _recorder_check["warnings"] = warnings
-    if notify:
-        _recorder_check.update(
-            notice=notice, until=time.monotonic() + RECORDER_NOTICE_S
-        )
-
-
-async def _recorder_check_run(notify: bool = False) -> None:
+async def _recorder_check_run() -> None:
     rig = _radio_rig()
     if rig is None:
-        _recorder_report((), "recorder settings: radio offline", notify)
+        _recorder_check["warnings"] = ()
         return
     try:
         file_split = await rig.read_param(icom_net.CIV_PARAM_FILE_SPLIT)
         rx_rec_condition = await rig.read_param(icom_net.CIV_PARAM_RX_REC_CONDITION)
     except Exception:
         return  # a session that dropped mid-check says nothing new
-    warnings = tuple(recorder_warnings(file_split, rx_rec_condition))
-    _recorder_report(warnings, " · ".join(warnings) or "recorder settings OK", notify)
+    _recorder_check["warnings"] = tuple(recorder_warnings(file_split, rx_rec_condition))
+
+
+# ──────────────────────────────────────────────────────────────
+# The radio's NTP settings
+#
+# The clock monitor above measures whether the two clocks agree *now*. This
+# checks whether they will go on agreeing, which is not the same question: a
+# radio whose server address has been reset still reads right for hours
+# afterwards, drifting too slowly to see, so the CLK chip stays quiet while
+# the sync is already gone. The address is wrong the moment it is read.
+#
+# Same shape as the recorder check, and the same reason for it: a factory
+# reset silently restores a setting whose failure only shows up later.
+# ──────────────────────────────────────────────────────────────
+_ntp_check: dict = {"warnings": ()}
+
+
+def ntp_warnings(function: int | None, server: str | None, expected: str) -> list[str]:
+    """What is wrong with the radio's NTP settings. An unread setting (None)
+    is not a wrong one and says nothing."""
+    warnings = []
+    if function == 0:
+        warnings.append("NTP: Function OFF")
+    if server is not None and server != expected:
+        # The factory value, time.nist.gov, is the one this reliably catches:
+        # the radio has no route off its own link, so it never answers.
+        warnings.append(f"NTP: server is {server or '(empty)'}, not {expected}")
+    return warnings
+
+
+async def _ntp_check_run() -> None:
+    rig = _radio_rig()
+    expected = None if rig is None else rig.local_addr
+    if rig is None or expected is None:
+        # Nothing to say rather than a stale complaint; _settings_check_run
+        # is what reports an offline radio as such.
+        _ntp_check["warnings"] = ()
+        return
+    try:
+        function = await rig.read_param(icom_net.CIV_PARAM_NTP_FUNCTION)
+        server = await rig.read_ntp_server()
+    except Exception:
+        return  # a session that dropped mid-check says nothing new
+    _ntp_check["warnings"] = tuple(ntp_warnings(function, server, expected))
+
+
+async def _settings_check_run() -> None:
+    """Re-read everything about the radio a round depends on, and answer in one
+    notice. One, because the notice slot is one: the toolbar has room for a
+    short phrase and the round clock, not for two subsystems arguing."""
+    if _radio_rig() is None:
+        notice = "radio settings: radio offline"
+    else:
+        await _recorder_check_run()
+        await _ntp_check_run()
+        problems = list(_recorder_check["warnings"]) + list(_ntp_check["warnings"])
+        notice = " · ".join(problems) or "radio settings OK"
+    _recorder_check.update(notice=notice, until=time.monotonic() + RECORDER_NOTICE_S)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -665,7 +715,9 @@ def _handle_command(line: str, lb: LogBook, tname: str):
         print("  Alt+B                    — cycle band (rig offline)")
         print("  Alt+M                    — cycle mode (rig offline)")
         print("  Alt+R                    — point rotator at selected bearing")
-        print("  Alt+S                    — confirm the radio is recording to SD")
+        print(
+            "  Alt+S                    — confirm SD recording; re-check radio settings"
+        )
         print("  Alt+V                    — start/stop webcam recording")
         print("  !help                    — this help")
         print("  Ctrl-D                   — save and exit")
@@ -775,6 +827,9 @@ async def run(lb: LogBook, tname: str):
         if _recorder_check["warnings"]:
             parts.append(("bg:ansiyellow fg:black", "  ■ REC SET  │  "))
 
+        if _ntp_check["warnings"]:
+            parts.append(("bg:ansiyellow fg:black", "  ■ NTP  │  "))
+
         parts.append(_clock_chip())
 
         webcam = webcam_status()
@@ -833,6 +888,7 @@ async def run(lb: LogBook, tname: str):
             rot_online,
             _state["sd_ack"],
             _recorder_check["warnings"],
+            _ntp_check["warnings"],
             rec_notice_active,
             _recorder_check["notice"] if rec_notice_active else None,
             webcam_status(),
@@ -1099,10 +1155,11 @@ async def run(lb: LogBook, tname: str):
     def _on_alt_s(event):
         """Confirm the radio's SD-card recording is running — the one fact
         about this round the software has no way of finding out for itself.
-        Also re-reads the recorder's settings, since this is the key pressed
-        straight after touching the recorder."""
+        Also re-reads the radio's settings, since this is the key pressed
+        straight after touching the radio: both the recorder's and the NTP
+        client's, so one key answers "is the radio set up for a round"."""
         _state["sd_ack"] = not _state["sd_ack"]
-        _spawn(_recorder_check_run(notify=True))
+        _spawn(_settings_check_run())
         event.app.invalidate()
 
     @kb.add("escape", "v")
@@ -1378,6 +1435,7 @@ def main():
     print(f"Input log: {_input_log_path}")
     print("Webcam:    Alt+V to start/stop recording")
     print("Audio:     switch on the radio's Voice Recorder, then Alt+S to confirm")
+    print("Clock:     the radio takes its time from this laptop — toolbar CLK / ■ NTP")
     print(f"Band/mode: from the radio, {START_BAND} {START_MODE} without one (Alt+B/M)")
 
     print()

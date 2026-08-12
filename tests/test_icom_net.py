@@ -20,6 +20,7 @@ from icom_net import (
     clock_offset_s,
     parse_civ_update,
     parse_clock_reply,
+    parse_ntp_server_reply,
     parse_param_reply,
     parse_scope_frame,
     passcode,
@@ -254,6 +255,31 @@ def test_parse_clock_reply_ignores_our_own_echoed_query():
         civ_frame(CIV_IC9700_ADDR, CIV_CONTROLLER_ADDR, 0x1A, bytes([0x05, 0x01, 0x80]))
     )[0]
     assert parse_clock_reply(echo) is None
+
+
+def test_parse_ntp_server_reply_strips_the_fixed_width_padding():
+    # The field is 64 bytes, space-padded -- as read off the real radio.
+    padded = b"192.168.125.1".ljust(64, b" ")
+    frame = split_civ_frames(
+        civ_frame(
+            CIV_CONTROLLER_ADDR,
+            CIV_IC9700_ADDR,
+            0x1A,
+            bytes([0x05, 0x01, 0x82]) + padded,
+        )
+    )[0]
+    assert parse_ntp_server_reply(frame) == "192.168.125.1"
+
+
+def test_parse_ntp_server_reply_ignores_another_settings_reply():
+    # 0181 sits next to it and is a plain one-byte setting; reading it as an
+    # address would report the NTP client pointed at a control character.
+    frame = split_civ_frames(
+        civ_frame(
+            CIV_CONTROLLER_ADDR, CIV_IC9700_ADDR, 0x1A, bytes([0x05, 0x01, 0x81, 0x01])
+        )
+    )[0]
+    assert parse_ntp_server_reply(frame) is None
 
 
 def test_clock_offset_s_is_the_bracket_midpoint_against_the_laptop_minute():

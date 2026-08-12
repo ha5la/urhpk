@@ -492,6 +492,12 @@ and the logger warns at startup if they are not what a round needs.
 clock back to +0.014 s, unprompted. See FINDINGS.md for how that was measured —
 the radio only ever reports HH:MM, so the seconds have to be inferred.
 
+**The logger checks both halves.** A yellow `■ NTP` means the radio's NTP
+Function is off or its server is not this laptop -- what a factory reset
+leaves behind -- and `Alt+S` spells out which. That check is worth having
+separately from the clock reading below: a reset radio keeps good time for
+hours before the drift is visible.
+
 **The toolbar shows the difference**, as a `CLK` chip: `CLK -0.2s` while the
 two clocks agree, turning yellow past 2 s. `CLK —` means no measurement yet —
 expect it for up to a minute after the radio connects, since the offset is only
