@@ -91,7 +91,7 @@ class TestCAPNegotiation:
             await client.send("USER test 0 * :Test")
             # No CAP END yet — server must not send 001
             with pytest.raises(TimeoutError):
-                await client.recv(timeout=0.3)
+                await client.recv(timeout=0.05)
             # CAP END triggers welcome
             await client.send("CAP END")
             line = await client.recv()

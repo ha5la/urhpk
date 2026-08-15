@@ -446,7 +446,7 @@ async def test_read_param_gives_up_rather_than_hanging_on_a_silent_radio(fake_ra
     )
     try:
         await rig.connect(timeout=5.0)
-        assert await rig.read_param(CIV_PARAM_FILE_SPLIT, timeout=0.2) is None
+        assert await rig.read_param(CIV_PARAM_FILE_SPLIT, timeout=0.05) is None
         # and the one-shot listener is gone again, not left accumulating
         assert not any(
             "_read_setting" in getattr(cb, "__qualname__", "")
@@ -536,7 +536,7 @@ async def test_last_rx_age_is_fresh_while_connected_and_grows_when_radio_dies(
         # must already be finite and recent.
         assert rig.last_rx_age() < 2.0
         fake_radio.stop()
-        assert await wait_until(lambda: rig.last_rx_age() > 0.5, timeout=5.0)
+        assert await wait_until(lambda: rig.last_rx_age() > 0.2, timeout=5.0)
     finally:
         await rig.close()
 

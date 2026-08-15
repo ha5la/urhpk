@@ -43,7 +43,7 @@ pythonpath = ["."]
 addopts = "-m 'not smoke'"
 markers = ["smoke: drives a real process end to end; opt in with -m smoke"]
 # Anything slower than this is a hang or a guessed sleep -- the slowest honest
-# test measures an age growing over time and takes 1.12s.
+# test measures an age growing over time and takes 0.71s.
 timeout = 5
 timeout_method = "signal"
 
