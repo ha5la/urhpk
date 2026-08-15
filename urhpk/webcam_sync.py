@@ -1,14 +1,22 @@
 """Lining the webcam up with the radio audio.
 
-The webcam is the one stream with no trustworthy clock of its own. Three
-sources are tried in descending order of precision -- the µs-precise stamp
-the logger renames the file with, the logged webcam_start event, and a phone
-clip's own coarse filename convention -- and whatever they give is then refined
-by cross-correlating the webcam's audio against the radio's, segment by segment.
+Where the webcam *starts* depends on how it was recorded: an Alt+V capture is
+renamed with a µs-precise stamp off this machine's own clock and needs nothing
+further, while an independently recorded clip has only its own coarse filename
+convention. Three sources are tried in descending order of precision -- that
+stamp, the logged webcam_start event, and the phone convention.
 
-The refinement fits a line, not a constant: a phone recording for two hours
-drifts, and a single offset that is right at the start is visibly wrong by
-the end.
+The *rate* is a separate problem, and reaches the exact starts too: the capture
+is timestamped by the laptop's clock and compared against the radio's sample
+clock, which is a different crystal. So the start is refined by cross-
+correlating the webcam's audio against the radio's, segment by segment, and the
+refinement fits a line rather than a constant -- an offset that is right at the
+start is visibly wrong two hours later.
+
+How much rate is really left is unmeasured on a well-disciplined clock: the
++2.487 s/hour fitted on the August round was measured with systemd-timesyncd
+restarted by hand shortly before it and no chrony, so an unknown part of that
+was the laptop still slewing rather than the two crystals disagreeing.
 """
 
 from __future__ import annotations
