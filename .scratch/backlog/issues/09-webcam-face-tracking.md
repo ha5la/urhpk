@@ -1,6 +1,6 @@
 # 09 — Frame the webcam PiP on the face
 
-Status: ready-for-agent
+Status: resolved
 
 The webcam PiP is centred on a fixed crop, which is wrong for a capture the
 operator cannot see while it happens. Derive the crop from where the face
@@ -117,3 +117,12 @@ did fit a +2.487 s/hour drift over 16 anchors, but that round ran with
 the laptop clock was probably still slewing — the rate is not evidence of an
 intrinsic two-clock mismatch. Worth re-measuring on the next round, now that
 chrony disciplines the laptop and the radio runs NTP. Not this ticket's work.
+
+Implemented in 0a52037 (the module and its geometry) and 5e8d922 (the wiring
+and the docs). The acceptance measurement, on the rendered PiP rather than on
+the scan: median 18.5 px, p95 57.1 px against the criterion's 25 and 65; the
+centred crop measures 48.9 and 93.0 on the same footage.
+
+One thing deliberately left alone: a `--cut` preview scans whatever clip
+survives the cut in full, so a 20-minute preview still pays the whole clip's
+~7 minutes. Worth a `-t` on the scan's ffmpeg if previews start to feel slow.
