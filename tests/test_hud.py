@@ -352,10 +352,10 @@ def _cw_segs():
     ]  # fmt: skip
 
 
-def _ticker_at(t, segs, state_events=None, long_cw_spans=None):
+def _ticker_at(t, segs, state_events=None, cw_spans=None):
     tl = hud.HudTimeline(
         segs=segs,
-        stream=hud.ticker_stream(hud.ticker_chunks(segs, state_events, long_cw_spans)),
+        stream=hud.ticker_stream(hud.ticker_chunks(segs, state_events, cw_spans)),
     )
     return "".join(ch for _, ch in tl.at(t).ticker)
 

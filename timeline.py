@@ -90,25 +90,25 @@ def read_wav_metadata(segs: list[Segment]) -> None:
 GAP_KEEP_S = 3.0  # seconds kept from each silent gap when --skip-gaps is used
 
 
-def remap_audio_t(segs: list[Segment], long_cw_segs: set[int] | None = None) -> None:
+def remap_audio_t(segs: list[Segment], cw_span_segs: set[int] | None = None) -> None:
     """Shorten gap segments to GAP_KEEP_S and recompute audio_t for all segments.
 
     A gap segment is one with no trusted decoded events and a duration longer
     than MAX_OVER_S — i.e. a listening / calling-CQ stretch between QSOs.
     Call this *after* gate_events has been applied to s.events.
 
-    `long_cw_segs` (a set of `id(seg)`, from the segments decode_long_segment
+    `cw_span_segs` (a set of `id(seg)`, from the segments decode_cw_subranges
     recovered content from) marks segments that are long for this reason but
     still carry real recovered CW content -- these must not be trimmed to
     GAP_KEEP_S, or concat_audio's outpoint would cut the very audio just
     decoded out of the rendered output entirely, even though the ticker
     still expects to show its text.
     """
-    long_cw_segs = long_cw_segs or set()
+    cw_span_segs = cw_span_segs or set()
     t = 0.0
     for s in segs:
         s.audio_t = t
-        if not s.events and s.dur > MAX_OVER_S and id(s) not in long_cw_segs:
+        if not s.events and s.dur > MAX_OVER_S and id(s) not in cw_span_segs:
             s.eff_dur = GAP_KEEP_S
         t += _eff(s)
 

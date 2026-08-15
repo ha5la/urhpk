@@ -202,7 +202,7 @@ def refine_webcam_start(
     across a real ~2-hour round showed the correction growing smoothly
     from ~0s near the start to ~+3.2s near the end -- not a frame-rate or
     rendering bug (that was checked and fixed separately; see
-    decode_long_segment's neighbour docstrings), and not something a single
+    decode_cw_subranges's neighbour docstrings), and not something a single
     constant offset (the first version of this function) can correct.
 
     Anchors are `s.ptt` (TX) segments at least 1.5s long, sampled evenly

@@ -31,13 +31,13 @@ def _mode_at(t: float, state_events: list[tuple[float, float, SegState]]) -> str
 def ticker_chunks(
     segs: list[Segment],
     state_events: list[tuple[float, float, SegState]] | None,
-    long_cw_spans: list[tuple[float, float, list[CharEvent]]] | None,
+    cw_spans: list[tuple[float, float, list[CharEvent]]] | None,
 ) -> list[tuple[float, float, list[CharEvent]]]:
     """Trusted CW content as one chronological list of (start, end, events).
 
     Two sources merge here: segments decoded whole (dur <= MAX_OVER_S, one
     chunk each), and telemetry-confirmed CW sub-ranges recovered from an
-    otherwise-too-long segment we only listened to (see decode_long_segment)
+    otherwise-too-long segment we only listened to (see decode_cw_subranges)
     -- possibly several per segment, since we may have followed more than one
     on-air exchange without ever transmitting ourselves. Segments telemetry
     confirms were *not* CW are skipped outright: the decoder runs blind on
@@ -50,7 +50,7 @@ def ticker_chunks(
         mode = _mode_at(s.audio_t, state_events) if state_events is not None else None
         if s.events and (mode is None or mode == "CW"):
             chunks.append((s.audio_t, s.audio_t + _eff(s), s.events))
-    chunks.extend(long_cw_spans or [])
+    chunks.extend(cw_spans or [])
     chunks.sort(key=lambda c: c[0])
     return chunks
 
@@ -508,7 +508,7 @@ def build_hud_timeline(
     offset_h: int,
     state_events: list[tuple[float, float, SegState]] | None = None,
     scope_records: list[tuple[float, int, int, bytes]] | None = None,
-    long_cw_spans: list[tuple[float, float, list[CharEvent]]] | None = None,
+    cw_spans: list[tuple[float, float, list[CharEvent]]] | None = None,
     telemetry: list[TelemetrySample] | None = None,
 ) -> HudTimeline:
     return HudTimeline(
@@ -520,5 +520,5 @@ def build_hud_timeline(
         az_marks=hud_az_marks(telemetry or [], segs, offset_h),
         s_marks=hud_s_marks(scope_records or [], segs, offset_h),
         meter_marks=hud_meter_marks(telemetry or [], segs, offset_h),
-        stream=ticker_stream(ticker_chunks(segs, state_events, long_cw_spans)),
+        stream=ticker_stream(ticker_chunks(segs, state_events, cw_spans)),
     )

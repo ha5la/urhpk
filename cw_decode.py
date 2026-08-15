@@ -133,7 +133,7 @@ def gate_events(
 
     check_duration=False skips the MAX_OVER_S check -- for telemetry-
     confirmed CW sub-ranges extracted from an otherwise-too-long segment
-    (see decode_long_segment), where the duration gate's usual purpose --
+    (see decode_cw_subranges), where the duration gate's usual purpose --
     rejecting a segment whose unexplained length makes it suspicious --
     doesn't apply: telemetry mode confirmation is already stronger evidence
     than length that this specific span is genuine CW, not noise."""
@@ -284,7 +284,7 @@ def _decode_samples(
 ) -> tuple[list[CharEvent], float]:
     """Decode a raw sample buffer into timed characters and its SNR in dB --
     the actual demod/hysteresis/debounce/decode pipeline, factored out of
-    decode_segment so decode_long_segment (see below) can run the same
+    decode_segment so decode_cw_subranges (see below) can run the same
     pipeline on an extracted sub-range of a WAV file instead of always the
     whole thing.
 
@@ -365,7 +365,7 @@ def decode_segment(path: str, pitch: float = 600.0) -> tuple[list[CharEvent], fl
         # quality -- skip the expensive filtering/thresholding pipeline over
         # what can be several minutes of "listening" audio. The one
         # exception is a telemetry-confirmed CW sub-range *within* such a
-        # segment, which decode_long_segment (below) handles separately by
+        # segment, which decode_cw_subranges (below) handles separately by
         # extracting and decoding just that sub-range.
         w.close()
         return [], 0.0
@@ -381,10 +381,10 @@ def cw_subranges(
     expressed as (start, end) offsets in seconds relative to the segment's
     own start (0..seg.dur) -- deliberately not absolute video-timeline
     seconds, so the result stays valid even if audio_t is later remapped
-    (see decode_long_segment and remap_audio_t's long_cw_segs parameter).
+    (see decode_cw_subranges and remap_audio_t's cw_span_segs parameter).
 
     Only meaningful for a segment too long to decode as a whole (see
-    decode_long_segment): our own recorder only splits a new WAV file on
+    decode_cw_subranges): our own recorder only splits a new WAV file on
     our own PTT, so a segment where we just listened to someone else's
     entire exchange -- possibly spanning several of their own mode changes
     -- stays one long file. state_events (from build_state_events) already
@@ -402,7 +402,7 @@ def cw_subranges(
     return out
 
 
-def decode_long_segment(
+def decode_cw_subranges(
     seg: Segment,
     state_events: list[tuple[float, float, SegState]],
     pitch: float = 600.0,

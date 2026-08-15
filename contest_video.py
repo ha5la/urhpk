@@ -42,7 +42,7 @@ from chapters import build_chapters, build_srt
 from cw_decode import (
     MAX_OVER_S,
     CharEvent,
-    decode_long_segment,
+    decode_cw_subranges,
     decode_segment,
     gate_events,
 )
@@ -767,33 +767,31 @@ def main() -> None:
     # Segments longer than MAX_OVER_S are never decoded as a whole (see
     # decode_segment) -- but one can still contain a real CW exchange
     # between *other* stations that we only listened to, with no PTT of
-    # our own to split the file on. decode_long_segment recovers those
+    # our own to split the file on. decode_cw_subranges recovers those
     # from state_events' telemetry-confirmed CW sub-ranges. Offsets are
     # kept segment-relative (t0, t1) rather than resolved to absolute
     # video-timeline time here, so they stay valid even if remap_audio_t
     # (below, --skip-gaps) later shifts audio_t.
-    long_cw_raw: list[tuple[Segment, float, float, list[CharEvent]]] = []
+    cw_raw: list[tuple[Segment, float, float, list[CharEvent]]] = []
     for s in segs:
         if s.dur > MAX_OVER_S:
-            for t0, t1, events in decode_long_segment(s, state_events, args.pitch):
-                long_cw_raw.append((s, t0, t1, events))
+            for t0, t1, events in decode_cw_subranges(s, state_events, args.pitch):
+                cw_raw.append((s, t0, t1, events))
             continue
         events, snr = decode_segment(s.path, args.pitch)
         s.events = gate_events(s.dur, events, snr)
-    decoded = sum(len(s.events) for s in segs) + sum(
-        len(ev) for _, _, _, ev in long_cw_raw
-    )
-    trusted_overs = sum(1 for s in segs if s.events) + len(long_cw_raw)
+    decoded = sum(len(s.events) for s in segs) + sum(len(ev) for _, _, _, ev in cw_raw)
+    trusted_overs = sum(1 for s in segs if s.events) + len(cw_raw)
     print(f"  {decoded} characters from {trusted_overs} trusted overs")
-    if long_cw_raw:
+    if cw_raw:
         print(
-            f"  including {len(long_cw_raw)} CW exchange(s) recovered from "
+            f"  including {len(cw_raw)} CW exchange(s) recovered from "
             f"otherwise-too-long listening segments"
         )
 
     if args.skip_gaps:
-        long_cw_segs = {id(s) for s, _, _, _ in long_cw_raw}
-        remap_audio_t(segs, long_cw_segs)
+        cw_span_segs = {id(s) for s, _, _, _ in cw_raw}
+        remap_audio_t(segs, cw_span_segs)
         total = segs[-1].audio_t + _eff(segs[-1])
         print(
             f"  skip-gaps: {total:.0f}s video (was {segs[-1].audio_t + segs[-1].dur:.0f}s)"
@@ -825,9 +823,8 @@ def main() -> None:
 
     # Resolved to absolute video-timeline time only now, using each
     # segment's final audio_t (post-remap, if --skip-gaps was used).
-    long_cw_spans = [
-        (seg.audio_t + t0, seg.audio_t + t1, events)
-        for seg, t0, t1, events in long_cw_raw
+    cw_spans = [
+        (seg.audio_t + t0, seg.audio_t + t1, events) for seg, t0, t1, events in cw_raw
     ]
 
     # Only feeds qso_windows()'s exact chapter/caption timing now -- the
@@ -854,7 +851,7 @@ def main() -> None:
             offset_h,
             state_events=state_events,
             scope_records=scope_records,
-            long_cw_spans=long_cw_spans,
+            cw_spans=cw_spans,
             telemetry=telemetry,
         )
         state = timeline.at(args.hud_preview_t)
@@ -900,7 +897,7 @@ def main() -> None:
             offset_h,
             state_events=state_events,
             scope_records=scope_records,
-            long_cw_spans=long_cw_spans,
+            cw_spans=cw_spans,
             telemetry=telemetry,
         ),
         hud_video,

@@ -82,7 +82,7 @@ single PNG in about a second.
   regardless of decode quality.
 - **A segment we only listened to can still hide CW between *other* stations**
   if it runs past `MAX_OVER_S` (e.g. we followed someone else's whole
-  exchange without ever transmitting). `decode_long_segment`/`cw_subranges`
+  exchange without ever transmitting). `decode_cw_subranges`/`cw_subranges`
   recover this: they find telemetry-confirmed CW-mode sub-ranges inside the
   long segment and decode just those, without the duration gate (the
   sub-range's own length isn't suspicious the way an unexplained long

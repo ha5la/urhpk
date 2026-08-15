@@ -16,7 +16,7 @@ from cw_decode import (
     _dominance,
     _quality,
     cw_subranges,
-    decode_long_segment,
+    decode_cw_subranges,
     decode_segment,
     gate_events,
 )
@@ -361,7 +361,7 @@ class TestGate:
 
 
 class TestLongSegmentCwRecovery:
-    """decode_long_segment recovers CW content from a segment too long to
+    """decode_cw_subranges recovers CW content from a segment too long to
     decode as a whole (see MAX_OVER_S) -- e.g. two other stations
     negotiating a CW frequency over voice, working each other in CW, then
     moving on, all while we just listened without ever transmitting
@@ -390,13 +390,13 @@ class TestLongSegmentCwRecovery:
         # seg spans [1000, 1300); results are relative to seg.audio_t (1000)
         assert cw_subranges(seg, state_events) == [(10.0, 80.0), (200.0, 300.0)]
 
-    def test_decode_long_segment_recovers_cw_from_a_too_long_segment(self, tmp_path):
+    def test_decode_cw_subranges_recovers_cw_from_a_too_long_segment(self, tmp_path):
         # Regression test for a real reported case: two other stations
         # negotiate a CW frequency over voice, work each other in CW, then
         # move on -- all while we just listened, so our own recorder never
         # split the file and the whole thing became one segment far longer
         # than MAX_OVER_S. decode_segment alone never even attempts to
-        # decode any of it; decode_long_segment recovers the CW portion
+        # decode any of it; decode_cw_subranges recovers the CW portion
         # using telemetry's own confirmation of exactly when our radio was
         # tuned to their frequency in CW mode.
         p = str(tmp_path / "20260706_163045A.wav")
@@ -412,13 +412,13 @@ class TestLongSegmentCwRecovery:
         assert events == [] and snr == 0.0
 
         state_events = [(cw_start, cw_end, SegState(mode="CW"))]
-        spans = decode_long_segment(seg, state_events, PITCH)
+        spans = decode_cw_subranges(seg, state_events, PITCH)
         assert len(spans) == 1
         t0, t1, events = spans[0]
         assert abs(t0 - cw_start) < 0.01
         assert "".join(e.ch for e in events).strip() == text
 
-    def test_decode_long_segment_ignores_non_cw_subranges(self, tmp_path):
+    def test_decode_cw_subranges_ignores_non_cw_subranges(self, tmp_path):
         p = str(tmp_path / "20260706_163045A.wav")
         total_dur = MAX_OVER_S * 3
         _write_long_wav_with_cw_window(p, total_dur, MAX_OVER_S * 1.2, "HG7F")
@@ -426,16 +426,16 @@ class TestLongSegmentCwRecovery:
         # same audio, but telemetry says this whole span was SSB, not CW --
         # nothing should be extracted or decoded
         state_events = [(0.0, total_dur, SegState(mode="SSB"))]
-        assert decode_long_segment(seg, state_events, PITCH) == []
+        assert decode_cw_subranges(seg, state_events, PITCH) == []
 
     def test_remap_audio_t_preserves_a_long_segment_with_recovered_cw(self):
         # Without the exemption, --skip-gaps' outpoint trimming in
-        # concat_audio would cut the very audio decode_long_segment just
+        # concat_audio would cut the very audio decode_cw_subranges just
         # recovered text from out of the rendered output entirely.
         long_seg = Segment(
             "long.wav", datetime(2026, 7, 4, 13, 0, 0), MAX_OVER_S + 50, 0.0
         )
-        remap_audio_t([long_seg], long_cw_segs={id(long_seg)})
+        remap_audio_t([long_seg], cw_span_segs={id(long_seg)})
         assert long_seg.eff_dur is None
 
         other = Segment(

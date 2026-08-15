@@ -363,13 +363,13 @@ intermediate wav.
   since `gate_events` would reject it on duration alone — that alone roughly halved
   decode time. The pitch is auto-detected per segment; `--pitch` is only a fallback
   for when nothing is found at all.
-- **`decode_long_segment` recovers CW hidden inside a long segment** — our recorder
+- **`decode_cw_subranges` recovers CW hidden inside a long segment** — our recorder
   only splits on *our* PTT, so listening to two other stations work each other stays
   one long file. It decodes the telemetry-confirmed CW sub-ranges within it, with
   the duration gate disabled (`check_duration=False`): mode confirmation is stronger
   evidence than length, and a two-way exchange between others can legitimately run
   longer than one of our overs. Its output is kept **out** of `s.events`, so
-  `--skip-gaps` needs an explicit `long_cw_segs` exemption or `remap_audio_t` would
+  `--skip-gaps` needs an explicit `cw_span_segs` exemption or `remap_audio_t` would
   trim away the very audio just recovered.
 - **`--duration SECONDS` trims before the decode loop**, not after — decoding is the
   dominant cost, so a 10-minute preview of a 2-hour round decodes ~12× less audio.

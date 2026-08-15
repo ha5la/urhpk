@@ -75,7 +75,7 @@ def read_wav_title(path: str) -> str | None:
 def read_wav_range(path: str, t0: float, t1: float) -> tuple[np.ndarray, int]:
     """Read samples in [t0, t1) seconds from a WAV file without loading the
     whole file -- for extracting one sub-range out of a long segment (see
-    cw_decode.decode_long_segment). t0/t1 are clamped to the file's own bounds."""
+    cw_decode.decode_cw_subranges). t0/t1 are clamped to the file's own bounds."""
     w = wave.open(path)
     sr = w.getframerate()
     n_frames = w.getnframes()
