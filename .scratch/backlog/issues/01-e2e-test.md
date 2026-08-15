@@ -1,6 +1,6 @@
 # 01 — End-to-end test
 
-Status: ready-for-agent
+Status: resolved
 
 Manually simulate a round, collect all the data it produces, render a video,
 check the result. Wanted specifically **in the window between the structure
@@ -45,17 +45,11 @@ absent.
 
 Both are `-m smoke`, 9 s together, deselected from the default run.
 
-## What is left
+## What this does not cover
 
-**The differential render — `git worktree` + `md5sum`.** Rendering the same
-3-minute cut of the August round from a pre-refactor worktree and from the
-working tree produced a byte-identical MP4: no frame comparison, no tolerance,
-no fixtures to maintain. It only answers "did this change move the output",
-which is exactly the question a refactor asks and exactly the wrong question
-while the render is being changed on purpose. Deferred until the render settles.
+Whether the picture is *right*. No assertion here can judge that, and the
+pre-round manual run keeps the job permanently.
 
-Measured cost, for whenever that is: a full 720p render of `test/` with every
-side input is 5m42s on four cores, ~14 min at 1080p.
-
-Nothing here judges whether the picture is *right*. That stays with the manual
-run before the round.
+Whether the rendered video *moved*. The differential render that would answer it
+is **18**, split out rather than kept open here: it can only run when the render
+is meant to be unchanged, and the render is about to be changed on purpose.

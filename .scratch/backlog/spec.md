@@ -15,6 +15,10 @@ The `structure/` effort (compressing the project) is tracked separately and is
 finished; 17 is the piece of it that outlived it, deliberately deferred behind
 01.
 
+18 is the half of 01 that could not be built yet, and it is last on purpose:
+it compares a render against the previous build, so it is only meaningful once
+the render has stopped changing on purpose.
+
 | # | Ticket | Kind |
 |---|---|---|
 | 01 | `e2e-test` | verification |
@@ -34,3 +38,4 @@ finished; 17 is the piece of it that outlived it, deliberately deferred behind
 | 15 | `thread-map` | structure |
 | 16 | `logger-on-one-event-loop` | structure |
 | 17 | `library-package` | structure |
+| 18 | `differential-render` | verification |
