@@ -81,7 +81,7 @@ RADIO_CONNECT_TIMEOUT_S = 5.0
 RADIO_STALE_S = 5.0  # no CI-V-socket traffic for this long = session dead
 RADIO_RECONNECT_S = 15.0  # quiet time the radio needs before accepting a new session
 
-# Every dist_km and the EDI's PWWLo come from this, so the startup screen prints
+# Every QSO's points and the EDI's PWWLo come from this, so the startup screen prints
 # it: a round from another QTH has to be noticed before the first QSO.
 MY_LOCATOR = "JN97TF"
 START_BAND, START_MODE = "2M", "SSB"
@@ -1275,7 +1275,7 @@ async def run(lb: LogBook, tname: str):
                     rst_r=parsed["rst_r"],
                     nr_r=parsed["nr_r"],
                     loc=loc,
-                    dist_km=lb.dist(loc),
+                    points=lb.dist(loc),
                 )
                 lb.worked = {(q.callsign, q.band, q.mode) for q in lb.qsos}
                 _cache_loc(parsed["callsign"], loc)
@@ -1292,7 +1292,7 @@ async def run(lb: LogBook, tname: str):
         rst_s = rst_def
         rst_r = parsed["rst_r"]
         nr_s = lb.next_nr(band)
-        dist_km = lb.dist(loc)
+        points = lb.dist(loc)
 
         now = datetime.now(timezone.utc)
         qso = QSO(
@@ -1305,7 +1305,7 @@ async def run(lb: LogBook, tname: str):
             rst_r=rst_r,
             nr_r=nr_r,
             loc=loc,
-            dist_km=dist_km,
+            points=points,
         )
 
         dup = lb.add(qso)

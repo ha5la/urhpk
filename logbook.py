@@ -33,7 +33,7 @@ class QSO:
     rst_r: str
     nr_r: int
     loc: str
-    dist_km: int
+    points: int
 
 
 class LogBook:
@@ -139,7 +139,7 @@ def write_edi(lb: LogBook, band: str, tname: str, out_dir: Path) -> Path | None:
     date_long = qsos[0].dt.strftime("%Y%m%d")
     date_6 = qsos[0].dt.strftime("%y%m%d")
     valid_qsos = [q for q in qsos if not _is_dup_in_log(qsos, q)]
-    valid_pts = sum(q.dist_km for q in valid_qsos)
+    valid_pts = sum(q.points for q in valid_qsos)
     unique_locs = len({q.loc for q in valid_qsos if q.loc})
 
     hdr = [
@@ -194,7 +194,7 @@ def write_edi(lb: LogBook, band: str, tname: str, out_dir: Path) -> Path | None:
             f"{date_6};{q.dt.strftime('%H%M')};{q.callsign};"
             f"{edi.CODE_BY_MODE.get(q.mode, '1')};"
             f"{q.rst_s};{q.nr_s:03d};{q.rst_r};{q.nr_r:03d};;"
-            f"{q.loc};{0 if dup else q.dist_km};;;{'D' if dup else ''};"
+            f"{q.loc};{0 if dup else q.points};;;{'D' if dup else ''};"
         )
 
     path = out_dir / f"{date_6}-{lb.my_callsign}-{band}.edi"
@@ -266,7 +266,7 @@ def load_from_edi(
                     rst_r=r.rst_r,
                     nr_r=nr_r,
                     loc=loc,
-                    dist_km=r.points or lb.dist(loc),
+                    points=r.points or lb.dist(loc),
                 )
             )
 
@@ -281,6 +281,6 @@ def band_summary(lb: LogBook) -> str:
         if not qsos:
             continue
         valid = [q for q in qsos if not _is_dup_in_log(qsos, q)]
-        pts = sum(q.dist_km for q in valid)
+        pts = sum(q.points for q in valid)
         parts.append(f"{b}:{len(qsos)}q/{pts}pt")
     return "  ".join(parts) or "no QSOs yet"

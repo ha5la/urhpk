@@ -72,7 +72,7 @@ def _qso(
     rst_s="59",
     rst_r="59",
     loc="JN97WM",
-    dist_km=38,
+    points=38,
     h=16,
     m=0,
     dt=None,
@@ -87,7 +87,7 @@ def _qso(
         rst_r=rst_r,
         nr_r=nr_r,
         loc=loc,
-        dist_km=dist_km,
+        points=points,
     )
 
 
@@ -340,9 +340,7 @@ class TestWriteEdi:
 
     def test_writes_file(self, tmp_path):
         lb = LogBook("HA5LA", "JN97TF", {})
-        lb.add(
-            _qso(callsign="HA7NS", band="2M", mode="SSB", nr_s=1, nr_r=1, dist_km=38)
-        )
+        lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB", nr_s=1, nr_r=1, points=38))
         p = write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path)
         assert p is not None and p.exists()
 
@@ -354,7 +352,7 @@ class TestWriteEdi:
 
     def test_header_fields(self, tmp_path):
         lb = LogBook("HA5LA", "JN97TF", {})
-        lb.add(_qso(band="2M", nr_s=1, nr_r=1, dist_km=38))
+        lb.add(_qso(band="2M", nr_s=1, nr_r=1, points=38))
         txt = write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path).read_text()
         assert "TName=PUSKAS2026MAJUS" in txt
         assert "PCall=HA5LA" in txt
@@ -373,7 +371,7 @@ class TestWriteEdi:
                 rst_s="59",
                 rst_r="59",
                 loc="JN97WM",
-                dist_km=38,
+                points=38,
             )
         )
         txt = write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path).read_text()
@@ -403,11 +401,9 @@ class TestWriteEdi:
 
     def test_dup_excluded_from_score(self, tmp_path):
         lb = LogBook("HA5LA", "JN97TF", {})
-        lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB", nr_s=1, dist_km=38, h=16))
-        lb.add(
-            _qso(callsign="HA3KHB", band="2M", mode="SSB", nr_s=2, dist_km=168, h=17)
-        )
-        lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB", nr_s=3, dist_km=38, h=18))
+        lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB", nr_s=1, points=38, h=16))
+        lb.add(_qso(callsign="HA3KHB", band="2M", mode="SSB", nr_s=2, points=168, h=17))
+        lb.add(_qso(callsign="HA7NS", band="2M", mode="SSB", nr_s=3, points=38, h=18))
         txt = write_edi(lb, "2M", "PUSKAS2026MAJUS", tmp_path).read_text()
         assert "CQSOP=206" in txt  # 38 + 168; dup not counted
 
@@ -446,7 +442,7 @@ class TestLoadFromEdi:
                 mode="SSB",
                 nr_s=1,
                 nr_r=1,
-                dist_km=38,
+                points=38,
                 h=16,
                 m=1,
             )
@@ -458,7 +454,7 @@ class TestLoadFromEdi:
                 mode="CW",
                 nr_s=2,
                 nr_r=14,
-                dist_km=168,
+                points=168,
                 h=16,
                 m=59,
                 rst_s="599",
@@ -472,7 +468,7 @@ class TestLoadFromEdi:
                 mode="SSB",
                 nr_s=3,
                 nr_r=2,
-                dist_km=38,
+                points=38,
                 h=17,
                 m=5,
             )
@@ -599,7 +595,7 @@ class TestQsoEdit:
             rst_r=parsed["rst_r"],
             nr_r=parsed["nr_r"],
             loc=loc,
-            dist_km=lb.dist(loc),
+            points=lb.dist(loc),
         )
         lb.worked = {(q.callsign, q.band, q.mode) for q in lb.qsos}
 
@@ -674,20 +670,20 @@ class TestBandSummary:
 
     def test_single_band(self):
         lb = LogBook("HA5LA", "JN97TF", {})
-        lb.add(_qso(band="2M", dist_km=100, nr_s=1, h=16))
+        lb.add(_qso(band="2M", points=100, nr_s=1, h=16))
         assert band_summary(lb) == "2M:1q/100pt"
 
     def test_dups_excluded_from_pts(self):
         lb = LogBook("HA5LA", "JN97TF", {})
-        lb.add(_qso(callsign="HA7NS", band="2M", dist_km=100, nr_s=1, h=16))
-        lb.add(_qso(callsign="HA7NS", band="2M", dist_km=100, nr_s=2, h=17))  # dup
+        lb.add(_qso(callsign="HA7NS", band="2M", points=100, nr_s=1, h=16))
+        lb.add(_qso(callsign="HA7NS", band="2M", points=100, nr_s=2, h=17))  # dup
         assert band_summary(lb) == "2M:2q/100pt"
 
     def test_three_bands(self):
         lb = LogBook("HA5LA", "JN97TF", {})
-        lb.add(_qso(band="2M", dist_km=100, nr_s=1, h=16))
-        lb.add(_qso(band="70CM", dist_km=200, nr_s=1, h=17))
-        lb.add(_qso(band="23CM", dist_km=50, nr_s=1, h=18))
+        lb.add(_qso(band="2M", points=100, nr_s=1, h=16))
+        lb.add(_qso(band="70CM", points=200, nr_s=1, h=17))
+        lb.add(_qso(band="23CM", points=50, nr_s=1, h=18))
         s = band_summary(lb)
         assert "2M:1q/100pt" in s
         assert "70CM:1q/200pt" in s
@@ -698,7 +694,7 @@ class TestBandSummary:
         for i, (band, km) in enumerate(
             [("2M", 9999), ("70CM", 9999), ("23CM", 9999)], 1
         ):
-            lb.add(_qso(band=band, dist_km=km, nr_s=i, h=16 + i))
+            lb.add(_qso(band=band, points=km, nr_s=i, h=16 + i))
         prefix = " PUSKÁS LOGGER  │  "
         full = prefix + band_summary(lb)
         assert len(full) <= 64
@@ -713,9 +709,7 @@ class TestPrintRecent:
     def _lb(self):
         lb = LogBook("HA5LA", "JN97TF", {})
         for i in range(10):
-            lb.add(
-                _qso(callsign=f"HA{i}AA", nr_s=i + 1, h=14, m=i * 5, dist_km=100 + i)
-            )
+            lb.add(_qso(callsign=f"HA{i}AA", nr_s=i + 1, h=14, m=i * 5, points=100 + i))
         return lb
 
     def _lines(self, lb, **kwargs):
@@ -769,9 +763,7 @@ class TestPrintRecent:
     def test_bearing_column_always_shown(self):
         lb = LogBook("HA5LA", "JN97TF", {})
         lb.add(
-            _qso(
-                callsign="HA7NS", nr_s=1, h=14, loc="JN97WM", dist_km=lb.dist("JN97WM")
-            )
+            _qso(callsign="HA7NS", nr_s=1, h=14, loc="JN97WM", points=lb.dist("JN97WM"))
         )
         lines = self._lines(lb, n=4)
         qso_line = next(line for line in lines if "HA7NS" in line)
@@ -784,9 +776,7 @@ class TestPrintRecent:
     def test_tx_rx_arrows_in_log_line(self):
         lb = LogBook("HA5LA", "JN97TF", {})
         lb.add(
-            _qso(
-                callsign="HA7NS", nr_s=1, h=14, loc="JN97WM", dist_km=lb.dist("JN97WM")
-            )
+            _qso(callsign="HA7NS", nr_s=1, h=14, loc="JN97WM", points=lb.dist("JN97WM"))
         )
         lines = self._lines(lb, n=4)
         qso_line = next(line for line in lines if "HA7NS" in line)
@@ -2261,7 +2251,7 @@ async def test_radio_stop_closes_and_clears_the_session(fake_radio_session):
 
 def test_the_station_constants_are_values_the_round_can_use():
     # Nothing checks these at runtime any more: the operator is not asked for
-    # them. A bad locator would miscompute every dist_km and the EDI's PWWLo,
+    # them. A bad locator would miscompute every points and the EDI's PWWLo,
     # and a band or mode outside the tuples would restart Alt+B/M cycling from
     # the first entry instead of the next one.
     assert is_locator(pl.MY_LOCATOR)
