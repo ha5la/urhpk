@@ -39,11 +39,11 @@ in `main()` that 584 unit tests did not, because nothing in the suite ever calls
 SSB and CW, and compares the chapters and captions against the manual run's own
 output. Cast, scope, telemetry and input log are all passed — none can move a
 caption, but a reader that no longer parses a real recording is a regression
-nothing else would catch. Webcams are left out: their audio cross-correlation is
-the slow part and cannot affect the oracle. ~1 s per run; skips when `test/` is
-absent.
+nothing else would catch. Both webcam clips too: `sync_webcams` runs before
+`--no-video` returns, so where each capture lands is printed and asserted for
+~1.5 s. ~2.7 s per run; skips when `test/` is absent.
 
-Both are `-m smoke`, 9 s together, deselected from the default run.
+Both are `-m smoke`, 9 tests and ~9 s together, deselected from the default run.
 
 ## What this does not cover
 

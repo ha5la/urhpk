@@ -30,10 +30,13 @@ four cores, ~14 min at 1080p. Doubled, since it renders twice.
 
 ## What it would also unlock
 
-`tests/test_render_smoke.py` deliberately leaves `--webcam` out — the audio
-cross-correlation is the slow part and cannot move a caption, so it buys nothing
-against a text oracle. Against a byte oracle it does, and webcam placement is
-currently checked by nothing but the operator's eyes.
+`tests/test_render_smoke.py` now passes both webcam clips and asserts where they
+land, which turned out to cost ~1.5 s and need nothing from this ticket —
+`sync_webcams` runs before `--no-video` returns. What it cannot reach is the
+*drift fit*: `test/` is 169 s with no TX segment long enough to correlate
+against, so the fixture only exercises the honest-no-match branch. Fitting a real
+rate needs a long round, and checking that the fitted rate was applied to the
+picture correctly needs a byte oracle — this ticket.
 
 ## Caveats to settle when it is built
 
