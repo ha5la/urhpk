@@ -355,6 +355,12 @@ chronological order**, never by minute — a hand-edited seed log is expected to
 timestamps across minute boundaries). Each rule here fixed a specific reported bug;
 RECORDING.md has the cases, and the regression tests name them.
 
+A timing change is verified from `<out>.chapters.txt` and `<out>.srt`, not from a
+render: `main()` writes both from `qso_windows()` right after CW decode, seconds in
+and well before `concat_audio` and the ffmpeg pass. Anything touching `qso_windows`,
+`build_state_events` or `match_qso_times` shows up there. Render only for what text
+cannot show — layout, PiP, waterfall.
+
 ### ffmpeg composition — where the real bugs live
 
 - **An input's index is taken at the moment it is appended** (`add_input`), never
@@ -694,6 +700,13 @@ These requirements must be preserved across all future changes:
   `time.monotonic() + 2.0` and the toolbar flashes a yellow `rig online — Alt+B/M ignored`
   message until it expires. The rig is always the primary source; `_rig_manual` is only
   consulted by `current_rig()` when `_rig["online"]` is False.
+- **Alt shortcuts are Alt+letter, never Alt+function-key**: `kb.add("escape", "<letter>")`
+  is unambiguous on the wire — a bare ESC followed by one printable byte, which
+  prompt_toolkit resolves against the single `"escape"` binding. A function key already
+  sends its own ESC-prefixed sequence (F3 is often `ESC O R`), so Alt+F3 arrives as a
+  nested double-ESC that parses ambiguously: an `escape, "f3"` CW-macro binding corrupted
+  the terminal screen mid-round — everything but the input line vanished, and only a
+  restart brought it back. New shortcuts follow the Alt+B/M/R/S/V mnemonic pattern.
 - **Bearing arrows**: every bearing value (in the QSO list and in the rprompt) is followed
   by a Unicode direction arrow from `_BEARING_ARROWS = "↑↗→↘↓↙←↖"`, selected by octant.
   `_bearing_arrow(degrees)` must exist in `puskas_logger` — it was once missing and the
