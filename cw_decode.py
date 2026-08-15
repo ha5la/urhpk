@@ -440,3 +440,30 @@ def decode_cw_subranges(
         if events:
             out.append((t0, t1, events))
     return out
+
+
+def decode_round(
+    segs: list[Segment],
+    state_events: list[tuple[float, float, SegState]],
+    pitch: float = 600.0,
+) -> list[tuple[Segment, float, float, list[CharEvent]]]:
+    """Decode every segment of a round, populating each one's `.events` and
+    returning the sub-ranges recovered from the segments too long to decode
+    as a whole.
+
+    Segments longer than MAX_OVER_S are never decoded as a whole (see
+    decode_segment) -- but one can still contain a real CW exchange between
+    *other* stations that we only listened to, with no PTT of our own to
+    split the file on. decode_cw_subranges recovers those from state_events'
+    telemetry-confirmed CW sub-ranges. Offsets stay segment-relative (t0, t1)
+    rather than resolved to absolute video-timeline time here, so they stay
+    valid even if remap_audio_t (--skip-gaps) later shifts audio_t."""
+    out: list[tuple[Segment, float, float, list[CharEvent]]] = []
+    for s in segs:
+        if s.dur > MAX_OVER_S:
+            for t0, t1, events in decode_cw_subranges(s, state_events, pitch):
+                out.append((s, t0, t1, events))
+            continue
+        events, snr = decode_segment(s.path, pitch)
+        s.events = gate_events(s.dur, events, snr)
+    return out

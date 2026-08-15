@@ -8,7 +8,6 @@ from datetime import datetime
 
 import numpy as np
 
-import contest_video as cv
 import cw_decode
 from cw_decode import (
     MAX_OVER_S,
@@ -314,7 +313,7 @@ class TestDecoderRobustness:
         w.setnchannels(1)
         w.setsampwidth(2)
         w.setframerate(SR)
-        n = int((cv.MAX_OVER_S + 1) * SR)
+        n = int((MAX_OVER_S + 1) * SR)
         rng = np.random.default_rng(0)
         w.writeframes((rng.normal(0, 3000, n)).astype(np.int16).tobytes())
         w.close()
