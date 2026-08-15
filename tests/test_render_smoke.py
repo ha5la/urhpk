@@ -59,36 +59,28 @@ class Render(NamedTuple):
     stdout: str
 
 
-@pytest.fixture(scope="module")
-def rendered(tmp_path_factory):
-    if not ROUND.is_dir():
-        pytest.skip(f"no recorded round at {ROUND}")
+EVERY_INPUT = [
+    "recording",
+    "260811-HA5LA-2M.edi",
+    "--telemetry",
+    "260811-HA5LA-telemetry.jsonl",
+    "--input-log",
+    "260811-HA5LA-input.jsonl",
+    "--cast",
+    "2026-08-11T19:16:06+00:00.cast",
+    "--scope",
+    "260811-HA5LA.scope",
+    "--webcam",
+    "260811-HA5LA-webcam-20260811T191622.497368Z.mp4",
+    "--webcam",
+    "260811-HA5LA-webcam-20260811T191746.519807Z.mp4",
+]
 
-    tmp = tmp_path_factory.mktemp("render")
+
+def _render(tmp: Path, inputs: list[str]) -> Render:
     out = tmp / "out.mp4"
     proc = subprocess.run(
-        [
-            "uv",
-            "run",
-            CONTEST_VIDEO,
-            "recording",
-            "260811-HA5LA-2M.edi",
-            "--telemetry",
-            "260811-HA5LA-telemetry.jsonl",
-            "--input-log",
-            "260811-HA5LA-input.jsonl",
-            "--cast",
-            "2026-08-11T19:16:06+00:00.cast",
-            "--scope",
-            "260811-HA5LA.scope",
-            "--webcam",
-            "260811-HA5LA-webcam-20260811T191622.497368Z.mp4",
-            "--webcam",
-            "260811-HA5LA-webcam-20260811T191746.519807Z.mp4",
-            "--no-video",
-            "-o",
-            str(out),
-        ],
+        ["uv", "run", CONTEST_VIDEO, *inputs, "--no-video", "-o", str(out)],
         cwd=ROUND,
         capture_output=True,
         text=True,
@@ -96,6 +88,13 @@ def rendered(tmp_path_factory):
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     return Render(tmp / "out", proc.stdout)
+
+
+@pytest.fixture(scope="module")
+def rendered(tmp_path_factory):
+    if not ROUND.is_dir():
+        pytest.skip(f"no recorded round at {ROUND}")
+    return _render(tmp_path_factory.mktemp("render"), EVERY_INPUT)
 
 
 def test_the_chapters_are_the_ones_the_round_earned(rendered):
