@@ -137,6 +137,19 @@ class TestTelemetryAlignment:
         assert (silent.az, silent.az_offline) == (None, False)
         assert (offline.az, offline.az_offline) == (None, True)
 
+    def test_load_telemetry_distinguishes_absent_freq_from_null_freq(self, tmp_path):
+        # The mirror of the az case: the logger writes an explicit null pair
+        # when the radio drops, which a rotator line saying nothing about the
+        # rig must not be mistaken for.
+        f = tmp_path / "telem.jsonl"
+        f.write_text(
+            '{"t": "2026-07-04T11:00:00.000000Z", "az": 135.0}\n'
+            '{"t": "2026-07-04T11:00:01.000000Z", "freq_hz": null, "mode": null}\n'
+        )
+        silent, offline = load_telemetry(str(f))
+        assert (silent.freq_hz, silent.rig_offline) == (None, False)
+        assert (offline.freq_hz, offline.rig_offline) == (None, True)
+
     def test_small_wav_telemetry_disagreement_does_not_split(self):
         # Regression test for a real bug found right after switching to WAV
         # metadata as the seed: the WAV's own frequency and rigctld's (via

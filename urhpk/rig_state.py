@@ -40,6 +40,9 @@ class TelemetrySample:
     # mean opposite things -- silence about the rotator (a rig event) versus a
     # report that it went offline. Only the latter ends az's carry-forward.
     az_offline: bool = False
+    # And again for the rig: an explicit `"freq_hz": null` is the logger saying
+    # the radio went away, which a rotator line silent about the rig is not.
+    rig_offline: bool = False
 
 
 @dataclass
@@ -86,6 +89,7 @@ def load_telemetry(path: str) -> list[TelemetrySample]:
                 rec.get("mode"),
                 rec.get("az"),
                 az_offline="az" in rec and rec["az"] is None,
+                rig_offline="freq_hz" in rec and rec["freq_hz"] is None,
                 meters_offline="vd" in rec and rec["vd"] is None,
                 vd=rec.get("vd"),
                 id_raw=rec.get("id"),
