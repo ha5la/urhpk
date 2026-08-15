@@ -29,6 +29,9 @@ def _hud_seg(dur=600.0, audio_t=0.0, wall=None):
     return Segment("a", wall or datetime(2026, 8, 3, 20, 0, 0), dur, audio_t)
 
 
+HOME = "JN97TF"
+
+
 def _hud_qso(callsign, pts, loc="JN97TF", dup=False):
     return Qso(
         datetime(2026, 8, 3, 18, 0), callsign, "599", "001", "599", "001", loc, pts, dup
@@ -56,24 +59,31 @@ class TestHudGeo:
 
 class TestHudQsoMarks:
     def test_accumulates_score_count_and_best_dx_at_each_qso_end(self):
+        # The scores are deliberately not the distances: ODX is captioned in km
+        # and is measured, while a QSO's points are its kilometres rounded up.
         qsos = [
-            _hud_qso("HA1A", 100),
-            _hud_qso("HA2B", 300),
-            _hud_qso("HA3C", 0, dup=True),
+            _hud_qso("HA1A", 38, loc="JN97WM"),  # 37 km
+            _hud_qso("HA2B", 233, loc="JN87GF"),  # 232 km
+            _hud_qso("HA3C", 0, loc="IO83RO", dup=True),  # 1713 km, uncounted
         ]
         windows = [(0.0, 10.0), (20.0, 30.0), (40.0, 50.0)]
-        assert hud.hud_qso_marks(qsos, windows) == [
-            (10.0, 100, 1, 100),
-            (30.0, 400, 2, 300),
-            (50.0, 400, 3, 300),  # a dup adds a QSO but no score and no best DX
+        assert hud.hud_qso_marks(qsos, windows, HOME) == [
+            (10.0, 38, 1, 37),
+            (30.0, 271, 2, 232),
+            (50.0, 271, 3, 232),  # a dup adds a QSO but no score and no best DX
         ]
+
+    def test_a_qso_whose_locator_will_not_parse_is_no_ones_best_dx(self):
+        qsos = [_hud_qso("HA1A", 38, loc="JN97WM"), _hud_qso("HA2B", 0, loc="")]
+        windows = [(0.0, 10.0), (20.0, 30.0)]
+        assert [m[3] for m in hud.hud_qso_marks(qsos, windows, HOME)] == [37, 37]
 
     def test_marks_are_ordered_by_window_end_not_by_edi_order(self):
         # qso_windows can hand back a QSO whose exact submit time reorders it
         # relative to the EDI's minute-precision sort.
         qsos = [_hud_qso("HA1A", 100), _hud_qso("HA2B", 300)]
         windows = [(30.0, 40.0), (0.0, 10.0)]
-        assert [m[0] for m in hud.hud_qso_marks(qsos, windows)] == [10.0, 40.0]
+        assert [m[0] for m in hud.hud_qso_marks(qsos, windows, HOME)] == [10.0, 40.0]
 
 
 class TestHudTimeline:

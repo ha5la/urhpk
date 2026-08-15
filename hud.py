@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from cw_decode import CharEvent
-from geo import initial_bearing, maidenhead_to_latlon
+from geo import distance_between, initial_bearing, maidenhead_to_latlon
 from icom_net import band_from_hz
 from rig_state import SegState, TelemetrySample
 from scope_render import SCOPE_AMP_MAX
@@ -122,7 +122,7 @@ class HudState:
 
 
 def hud_qso_marks(
-    qsos: list[Qso], windows: list[tuple[float, float]]
+    qsos: list[Qso], windows: list[tuple[float, float]], my_loc: str
 ) -> list[tuple[float, int, int, int]]:
     """(video_t, cumulative score, cumulative QSO count, best DX km) at the
     moment each QSO completes.
@@ -132,16 +132,18 @@ def hud_qso_marks(
     Enter (see qso_windows). That is when a score genuinely changes, so it's
     also when the HUD's counter should tick over.
 
-    Best DX comes from q.pts rather than a recomputed distance because that's
-    the EDI's own scoring field, which is exactly what the SCORE panel sums.
-    A dup scores 0 there, so a dup of a far station never becomes best DX --
-    correct for a scoreboard, if not for bragging rights."""
+    Best DX is the distance the panel's ODX KM caption promises, measured from
+    the locators, and not q.pts -- which is that distance rounded up. A dup is
+    left out of it: it scores nothing, so it cannot be the round's best."""
     order = sorted(range(len(qsos)), key=lambda i: windows[i][1])
     marks: list[tuple[float, int, int, int]] = []
     score = best = 0
     for n, i in enumerate(order, start=1):
-        score += qsos[i].pts
-        best = max(best, qsos[i].pts)
+        q = qsos[i]
+        score += q.pts
+        km = None if q.dup else distance_between(my_loc, q.loc)
+        if km is not None:
+            best = max(best, int(km))
         marks.append((windows[i][1], score, n, best))
     return marks
 
@@ -512,7 +514,7 @@ def build_hud_timeline(
     return HudTimeline(
         segs=segs,
         offset_h=offset_h,
-        qso_marks=hud_qso_marks(qsos, windows),
+        qso_marks=hud_qso_marks(qsos, windows, my_loc),
         target_spans=hud_target_spans(qsos, windows, my_loc),
         state_events=state_events or [],
         az_marks=hud_az_marks(telemetry or [], segs, offset_h),
