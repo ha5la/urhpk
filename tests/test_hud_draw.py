@@ -203,7 +203,7 @@ class TestHudDrawing:
 
     def test_only_the_selected_band_and_mode_chips_stay_lit(self):
         art = _art()
-        img = _drawn(band="2M", mode="CW")
+        img = _drawn(chip_glow={"2M": 1.0, "CW": 1.0})
 
         def brightness(rect):
             x, y, w, h = rect
@@ -218,6 +218,15 @@ class TestHudDrawing:
                 brightness(r) for r, n in zip(art.chips[row], names) if n != active
             ]
             assert min(lit) > 2 * max(unlit)
+
+    def test_a_chip_part_way_through_its_ramp_is_drawn_part_way_lit(self):
+        art = _art()
+        x, y, w, h = dict(zip(hud_draw._HUD_BANDS, art.chips["band"]))["2M"]
+
+        def brightness(glow):
+            return _drawn(chip_glow=glow)[y : y + h, x : x + w].mean()
+
+        assert brightness({}) < brightness({"2M": 0.5}) < brightness({"2M": 1.0})
 
     def test_a_needle_turns_about_its_pivot_not_its_bounding_box(self):
         # These needles pivot on the ball at their base, so almost all of a

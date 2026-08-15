@@ -486,16 +486,17 @@ def draw_hud_frame(state: HudState, art: HudArt) -> Image.Image:
     _seg_in(draw, art.slots["score"], f"{state.score}", colour, field=HUD_SCORE_FIELD)
     _seg_in(draw, art.slots["qsos"], f"{state.qsos}", HUD_RED, field=HUD_QSOS_FIELD)
 
-    # --- QRG, then dim whichever band/mode chips are not the current one.
+    # --- QRG, then dim each band/mode chip to its lamp's current brightness.
+    # Fully lit is the artwork as baked, so only a chip short of that is
+    # touched at all -- which on a settled bar is every chip but the two in
+    # use, exactly as when this was a straight lit/unlit test.
     qrg = f"{state.freq_hz / 1e6:.3f}" if state.freq_hz else "---.---"
     _seg_in(draw, art.slots["freq"], qrg, HUD_AMBER, field=HUD_QRG_FIELD)
-    for row, names, active in (
-        ("band", _HUD_BANDS, state.band),
-        ("mode", _HUD_MODES, state.mode),
-    ):
+    for row, names in (("band", _HUD_BANDS), ("mode", _HUD_MODES)):
         for rect, name in zip(art.chips[row], names):
-            if name != active:
-                _dim_region(img, rect, HUD_UNLIT_DIM)
+            glow = state.chip_glow.get(name, 0.0)
+            if glow < 1.0:
+                _dim_region(img, rect, HUD_UNLIT_DIM + (1 - HUD_UNLIT_DIM) * glow)
 
     # --- RX/TX lamp. With no rig state at all the socket is simply left
     # empty, which is what the artwork already draws there.
@@ -577,6 +578,7 @@ def hud_demo_state() -> HudState:
         freq_hz=144_174_000,
         mode="CW",
         band="2M",
+        chip_glow={"2M": 1.0, "CW": 1.0},
         ptt=False,
         rot_az=135,
         target_az=118,
@@ -618,8 +620,9 @@ def hud_frame_key(state: HudState) -> tuple:
         round(state.rate_per_h),
         state.best_km,
         state.freq_hz,
-        state.mode,
-        state.band,
+        # Quantised like the meter and the needle: the chips are dimmed in
+        # 8-bit steps, so a ramp finer than that redraws for nothing.
+        tuple(sorted((n, round(g, 2)) for n, g in state.chip_glow.items())),
         state.ptt,
         None if state.rot_az is None else round(state.rot_az),
         None if state.target_az is None else round(state.target_az),

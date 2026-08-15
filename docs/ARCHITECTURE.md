@@ -578,8 +578,16 @@ The HUD's rule is that the more important a value, the bigger it is drawn.
 - **Frames are reused whenever nothing visible changed** (`hud_frame_key`):
   everything the drawing depends on except `t`, with continuously-varying values
   quantised to the resolution they are actually *drawn* at (18 meter segments,
-  needles to the nearest degree). Without that quantisation the scope-derived signal
-  level alone forces a fresh draw ~30 times a second.
+  needles to the nearest degree, chip brightness to 1/100). Without that quantisation
+  the scope-derived signal level alone forces a fresh draw ~30 times a second.
+- **The band/mode chips are lamps, and read telemetry** (`hud_chip_marks`): they ramp
+  up in `HUD_CHIP_RISE_S` and glow down over the longer `HUD_CHIP_DECAY_S`, from a
+  time series of their own rather than from `SegState` -- the same split, for the same
+  reason, as the compass and `hud_az_marks`. Only the transitions animate: a steady
+  glow would change every frame and cost the whole of the reuse above, where the
+  August round's 118 transitions add at most ~1,000 draws to its 26,557. An explicit
+  `rig_offline` telemetry line puts both chips out; a line merely silent about the rig
+  carries them forward.
 - **The data layer is pure and fully unit-tested** — everything up to
   `draw_hud_frame` is functions over the recording's own sources, needing no art, no
   fonts and no ffmpeg. `HudTimeline.at(t)` returns a `HudState` for any video time.

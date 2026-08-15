@@ -125,6 +125,34 @@ class TestHudTimeline:
         assert (state.ptt, state.mode, state.band) == (True, "CW", "70CM")
         assert tl.at(15.0).band is None  # past the run, nothing carries over
 
+    def test_a_chip_lights_over_the_rise_time_when_its_band_is_selected(self):
+        tl = hud.HudTimeline(segs=[_hud_seg()], chip_marks=[(0.0, "2M", "SSB")])
+        assert tl.at(0.0).chip_glow.get("2M", 0.0) == 0.0
+        assert 0.0 < tl.at(hud.HUD_CHIP_RISE_S / 2).chip_glow["2M"] < 1.0
+        assert tl.at(hud.HUD_CHIP_RISE_S).chip_glow["2M"] == 1.0
+
+    def test_a_chip_glows_down_more_slowly_than_it_lights(self):
+        marks = [(0.0, "2M", "SSB"), (10.0, "70CM", "SSB")]
+        tl = hud.HudTimeline(segs=[_hud_seg()], chip_marks=marks)
+        assert tl.at(10.0).chip_glow["2M"] == 1.0
+        # The one arriving is fully lit while the one leaving is still glowing.
+        assert tl.at(10.0 + hud.HUD_CHIP_RISE_S).chip_glow["70CM"] == 1.0
+        assert tl.at(10.0 + hud.HUD_CHIP_RISE_S).chip_glow["2M"] > 0.0
+        assert tl.at(10.0 + hud.HUD_CHIP_DECAY_S).chip_glow["2M"] < 1e-6
+
+    def test_a_chip_switched_back_on_mid_fade_resumes_from_where_it_got_to(self):
+        half = hud.HUD_CHIP_DECAY_S / 2
+        marks = [(0.0, "2M", "SSB"), (10.0, "70CM", "SSB"), (10.0 + half, "2M", "SSB")]
+        tl = hud.HudTimeline(segs=[_hud_seg()], chip_marks=marks)
+        assert abs(tl.at(10.0 + half).chip_glow["2M"] - 0.5) < 1e-6
+        # Half-faded, so it needs only half the rise time back to full.
+        assert tl.at(10.0 + half + hud.HUD_CHIP_RISE_S / 2).chip_glow["2M"] > 1 - 1e-6
+
+    def test_the_mode_chips_are_unaffected_by_a_band_change(self):
+        marks = [(0.0, "2M", "SSB"), (10.0, "70CM", "SSB")]
+        tl = hud.HudTimeline(segs=[_hud_seg()], chip_marks=marks)
+        assert tl.at(10.0 + hud.HUD_CHIP_DECAY_S).chip_glow["SSB"] == 1.0
+
     def test_signal_level_clears_when_the_scope_recording_stops(self):
         tl = hud.HudTimeline(segs=[_hud_seg()], s_marks=[(5.0, 0.5)])
         assert tl.at(5.0).s_level == 0.5
@@ -212,6 +240,36 @@ class TestHudSources:
         assert hud.hud_az_marks(telemetry, segs, offset_h=2) == [
             (5.0, 135.0),
             (9.0, None),
+        ]
+
+    def test_chip_marks_land_only_where_the_band_or_mode_changes(self):
+        segs = [_hud_seg()]  # 20:00 local == 18:00 UTC at offset 2
+        telemetry = [
+            TelemetrySample(datetime(2026, 8, 3, 18, 0, 1), 144174000, "CW", None),
+            TelemetrySample(datetime(2026, 8, 3, 18, 0, 2), 144174000, "CW", None),
+            TelemetrySample(datetime(2026, 8, 3, 18, 0, 3), None, None, 135.0),
+            TelemetrySample(datetime(2026, 8, 3, 18, 0, 4), 144300000, "SSB", None),
+            TelemetrySample(datetime(2026, 8, 3, 18, 0, 5), 432200000, "SSB", None),
+        ]
+        assert hud.hud_chip_marks(telemetry, segs, offset_h=2) == [
+            (1.0, "2M", "CW"),
+            (4.0, "2M", "SSB"),
+            (5.0, "70CM", "SSB"),
+        ]
+
+    def test_chip_marks_go_dark_when_the_radio_drops_and_relight_after(self):
+        segs = [_hud_seg()]
+        telemetry = [
+            TelemetrySample(datetime(2026, 8, 3, 18, 0, 1), 144174000, "CW", None),
+            TelemetrySample(
+                datetime(2026, 8, 3, 18, 0, 2), None, None, None, rig_offline=True
+            ),
+            TelemetrySample(datetime(2026, 8, 3, 18, 0, 3), 144174000, "CW", None),
+        ]
+        assert hud.hud_chip_marks(telemetry, segs, offset_h=2) == [
+            (1.0, "2M", "CW"),
+            (2.0, None, None),
+            (3.0, "2M", "CW"),
         ]
 
     def test_s_marks_read_the_scope_sweeps_own_centre_bins(self):

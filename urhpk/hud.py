@@ -69,6 +69,13 @@ HUD_TICKER_BURST_S = 3.0  # gap beyond which the operator has stopped sending,
 # the slowest speed worked here, and word gaps arrive as their own ' '.
 HUD_RATE_WINDOW_S = 600.0  # trailing window behind the QSOs/hour readout
 HUD_SCORE_ANIM_S = 0.6  # score count-up + panel flash after each QSO
+# The band/mode chips light and fade like filaments rather than switching: a
+# lamp reaches full brightness far quicker than it stops glowing. Only the
+# transitions animate. A steady glow instead would change every frame and cost
+# the whole of hud_frame_key's reuse -- 8x on the August round, 26,557 frames
+# drawn for 218,995 -- where that round's 118 transitions add at most ~1,000.
+HUD_CHIP_RISE_S = 0.08
+HUD_CHIP_DECAY_S = 0.35
 HUD_S_CENTRE_BINS = 3  # scope bins taken as "the tuned frequency"
 HUD_S_HOLD_S = 1.0  # no sweep for this long = no signal reading at all
 
@@ -103,6 +110,8 @@ class HudState:
     # currently on the scrolling matrix -- not a string, because a character
     # sits at a dot-column position rather than in a slot.
     ticker: list[tuple[int, str]] = field(default_factory=list)
+    # Per-chip lamp brightness, 0..1. A chip absent from it has never been lit.
+    chip_glow: dict[str, float] = field(default_factory=dict)
     vd: float | None = None  # volts -- no recording carries these yet; the
     id_a: float | None = None  # panel renders "---" until the logger records them
 
@@ -302,6 +311,65 @@ def hud_az_marks(
     return marks
 
 
+def hud_chip_marks(
+    telemetry: list[TelemetrySample], segs: list[Segment], offset_h: int
+) -> list[tuple[float, str | None, str | None]]:
+    """(video_t, band, mode) wherever the lit pair of chips changes.
+
+    Read from telemetry rather than from SegState for the same reason the
+    compass reads hud_az_marks: since icom_net the radio pushes freq/mode the
+    instant either changes, so this is the source that knows, and it keeps
+    reporting across the stretches where nothing was being recorded.
+
+    A line silent about the rig carries the current pair forward; an explicit
+    `rig_offline` one puts both chips out, which is the honest reading when
+    the radio has gone away rather than merely stayed put."""
+    marks: list[tuple[float, str | None, str | None]] = []
+    freq_hz: int | None = None
+    mode: str | None = None
+    last: tuple[str | None, str | None] | None = None
+    for t in sorted(telemetry, key=lambda s: s.t):
+        if t.rig_offline:
+            freq_hz, mode = None, None
+        elif t.freq_hz is not None or t.mode is not None:
+            freq_hz = t.freq_hz if t.freq_hz is not None else freq_hz
+            mode = t.mode if t.mode is not None else mode
+        else:
+            continue
+        pair = (band_from_hz(freq_hz) if freq_hz else None, mode)
+        if pair != last:
+            marks.append((audio_time_for(t.t + timedelta(hours=offset_h), segs), *pair))
+            last = pair
+    return marks
+
+
+def _chip_ramp(level: float, lit: bool, dt: float) -> float:
+    """One lamp's brightness dt seconds after it was last at `level`."""
+    if lit:
+        return min(1.0, level + dt / HUD_CHIP_RISE_S)
+    return max(0.0, level - dt / HUD_CHIP_DECAY_S)
+
+
+def _chip_levels(
+    marks: list[tuple[float, str | None, str | None]],
+) -> list[dict[str, float]]:
+    """Every lamp's brightness at the instant of each mark.
+
+    Folded forward once here rather than ramped from zero at query time, so a
+    chip switched off and straight back on again resumes from however far it
+    had actually faded instead of jumping to dark."""
+    levels: list[dict[str, float]] = []
+    cur: dict[str, float] = {}
+    for i, (t, band, mode) in enumerate(marks):
+        if i:
+            dt = t - marks[i - 1][0]
+            prev = {marks[i - 1][1], marks[i - 1][2]}
+            cur = {n: _chip_ramp(v, n in prev, dt) for n, v in cur.items()}
+        cur = cur | {n: cur.get(n, 0.0) for n in (band, mode) if n}
+        levels.append(cur)
+    return levels
+
+
 def _az_between(a: float, b: float, frac: float) -> float:
     """Bearing `frac` of the way from a to b, the short way round -- 250 to 31
     degrees is a 141 degree swing clockwise through north, not 219 the other
@@ -338,6 +406,7 @@ class HudTimeline:
     target_spans: list[tuple[float, float, float]] = field(default_factory=list)
     state_events: list[tuple[float, float, SegState]] = field(default_factory=list)
     az_marks: list[tuple[float, float | None]] = field(default_factory=list)
+    chip_marks: list[tuple[float, str | None, str | None]] = field(default_factory=list)
     s_marks: list[tuple[float, float]] = field(default_factory=list)
     meter_marks: list[tuple[float, TelemetrySample]] = field(default_factory=list)
     stream: list[tuple[float, str, bool]] = field(default_factory=list)
@@ -348,6 +417,8 @@ class HudTimeline:
         self._target_t = [s[0] for s in self.target_spans]
         self._state_t = [e[0] for e in self.state_events]
         self._az_t = [m[0] for m in self.az_marks]
+        self._chip_t = [m[0] for m in self.chip_marks]
+        self._chip_level = _chip_levels(self.chip_marks)
         self._s_t = [m[0] for m in self.s_marks]
         self._meter_t = [m[0] for m in self.meter_marks]
         self._ticker_t = [e[0] for e in self.stream]
@@ -398,6 +469,15 @@ class HudTimeline:
         if nxt_az is None or span > HUD_AZ_INTERP_S or span <= 0:
             return az
         return _az_between(az, nxt_az, (t - self._az_t[i - 1]) / span)
+
+    def _chip_glow_at(self, t: float) -> dict[str, float]:
+        i = bisect.bisect_right(self._chip_t, t) - 1
+        if i < 0:
+            return {}
+        _, band, mode = self.chip_marks[i]
+        lit = {band, mode}
+        dt = t - self._chip_t[i]
+        return {n: _chip_ramp(v, n in lit, dt) for n, v in self._chip_level[i].items()}
 
     def _ticker_scroll(self, t: float) -> float:
         """How far the ticker's strip has scrolled, in dot columns.
@@ -458,6 +538,7 @@ class HudTimeline:
                 st.band = band_from_hz(st.freq_hz)
 
         st.rot_az = self._az_at(t)
+        st.chip_glow = self._chip_glow_at(t)
 
         m = bisect.bisect_right(self._s_t, t)
         if m and t - self.s_marks[m - 1][0] <= HUD_S_HOLD_S:
@@ -504,6 +585,7 @@ def build_hud_timeline(
         target_spans=hud_target_spans(qsos, windows, my_loc),
         state_events=state_events or [],
         az_marks=hud_az_marks(telemetry or [], segs, offset_h),
+        chip_marks=hud_chip_marks(telemetry or [], segs, offset_h),
         s_marks=hud_s_marks(scope_records or [], segs, offset_h),
         meter_marks=hud_meter_marks(telemetry or [], segs, offset_h),
         stream=ticker_stream(ticker_chunks(segs, cw_spans)),
