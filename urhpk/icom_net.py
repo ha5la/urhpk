@@ -1159,28 +1159,6 @@ class IcomNetRig:
         last_reopen = 0.0
         opened_once = False
         while True:
-            try:
-                data = await asyncio.wait_for(self._civ.queue.get(), IDLE_PERIOD_S)
-            except TimeoutError:
-                data = None
-            if data is not None:
-                self._last_civ_rx = time.monotonic()
-                payload = parse_civ_data_packet(data)
-                if payload is not None:
-                    if last_data == 0.0:
-                        self._civ_ready.set()
-                    last_data = time.monotonic()
-                    self._dispatch_civ(payload)
-                elif is_ping_request(data):
-                    self._civ.send(
-                        ping_reply(
-                            struct.unpack_from("<H", data, 0x06)[0],
-                            self._civ_local_id,
-                            self._civ_remote_id,
-                            data[0x11:0x15],
-                        )
-                    )
-
             now = time.monotonic()
             if now - last_idle >= IDLE_PERIOD_S:
                 self._civ.send(
@@ -1222,6 +1200,29 @@ class IcomNetRig:
                     self._send_civ_command(0x03)
                     opened_once = True
                     last_reopen = now
+
+            # Speaking before listening: the radio has nothing to say until the
+            # open request above has gone out, so waiting first only delays it.
+            try:
+                data = await asyncio.wait_for(self._civ.queue.get(), IDLE_PERIOD_S)
+            except TimeoutError:
+                continue
+            self._last_civ_rx = time.monotonic()
+            payload = parse_civ_data_packet(data)
+            if payload is not None:
+                if last_data == 0.0:
+                    self._civ_ready.set()
+                last_data = time.monotonic()
+                self._dispatch_civ(payload)
+            elif is_ping_request(data):
+                self._civ.send(
+                    ping_reply(
+                        struct.unpack_from("<H", data, 0x06)[0],
+                        self._civ_local_id,
+                        self._civ_remote_id,
+                        data[0x11:0x15],
+                    )
+                )
 
     async def close(self) -> None:
         """Full teardown in the order wfview's own shutdown uses (captured from

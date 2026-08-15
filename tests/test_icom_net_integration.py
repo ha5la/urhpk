@@ -25,6 +25,7 @@ from urhpk.icom_net import (
     CIV_PARAM_NTP_SERVER,
     CIV_PARAM_RX_REC_CONDITION,
     CIV_PARAM_TIME,
+    IDLE_PERIOD_S,
     IcomNetRig,
     bcd_encode_freq,
     civ_data_packet,
@@ -320,6 +321,25 @@ async def test_connect_and_receive_unsolicited_transceive_update(fake_radio):
         assert rig.band == "70CM"
 
         assert (432_500_000, "CW", "70CM") in updates
+    finally:
+        await rig.close()
+
+
+async def test_the_civ_stream_is_opened_without_waiting_out_an_idle_period(fake_radio):
+    # The radio has nothing to say on the CI-V socket until the open request
+    # has gone out, so listening before speaking only delays every connect by
+    # a whole idle period.
+    rig = IcomNetRig(
+        "127.0.0.1",
+        "testuser",
+        "testpass",
+        control_port=fake_radio.control_port,
+        civ_port=fake_radio.civ_port,
+    )
+    connecting = asyncio.create_task(rig.connect(timeout=5.0))
+    try:
+        assert await wait_until(fake_radio.civ_opened.is_set, timeout=IDLE_PERIOD_S / 2)
+        await connecting
     finally:
         await rig.close()
 
