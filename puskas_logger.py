@@ -1090,8 +1090,6 @@ async def run(lb: LogBook, tname: str):
             _state["restore_text"] = ""
             buf.set_document(Document(""))
             get_app().exit(result=_REDRAW)
-        else:
-            buf.set_document(Document(""))
 
     for _fn_idx, _macro in enumerate(CW_MACROS, 1):
 

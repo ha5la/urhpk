@@ -153,6 +153,25 @@ def test_a_whole_round_offline(logger, tmp_path):
     assert "qso" in kinds, "the logged QSO was not recorded"
 
 
+def test_escape_keeps_a_half_typed_callsign(logger):
+    """Escape aborts an in-progress CW message, and that is all it does.
+
+    Mid-QSO the input box holds a callsign that took listening to get, so
+    taking it away is a worse loss than the CW that was being sent.
+    """
+    for marker, reply in PROMPTS:
+        logger.wait_for(marker)
+        logger.send(reply)
+    logger.wait_for(APP_UP)
+
+    logger.send(b"HA7NS")
+    logger.wait_for(b"HA7NS")
+    logger.send(b"\x1b")
+    logger.pump(0.5)  # ttimeoutlen is 50ms: a lone ESC needs a gap to read as one
+    logger.send(b" 599 001 JN97WM\r")
+    logger.wait_for(b"2M:1q")  # the callsign was still there to finish
+
+
 def _port_free(port: int) -> bool:
     with socket.socket() as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
