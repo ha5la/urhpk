@@ -101,6 +101,9 @@ This is the long, unattended step — roughly 1.5× the round's own length at
 720p with everything on. Preview first: `--duration 1200 --res 720p` cuts it to
 minutes, and `--hud-demo` checks the status bar's layout in about a second.
 
+Each stage carries its own progress bar with an ETA, so where it has got to is
+a `tail -f` away when the output is redirected to a log.
+
 Out come `out.mp4`, `out.mp4.chapters.txt` and `out.mp4.srt`.
 
 ## 4. Publish

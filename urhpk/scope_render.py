@@ -13,6 +13,7 @@ import subprocess
 import numpy as np
 
 from urhpk.icom_net import read_scope_records
+from urhpk.progress import stage_bar
 from urhpk.video_format import RENDER_FPS
 
 # ---------------------------------------------------------------------------
@@ -143,23 +144,25 @@ def render_scope_video(
         t = 0.0
         last_idx = -1
         row = None
-        while t <= duration:
-            while next_row_t <= t:
-                while idx + 1 < n and records[idx + 1][0] - t0 <= next_row_t:
-                    idx += 1
-                if records[idx][0] - t0 <= next_row_t:
-                    if idx != last_idx:
-                        pixels = np.frombuffer(records[idx][3], dtype=np.uint8)
-                        row = lut[_resize_scope_row(pixels, W)]
-                        last_idx = idx
-                    canvas[1:] = canvas[
-                        :-1
-                    ]  # scroll down; newest row enters at the top
-                    stalled = next_row_t - (records[idx][0] - t0) > SCOPE_STALL_S
-                    canvas[0] = 0 if stalled else row
-                next_row_t += row_dt
-            proc.stdin.write(canvas.tobytes())
-            t += frame_dt
+        with stage_bar("scope waterfall", int(duration / frame_dt) + 1) as bar:
+            while t <= duration:
+                while next_row_t <= t:
+                    while idx + 1 < n and records[idx + 1][0] - t0 <= next_row_t:
+                        idx += 1
+                    if records[idx][0] - t0 <= next_row_t:
+                        if idx != last_idx:
+                            pixels = np.frombuffer(records[idx][3], dtype=np.uint8)
+                            row = lut[_resize_scope_row(pixels, W)]
+                            last_idx = idx
+                        canvas[1:] = canvas[
+                            :-1
+                        ]  # scroll down; newest row enters at the top
+                        stalled = next_row_t - (records[idx][0] - t0) > SCOPE_STALL_S
+                        canvas[0] = 0 if stalled else row
+                    next_row_t += row_dt
+                proc.stdin.write(canvas.tobytes())
+                t += frame_dt
+                bar.update()
     finally:
         proc.stdin.close()
         proc.wait()

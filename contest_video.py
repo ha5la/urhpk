@@ -509,6 +509,12 @@ def sync_webcams(
 
 
 def main() -> None:
+    # An unattended render is redirected to a log, where block-buffered stdout
+    # lands whole kilobytes behind the progress bars and ffmpeg's own -stats,
+    # both of which go to stderr unbuffered: the stage each bar belongs to was
+    # announced after the stage had finished.
+    sys.stdout.reconfigure(line_buffering=True)
+
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -760,7 +766,6 @@ def main() -> None:
     )
     print(f"  RX/TX: {known} state changes{suffix}")
 
-    print("decoding CW ...")
     cw_raw = decode_round(segs, state_events, args.pitch)
     decoded = sum(len(s.events) for s in segs) + sum(len(ev) for _, _, _, ev in cw_raw)
     trusted_overs = sum(1 for s in segs if s.events) + len(cw_raw)
@@ -865,12 +870,10 @@ def main() -> None:
         # invert that at tau = total. The margin keeps tpad's frame-cloning
         # from being visible at the very end of a preview.
         cast_span = (total - cast_start) * (1 - cast_rate) + STREAM_TRIM_MARGIN_S
-        print("rendering cast PiP ...")
         render_cast_video(args.cast, cast_video, max_duration=cast_span)
 
     hud_video = stem + ".hud.mp4"
     hud_art_ = hud_art(load_hud_theme(args.hud_theme), W, hud_height(H))
-    print("rendering HUD ...")
     drawn = render_hud_video(
         build_hud_timeline(
             segs,
@@ -895,7 +898,6 @@ def main() -> None:
         scope_video = stem + ".scope.mp4"
         # The overlay is gated to scope_end, so anything past it is invisible.
         scope_span = min(total, scope_end or total) - scope_start
-        print("rendering scope waterfall background ...")
         render_scope_video(
             args.scope,
             scope_video,

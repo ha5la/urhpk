@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 import pyte
 from PIL import Image, ImageDraw, ImageFont
 
+from urhpk.progress import stage_bar
+
 CAST_FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 CAST_FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"
 CAST_FONT_SIZE = 13
@@ -286,17 +288,21 @@ def render_cast_video(
         n = len(events)
         t = 0.0
         dt = 1.0 / fps
-        while t <= duration:
-            while ei < n and events[ei][0] <= t:
-                ts, kind, data = events[ei]
-                if kind == "o":
-                    stream.feed(data.encode())
-                ei += 1
-            for row in screen.dirty:
-                _draw_cast_row(draw, screen.buffer[row], row, W, font, font_b, cw, lh)
-            screen.dirty.clear()
-            proc.stdin.write(canvas.tobytes())
-            t += dt
+        with stage_bar("cast PiP", int(duration / dt) + 1) as bar:
+            while t <= duration:
+                while ei < n and events[ei][0] <= t:
+                    ts, kind, data = events[ei]
+                    if kind == "o":
+                        stream.feed(data.encode())
+                    ei += 1
+                for row in screen.dirty:
+                    _draw_cast_row(
+                        draw, screen.buffer[row], row, W, font, font_b, cw, lh
+                    )
+                screen.dirty.clear()
+                proc.stdin.write(canvas.tobytes())
+                t += dt
+                bar.update()
     finally:
         proc.stdin.close()
         proc.wait()

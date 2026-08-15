@@ -278,7 +278,16 @@ logger's own terminal and the operator's webcam.
 ```
 uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
 ```
-Dependencies: `numpy`, `pyte`, `pillow` (`pyproject.toml`) + `ffmpeg`/`ffprobe`.
+Dependencies: `numpy`, `pyte`, `pillow`, `tqdm` (`pyproject.toml`) +
+`ffmpeg`/`ffprobe`.
+
+Each long stage reports its own progress, because they run at very different
+rates and a single bar over the lot would say nothing about when the render
+finishes. The four bars are in the functions that own the loops — CW decode,
+cast PiP, HUD, scope waterfall — and the final ffmpeg pass reports itself
+through `-stats`. `main` puts stdout in line-buffered mode so that those
+announcements do not sit in a 4 KB buffer while the unbuffered bars overtake
+them in a redirected log.
 
 **RECORDING.md is the companion document** — the full option list, the CW decoder's
 tuned constants and the reasoning behind the QSO-timing heuristics live there, with
@@ -306,6 +315,7 @@ above it.
 | `urhpk/hud.py` | The HUD's data layer: what the bar shows at any moment |
 | `urhpk/hud_draw.py` | The HUD's drawing layer: artwork, sprites, readouts |
 | `urhpk/video_format.py` | Frame size and rate — the two facts all three renderers must agree on |
+| `urhpk/progress.py` | The per-stage progress bar, and how often it redraws off a terminal |
 
 The data/drawing split inside the HUD is the one worth preserving deliberately:
 `hud.py` needs no art, no fonts and no ffmpeg, which is what makes it fully

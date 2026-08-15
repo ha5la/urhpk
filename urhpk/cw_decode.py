@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from urhpk.progress import stage_bar
 from urhpk.wav import read_wav_range
 
 if TYPE_CHECKING:
@@ -487,11 +488,13 @@ def decode_round(
     `.events`, mode-blind, with the trust gate the only judge -- there is
     nothing to extract and nothing better to do."""
     out: list[tuple[Segment, float, float, list[CharEvent]]] = []
-    for s in segs:
-        if _mode_is_known(s, state_events):
-            for t0, t1, events in decode_cw_subranges(s, state_events, pitch):
-                out.append((s, t0, t1, events))
-            continue
-        events, snr = decode_segment(s.path, pitch)
-        s.events = gate_events(s.dur, events, snr)
+    with stage_bar("CW decode", len(segs), unit="segment") as bar:
+        for s in segs:
+            bar.update()
+            if _mode_is_known(s, state_events):
+                for t0, t1, events in decode_cw_subranges(s, state_events, pitch):
+                    out.append((s, t0, t1, events))
+                continue
+            events, snr = decode_segment(s.path, pitch)
+            s.events = gate_events(s.dur, events, snr)
     return out

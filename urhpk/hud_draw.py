@@ -31,6 +31,7 @@ from urhpk.hud import (
     HudState,
     HudTimeline,
 )
+from urhpk.progress import stage_bar
 from urhpk.video_format import RENDER_FPS
 from urhpk.wiring import PROJECT_ROOT
 
@@ -659,14 +660,17 @@ def render_hud_video(
     try:
         last_key = None
         frame = None
-        for i in range(max(1, int(duration * fps))):
-            state = timeline.at(i / fps)
-            key = hud_frame_key(state)
-            if key != last_key or frame is None:
-                frame = draw_hud_frame(state, art).tobytes()
-                last_key = key
-                drawn += 1
-            proc.stdin.write(frame)
+        total = max(1, int(duration * fps))
+        with stage_bar("HUD", total) as bar:
+            for i in range(total):
+                state = timeline.at(i / fps)
+                key = hud_frame_key(state)
+                if key != last_key or frame is None:
+                    frame = draw_hud_frame(state, art).tobytes()
+                    last_key = key
+                    drawn += 1
+                proc.stdin.write(frame)
+                bar.update()
     finally:
         proc.stdin.close()
         proc.wait()
