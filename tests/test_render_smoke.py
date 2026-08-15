@@ -12,6 +12,9 @@ the picture is right, and no assertion here can judge that.
 Every side input the round left behind is passed, including the ones that
 cannot move a caption: a `.cast` or `.scope` that no longer parses is a real
 regression, and this is the only test that reads either from a real recording.
+The webcams are worth the extra ~1.5s for the same reason -- `sync_webcams`
+runs before `--no-video` returns, so its placement decisions are printed and
+can be asserted on without paying for a render.
 """
 
 from __future__ import annotations
@@ -78,6 +81,10 @@ def rendered(tmp_path_factory):
             "2026-08-11T19:16:06+00:00.cast",
             "--scope",
             "260811-HA5LA.scope",
+            "--webcam",
+            "260811-HA5LA-webcam-20260811T191622.497368Z.mp4",
+            "--webcam",
+            "260811-HA5LA-webcam-20260811T191746.519807Z.mp4",
             "--no-video",
             "-o",
             str(out),
@@ -97,6 +104,23 @@ def test_the_chapters_are_the_ones_the_round_earned(rendered):
 
 def test_the_captions_are_the_ones_the_round_earned(rendered):
     assert rendered.stem.with_suffix(".srt").read_text() == SRT
+
+
+def test_each_webcam_clip_is_placed_from_its_own_filename(rendered):
+    """Two Alt+V captures, each carrying a microsecond-precise UTC start in its
+    own name. Same machine as the logger, so the placement is exact and owes
+    nothing to the cross-correlation."""
+    assert "webcam 1/2: synced to start at 0s" in rendered.stdout
+    assert "webcam 2/2: synced to start at 68s" in rendered.stdout
+    assert rendered.stdout.count("exact timestamp in filename") == 2
+
+
+def test_a_round_this_short_gets_no_invented_drift_correction(rendered):
+    """The clock-drift fit needs long TX segments to correlate against, and 169
+    seconds of round does not have them. Reporting no match and keeping the
+    exact start is the honest outcome; a low-confidence fit would be worse than
+    none."""
+    assert rendered.stdout.count("found no confident match") == 2
 
 
 def test_no_video_stops_before_the_render(rendered):
