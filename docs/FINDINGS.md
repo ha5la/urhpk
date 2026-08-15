@@ -316,10 +316,10 @@ telemetry. Measured drift with NTP working: four samples over 18 minutes spanned
 
 ### The webcam drift diagnosis
 
-Only relevant to an **independently recorded** clip (a phone). The logger's own
-Alt+V capture shares the machine's clock and needs none of this.
-
-Two separate problems, found in sequence:
+Two separate problems, found in sequence. The first is only reachable by an
+**independently recorded** clip (a phone); the second reaches the logger's own
+Alt+V capture too, since sharing the machine's clock fixes where a capture
+*starts*, not the rate of the sample clock it is being compared against.
 
 1. **Variable frame timing under a constant-rate label.** A phone clip claimed
    `r_frame_rate` 30/1 while its per-frame timestamps were genuinely variable —
@@ -337,7 +337,11 @@ Two separate problems, found in sequence:
    Diagnosed by ear, then measured: the operator's voice reaches both microphones at
    the same real instant, so extracting speech onset from both and comparing against
    the assumed start showed a *growing* gap — ~0 s near the start, ~+3.2 s near the
-   end. A linear drift, which no single offset can correct.
+   end. A linear drift, which no single offset can correct. A same-machine Alt+V
+   round measured the same way grew to ~+5 s — but that was before the radio's
+   clock went on NTP (see "The radio's clock"), so an unknown part of it was
+   time-of-day drift rather than crystal rate, and the figure is an upper bound
+   until a long post-NTP round re-measures it.
 
 `refine_webcam_start` fits both: anchors sampled evenly across the *whole* round
 (an earlier version took the first few, clustered them in the opening minutes and

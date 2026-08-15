@@ -470,6 +470,11 @@ def sync_webcams(
     # noise, and large enough to be audible/visible. So this runs regardless of
     # an exact start; that start is still a much better seed for the
     # correlation search than the coarse whole-hour one.
+    #
+    # That ~+5s was measured before the radio's clock was put on NTP, while it
+    # was still free-running, so some of the rate was time-of-day drift that NTP
+    # now removes -- but not the sample-clock part, which no NTP can reach. The
+    # rate printed below re-measures what is actually left on the next long round.
     fits: dict[int, tuple[float, float]] = {}
     for i, (path, (start, exact, _)) in enumerate(zip(paths, placed)):
         refined, rate, n = refine_webcam_start(path, segs, start)
