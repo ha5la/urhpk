@@ -42,71 +42,27 @@ are in `docs/`, and are referred to by bare filename everywhere.
 
 ## Development principles
 
-- **Succinct code comments**: the first question is not "is this short enough" but
-  **what would it cost to omit this entirely** — usually nothing. Then: can a clearer
-  identifier carry it instead (Robert C. Martin)? Only what survives both gets a
-  comment, and then a sentence, not an essay. Three kinds are worth zero and should
-  not be written: **history** ("this used to be X" — git keeps it), **restating the
-  standard**, and **justifying a duplication or workaround** — that last one is a
-  load-bearing excuse, it goes stale silently because nothing tests a justification,
-  and it ends up arguing against a fix that has become free.
-- **Kent Beck's simplicity rule**: always implement the simplest thing that works.
-  Prefer decremental development — remove code that isn't needed rather than keeping
-  it "just in case". Dead code is technical debt.
-- **Tests over markdown for requirements**: requirements are best expressed as tests —
-  they are executable, unambiguous, and cannot go stale silently. Markdown is the
-  second-best option. Prose-only requirements are a last resort for things that
-  genuinely cannot be tested (visual UX, hardware interactions).
-- **Tests must always pass**: never commit with a failing test. The test suite is the
-  safety net for refactoring and simplification.
-- **Commit each finished topic before starting the next**: don't let unrelated changes
-  from different features pile up in one working tree — it makes a clean commit split
-  expensive later. One session let four unrelated topics pile up, and splitting them
-  afterwards meant reconstructing each slice by hand against a full end-state backup,
-  with no intermediate history left to split from.
-- **Prove a regression test catches the bug — red before green**: write the test
-  against the still-buggy code and watch it actually fail, *then* write the fix and
-  watch the test pass. Don't just reason that a test "should" fail on the old code —
-  a test that looks right but was never seen red is unverified, and writing it after
-  the fix already exists risks unconsciously shaping the assertion around whatever the
-  fix happens to produce. If a fix was already written before the test (e.g. the bug
-  and its cause were understood in the same pass), the fallback is to temporarily
-  revert the fix (or monkeypatch the specific buggy function back), confirm the test
-  fails, then restore the fix and confirm it passes — strictly weaker than true
-  test-first, but better than trusting an unverified test.
-- **Tests use pinned timestamps**: `datetime.now()` in tests undermines reproducibility.
-  Time is an input — pin it like any other. Production code that needs the current time
-  accepts an optional `now: datetime | None = None` parameter (defaulting to
-  `datetime.now(timezone.utc)`) so tests can inject a fixed value.
-- **Tests don't sleep a guessed duration — they wait for the real condition**: the same
-  "time is an input" rule applies to async/background-task synchronization, not just
-  wall-clock timestamps. `await asyncio.sleep(0.1); assert X` is both slow (every test
-  pays the full guessed duration) and fragile (too short → flaky on a loaded machine).
-  Fix: poll the actual predicate — `tests/helpers.py`'s `wait_until`/`wait_until_sync`
-  return the instant the condition holds, with a generous `timeout` as a safety net for
-  genuine failure only, not the expected wait. Prefer an even stronger fix where the
-  output has a deterministic terminator: `on4kst_irc_bridge.py`'s IRC registration flow
-  always ends in numeric 366, so tests `recv_until("366")` — zero guessing at all. Only
-  genuine negative assertions ("nothing arrives") still need a real bounded sleep, since
-  there's no true condition to poll for proving an absence. Adopting this cut the suite
-  from ~29s to ~3.5s and exposed one real race the old slack had been hiding.
-- **Verify against reality, not just against assertions.** Several classes of bug here
-  are structurally invisible to unit tests: how ffmpeg filter branches *combine*, how a
-  drawn frame actually looks, how a real radio's session state machine reacts. Render
-  the clip and decode a frame; capture the packets; measure against the real recording.
-  Every one of those has caught a bug that a green suite did not.
+TDD, red before green, pinned time, comment discipline and commit discipline are
+in the global CLAUDE.md and are not restated here. What this project adds:
+
 - **Concurrency is asyncio, not threads.** Everything concurrent here waits on I/O
-  or on a timer; nothing waits on the CPU. A single event loop expresses all of it,
-  and prompt_toolkit already runs one — `Application.run()` ends in `asyncio.run`,
-  so the logger has an event loop whether or not we use it. Threads buy nothing
-  against a socket and cost the one hazard a single-threaded loop cannot have: a
-  deadlock. `on4kst_irc_bridge.py` is the worked example, 32 coroutines and no
-  locks. When something must happen while something else waits, write a coroutine
-  and a task. The escape hatch is a genuinely blocking library call with no async
-  form — `asyncio.to_thread` at the boundary, holding no lock — and a thread that
-  needs a lock is a design that needs rethinking instead. FINDINGS.md has the audit
-  this rule came from, including the deadlock it found on the round's normal exit
-  path.
+  or on a timer; nothing waits on the CPU, and prompt_toolkit already runs a loop —
+  `Application.run()` ends in `asyncio.run`. Threads buy nothing against a socket
+  and cost the one hazard a single-threaded loop cannot have: a deadlock.
+  `on4kst_irc_bridge.py` is the worked example, 32 coroutines and no locks. When
+  something must happen while something else waits, write a coroutine and a task.
+  The escape hatch is a genuinely blocking library call with no async form —
+  `asyncio.to_thread` at the boundary, holding no lock — and a thread that needs a
+  lock is a design that needs rethinking instead. FINDINGS.md has the audit this
+  rule came from, including the deadlock it found on the round's normal exit path.
+- **What "verify against reality" means here**: how ffmpeg filter branches
+  *combine*, how a drawn frame actually looks and how a real radio's session state
+  machine reacts are all invisible to the unit suite. Render the clip and decode a
+  frame; capture the packets; measure against the real recording.
+- **Async tests poll, they don't sleep**: `tests/helpers.py` has
+  `wait_until`/`wait_until_sync`. Where a deterministic terminator exists, wait on
+  that instead — `on4kst_irc_bridge.py`'s IRC registration always ends in numeric
+  366, so its tests `recv_until("366")`.
 - **No visual glitches**: the logger UI must look professional at all times. Transient
   incorrect states (e.g. a dup highlight flashing for one frame during a state transition)
   are bugs.
@@ -119,14 +75,12 @@ are in `docs/`, and are referred to by bare filename everywhere.
 there at startup (uppercased); the grid locator is fetched from the ON4KST server
 via `/SHow CONFig` after login.
 
-**File layout — global databases live in `~`, per-round files in the CWD.** The
-whole stack runs on one laptop during a round, and a contest directory holds
-exactly one round. `puskas_logger.py` and `contest_video.py` enforce it: both
-refuse to start in the project root, since that is where a mistaken launch
-lands and several rounds' files in one directory cannot be told apart
-afterwards. `--hud-demo` and `--hud-theme-check` are exempt — they write one
-PNG and exit, and iterating the HUD's layout from the root is how they are
-meant to be used.
+**File layout — global databases live in `~`, per-round files in the CWD.** A
+contest directory holds exactly one round. `puskas_logger.py` and
+`contest_video.py` enforce it by refusing to start in the project root, where a
+mistaken launch lands and several rounds' files cannot be told apart afterwards.
+`--hud-demo` and `--hud-theme-check` are exempt — they write one PNG and exit,
+and iterating the HUD's layout from the root is how they are meant to be used.
 
 | Path | What |
 |---|---|
@@ -136,18 +90,13 @@ meant to be used.
 | `*.edi`, `*.jsonl`, `*.scope`, `*.cast`, `*.mp4` | one round's own files (CWD) |
 
 **Running**: this is one `uv` project, not a set of standalone scripts.
-Dependencies are declared once in `pyproject.toml` and locked in `uv.lock`;
-there is still no virtualenv to activate. Every component runs either as
-`uv run <script>.py` or directly by its `#!/usr/bin/env -S uv run` shebang —
-`uv` finds the project by walking up from the current directory, so a script
-launched from a round directory inside the project works, and one launched
-from outside the project does not. PIPELINE.md has the order they are actually
-used in.
-
-The scripts carried their own PEP 723 headers until the same four packages
-were *also* listed in `pyproject.toml` with a different version policy and
-only that side locked — so the test suite could resolve differently from a
-round, and nothing would say so.
+Dependencies are declared once in `pyproject.toml` and locked in `uv.lock` — no
+per-script PEP 723 headers, and no virtualenv to activate. Every component runs
+either as `uv run <script>.py` or directly by its `#!/usr/bin/env -S uv run`
+shebang — `uv` finds the project by walking up from the current directory, so a
+script launched from a round directory inside the project works, and one
+launched from outside the project does not. PIPELINE.md has the order they are
+actually used in.
 
 ## Testing
 
@@ -157,10 +106,10 @@ the only source of truth; CI runs the same config rather than a separately
 maintained list of steps.
 
 **Ruff policy**: both `ruff check` and `ruff format` run via pre-commit. Aligned
-assignment style is not preserved — `ruff format` collapses it, and that is
-accepted as worth avoiding the diff noise of realigning a whole block whenever
-one name's length changes. E501 (line length) and E701 (single-line `if …: return`
-in lookup functions) are suppressed for `ruff check`.
+assignment style is not preserved — `ruff format` collapses it, accepted as worth
+avoiding the diff noise of realigning a block whenever one name's length changes.
+E501 (line length) and E701 (single-line `if …: return` in lookup functions) are
+suppressed for `ruff check`.
 
 Run `uv run ruff check .` over the **whole project**, not just changed files —
 scoping it to one file has already missed a CI failure.
