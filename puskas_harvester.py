@@ -16,50 +16,19 @@ Usage:  uv run puskas_harvester.py
 import json
 import time
 import urllib.request
-from pathlib import Path
 
+from mrasz_api import (
+    BASE_URL,
+    CACHE_DIR,
+    HEADERS,
+    LIST_URL,
+    REQUEST_DELAY,
+    REQUEST_TIMEOUT,
+)
+from mrasz_api import cached_get as _cached_get
 from wiring import PUSKAS_DIR, SEEN_STATIONS
 
 CONTEST_ID = "67952021b55b621ae6619a4e"
-BASE_URL = "https://bb.mrasz.hu/nest"
-LIST_URL = "https://bb.mrasz.hu/nest/events/list?site=bb.mrasz.hu"
-CACHE_DIR = Path(".puskas_cache")
-REQUEST_DELAY = 0.3
-REQUEST_TIMEOUT = 15
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; PuskasHarvester/1.0)",
-    "Accept": "application/json",
-    "Referer": "https://bb.mrasz.hu/",
-}
-
-
-# ──────────────────────────────────────────────────────────────
-# Cache
-# ──────────────────────────────────────────────────────────────
-
-
-def _cache_path(key: str) -> Path:
-    CACHE_DIR.mkdir(exist_ok=True)
-    safe = key.replace("/", "_").replace("?", "_").replace("&", "_").replace("=", "_")
-    return CACHE_DIR / f"{safe}.json"
-
-
-def _cached_get(url: str) -> dict | list | None:
-    path = _cache_path(url.replace(BASE_URL, ""))
-    if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
-    try:
-        req = urllib.request.Request(url, headers=HEADERS)
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
-            data = json.loads(resp.read())
-        path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        time.sleep(REQUEST_DELAY)
-        return data
-    except Exception as e:
-        print(f"  [error] {url} → {e}")
-        return None
 
 
 # ──────────────────────────────────────────────────────────────

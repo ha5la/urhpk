@@ -1,7 +1,6 @@
 """Tests for puskas_harvester pure logic — no network, no filesystem side-effects."""
 
 import json
-from unittest.mock import MagicMock, patch
 
 import puskas_harvester
 from puskas_harvester import (
@@ -55,40 +54,6 @@ class TestFetchEventIds:
         ]
         (tmp_path / "events_list.json").write_text(json.dumps(events))
         assert fetch_event_ids() == ["puskas"]
-
-
-class TestCachedGet:
-    def test_returns_cached_data_without_network(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(puskas_harvester, "CACHE_DIR", tmp_path)
-        payload = [{"call": "HA5LA"}]
-        (tmp_path / "_endpoint.json").write_text(json.dumps(payload))
-        with patch("urllib.request.urlopen") as mock_urlopen:
-            result = puskas_harvester._cached_get(
-                puskas_harvester.BASE_URL + "/endpoint"
-            )
-        assert result == payload
-        mock_urlopen.assert_not_called()
-
-    def test_fetches_and_caches_on_miss(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(puskas_harvester, "CACHE_DIR", tmp_path)
-        payload = {"stations": 42}
-        mock_resp = MagicMock()
-        mock_resp.read.return_value = json.dumps(payload).encode()
-        mock_ctx = MagicMock()
-        mock_ctx.__enter__.return_value = mock_resp
-        with (
-            patch("urllib.request.urlopen", return_value=mock_ctx),
-            patch("time.sleep"),
-        ):
-            result = puskas_harvester._cached_get(puskas_harvester.BASE_URL + "/data")
-        assert result == payload
-        assert (tmp_path / "_data.json").exists()
-
-    def test_network_error_returns_none(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(puskas_harvester, "CACHE_DIR", tmp_path)
-        with patch("urllib.request.urlopen", side_effect=OSError("timeout")):
-            result = puskas_harvester._cached_get(puskas_harvester.BASE_URL + "/bad")
-        assert result is None
 
 
 class TestFetchClaimed:
