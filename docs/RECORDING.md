@@ -124,7 +124,7 @@ single PNG in about a second.
     transcribable 32.5-second exchange (a full report + locator handoff)
     was being skipped before decoding even started. There's no clean
     statistical gap between "long real over" and "genuine listening
-    period" the way there is for e.g. `FREQ_MATCH_TOLERANCE_HZ` — real
+    period" the way there is for e.g. the frequency change test — real
     segment durations form a continuum from 30s past 100s — so this is a
     modest, evidence-backed nudge for one confirmed case, not a broad
     guess; the other three gates still guard genuinely long listening

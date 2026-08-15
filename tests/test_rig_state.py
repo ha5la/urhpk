@@ -58,6 +58,62 @@ class TestTelemetryAlignment:
         s.freq_hz, s.mode, s.ptt = freq_hz, mode, ptt
         return s
 
+    def test_a_radio_dropout_blanks_the_qrg_instead_of_holding_a_stale_one(self):
+        # An explicit {"freq_hz": null} is the logger reporting that the radio
+        # went away, not silence about it. Carrying the last value forward
+        # through one left the QRG readout showing a frequency that nothing
+        # was tuned to for as long as the outage lasted.
+        segs = [
+            self._wav_seg(
+                datetime(2026, 7, 4, 11, 0, 0), 10.0, 0.0, 144174000, "CW", False
+            )
+        ]
+        telemetry = [
+            TelemetrySample(
+                datetime(2026, 7, 4, 11, 0, 5), None, None, None, rig_offline=True
+            )
+        ]
+        events = build_state_events(segs, telemetry, offset_h=0)
+        assert [(e[0], e[2].freq_hz, e[2].mode) for e in events] == [
+            (0.0, 144174000, "CW"),
+            (5.0, None, None),
+        ]
+
+    def test_a_segment_overrunning_the_next_does_not_pick_up_its_frequency(self):
+        # The radio stamps filenames to the whole second, so a segment's
+        # nominal span routinely runs past the next one's start -- 381 of the
+        # August round's 759 do, by up to 1.6 s. On the video timeline they
+        # are butted together and never overlap, so that overrun must not
+        # collect the next segment's own observation and end the current
+        # segment on a sub-second flicker of the frequency it QSY'd to.
+        segs = [
+            self._wav_seg(
+                datetime(2026, 7, 4, 11, 0, 0), 10.5, 0.0, 144174000, "CW", False
+            ),
+            self._wav_seg(
+                datetime(2026, 7, 4, 11, 0, 10), 5.0, 10.5, 432200000, "SSB", True
+            ),
+        ]
+        events = build_state_events(segs, [], offset_h=0)
+        assert [(e[0], e[1], e[2].freq_hz) for e in events] == [
+            (0.0, 10.5, 144174000),
+            (10.5, 15.5, 432200000),
+        ]
+
+    def test_a_disagreement_that_rounds_to_the_same_kilohertz_is_not_a_change(self):
+        # 600 Hz apart: one kHz once rounded, which is the resolution the QRG
+        # readout displays and the band lookup needs, but wider than the
+        # 500 Hz tolerance this test's predecessor was written against.
+        segs = [
+            self._wav_seg(
+                datetime(2026, 7, 4, 11, 0, 0), 10.0, 0.0, 144299700, "SSB", False
+            )
+        ]
+        telemetry = [
+            TelemetrySample(datetime(2026, 7, 4, 11, 0, 5), 144300300, "SSB", None)
+        ]
+        assert len(build_state_events(segs, telemetry, offset_h=0)) == 1
+
     def test_ptt_comes_from_wav_metadata_regardless_of_telemetry(self):
         # ptt never needs telemetry any more -- it's ground truth straight
         # from the WAV file itself (see build_state_events' docstring for
@@ -151,16 +207,14 @@ class TestTelemetryAlignment:
         assert (offline.freq_hz, offline.rig_offline) == (None, True)
 
     def test_small_wav_telemetry_disagreement_does_not_split(self):
-        # Regression test for a real bug found right after switching to WAV
-        # metadata as the seed: the WAV's own frequency and rigctld's (via
-        # telemetry) don't agree to the exact Hz even when nothing changed
-        # -- checked against the real July round's data, a systematic
-        # disagreement of 160/250/300/310 Hz (depending on band) shows up
-        # on nearly every segment's very first telemetry sample. Comparing
-        # them exactly turned that into a spurious extra run at the start
-        # of almost every segment. Real genuine retunes in the same data
-        # are >=1000 Hz (mostly round kHz steps) -- a clean gap, zero
-        # occurrences between 310 Hz and 1000 Hz.
+        # The two sources don't agree to the exact Hz even when nothing
+        # changed -- checked against the real July round's data, a systematic
+        # disagreement of 160/250/300/310 Hz (depending on band) shows up on
+        # nearly every segment's very first telemetry sample. Comparing them
+        # exactly turns that into a spurious extra run at the start of almost
+        # every segment. Real genuine retunes in the same data are >=1000 Hz
+        # (mostly round kHz steps) -- a clean gap, zero occurrences between
+        # 310 Hz and 1000 Hz.
         segs = [
             self._wav_seg(
                 datetime(2026, 7, 6, 16, 0, 37), 2.214, 142.533, 144299840, "SSB", True
@@ -172,7 +226,8 @@ class TestTelemetryAlignment:
         ]
         events = build_state_events(segs, telemetry, offset_h=0)
         assert len(events) == 1
-        assert events[0][2].freq_hz == 144299840  # stayed on the WAV's own value
+        # Whichever of the pair opened the run is kept; both display as 144.300.
+        assert events[0][2].freq_hz == 144300000
 
     def test_long_segment_splits_on_a_real_frequency_change(self):
         # Regression test for the original reported bug: a long idle/

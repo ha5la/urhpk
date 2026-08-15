@@ -423,12 +423,12 @@ field by field in individual functions:
     `az is not None` alone was a real bug caught in review, which showed the last
     known bearing for the rest of the video. Same pattern for the meters
     (`meters_offline`).
-  - **Frequencies are compared with `FREQ_MATCH_TOLERANCE_HZ` (500), never exactly**
-    — old recordings carry a systematic sub-kHz disagreement against the WAV value
-    that would otherwise look like a retune at the start of almost every segment.
-    New recordings don't (the cause was our own rounding — see FINDINGS.md), but the
-    tolerance stays for the old ones. Mode has no such problem; it is an exact
-    string match.
+  - **Frequencies are compared at kHz, never exactly** — old recordings carry a
+    systematic sub-kHz disagreement against the WAV value that would otherwise look
+    like a retune at the start of almost every segment. New recordings don't (the
+    cause was our own rounding — see FINDINGS.md), but the rounding stays for the
+    old ones, and kHz is what the QRG readout displays anyway. Mode has no such
+    problem; it is an exact string match.
 
 ### Pipeline
 

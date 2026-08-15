@@ -1,10 +1,12 @@
 """What the rig and rotator were doing, moment by moment.
 
-Two sources, in descending order of trust. A segment's ptt/freq_hz/mode at its
-own start come from the WAV file's embedded IC-9700 metadata (see
-timeline.read_wav_metadata) -- ground truth straight from the rig, with none of
-a 1 Hz poll's lag. The logger's `*-telemetry.jsonl` fills in drift *within* a
-long segment, and supplies az, which the WAV metadata does not carry at all.
+Two sources describe the same radio and neither is wholly better. `ptt` is the
+WAV file's embedded IC-9700 metadata alone (see timeline.read_wav_metadata),
+permanently, because a PTT transition is what cuts the file. freq_hz and mode
+are both sources merged as timestamped observations, latest-wins -- see
+rig_runs, and ARCHITECTURE.md's provenance table for the whole rule. The
+logger's `*-telemetry.jsonl` also supplies az and the meters, which the WAV
+metadata does not carry at all.
 
 The logger's `*-input.jsonl` is the third source: keystrokes and logged QSOs,
 used to place a QSO on the timeline more precisely than the EDI log's
@@ -13,6 +15,7 @@ minute-resolution timestamp can.
 
 from __future__ import annotations
 
+import bisect
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -140,36 +143,57 @@ def load_input_log(path: str) -> list[InputLogEvent]:
     return out
 
 
+def _khz(freq_hz: int | None) -> int | None:
+    """The resolution "did it change?" is asked at -- see rig_runs."""
+    return None if freq_hz is None else round(freq_hz / 1000)
+
+
 def rig_runs(
-    telemetry: list[TelemetrySample],
+    segs: list[Segment], telemetry: list[TelemetrySample], offset_h: int
 ) -> list[tuple[datetime, int | None, str | None]]:
     """(utc, freq_hz, mode) at every instant either of them changes.
 
     The one answer to "what was the radio tuned to, and in what mode, at time
-    t" -- see this module's docstring for why telemetry is the source of that
-    and the WAV metadata is not.
+    t". Both sources are read as plain timestamped observations of the same
+    radio and merged latest-wins, neither seeded from nor corrected by the
+    other, with no branch anywhere on which generation of round is being read
+    -- ARCHITECTURE.md's provenance table has why that is the whole rule.
 
-    A line silent about the rig carries the current pair forward; an explicit
-    `rig_offline` one ends the carry-forward with a (None, None) run, which is
-    the honest reading when the radio has gone away rather than merely stayed
-    put."""
+    A telemetry line silent about the rig carries the current pair forward; an
+    explicit `rig_offline` one ends the carry-forward with a (None, None) run,
+    which is the honest reading when the radio has gone away rather than
+    merely stayed put.
+
+    "Did it change?" is asked at kHz, the resolution the QRG readout displays
+    and the band lookup needs. The two sources do not agree below that -- the
+    WAV metadata has 10 Hz resolution and the old 1 Hz sampler re-parsed a
+    kHz-rounded string -- and comparing them exactly fragments the runs at
+    almost every segment boundary. A run keeps the value it began with, since
+    anything within it displays identically anyway."""
+    obs = [(t.t, t.freq_hz, t.mode, t.rig_offline) for t in telemetry]
+    # After telemetry, so that a WAV and a telemetry observation stamped the
+    # same second resolve to the WAV's: it is timed by the transition that cut
+    # the file, where a 1 Hz sample is timed by when the sampler got round to it.
+    obs += [
+        (s.wall - timedelta(hours=offset_h), s.freq_hz, s.mode, False)
+        for s in segs
+        if s.freq_hz is not None or s.mode is not None
+    ]
+
     runs: list[tuple[datetime, int | None, str | None]] = []
     freq_hz: int | None = None
     mode: str | None = None
-    for t in sorted(telemetry, key=lambda s: s.t):
-        if t.rig_offline:
+    for t, obs_freq, obs_mode, offline in sorted(obs, key=lambda o: o[0]):
+        if offline:
             freq_hz, mode = None, None
-        elif t.freq_hz is not None or t.mode is not None:
-            freq_hz = t.freq_hz if t.freq_hz is not None else freq_hz
-            mode = t.mode if t.mode is not None else mode
+        elif obs_freq is not None or obs_mode is not None:
+            freq_hz = obs_freq if obs_freq is not None else freq_hz
+            mode = obs_mode if obs_mode is not None else mode
         else:
             continue
-        if not runs or (freq_hz, mode) != runs[-1][1:]:
-            runs.append((t.t, freq_hz, mode))
+        if not runs or (_khz(freq_hz), mode) != (_khz(runs[-1][1]), runs[-1][2]):
+            runs.append((t, freq_hz, mode))
     return runs
-
-
-FREQ_MATCH_TOLERANCE_HZ = 500  # see build_state_events' docstring
 
 
 def build_state_events(
@@ -177,95 +201,61 @@ def build_state_events(
 ) -> list[tuple[float, float, SegState]]:
     """RX/TX + QRG/mode events, one per stretch those stay constant.
 
-    ptt/freq_hz/mode at a segment's own start come straight from
-    `Segment.ptt`/`.freq_hz`/`.mode` (read_wav_metadata) -- the WAV file's
-    own embedded IC-9700 recorder metadata, ground truth from the rig at
-    the exact instant it started recording, with none of a 1 Hz telemetry
-    poll's lag. A segment with no such metadata (rare -- e.g. a non-IC-9700
-    recording) is skipped entirely rather than guessed at.
+    freq_hz/mode are whatever rig_runs says the radio was doing over each
+    stretch of the segment, which is why a long segment with no PTT activity
+    at all (minutes of listening between overs) still splits where the
+    operator QSY'd, with nothing in the audio to cut the WAV on.
 
-    ptt never needs telemetry at all: unlike freq/mode it cannot
-    legitimately change mid-segment -- a real transition is exactly what
-    causes the recorder to cut a new WAV file -- so it's one value,
-    `s.ptt`, for the whole segment. (An earlier version tried to derive
-    ptt from telemetry, including a "last sample wins" fix for telemetry's
-    own polling lag -- all now unnecessary and removed, since the WAV
-    metadata has no lag to correct for in the first place.)
-
-    freq_hz/mode still benefit from telemetry, though: a long segment with
-    no PTT activity at all (minutes of listening/tuning between overs) can
-    still see the operator QSY with nothing to split the WAV on, so the
-    WAV's own metadata (fixed at file-creation time) only captures the
-    *starting* frequency/mode. Telemetry sub-divides the segment wherever a
-    later sample shows them actually changing -- seeded from the WAV's
-    starting value, not from telemetry, so a segment with no telemetry
-    change at all just keeps the WAV-sourced value for its whole span.
+    ptt is `s.ptt` alone, one value for the whole segment: unlike freq/mode it
+    cannot legitimately change mid-segment, because a real transition is
+    exactly what causes the recorder to cut a new file. A segment with no WAV
+    metadata at all (rare -- e.g. a non-IC-9700 recording) is skipped rather
+    than guessed at, since nothing then knows its ptt.
 
     Azimuth is deliberately *not* here, though it used to be: a run is
     whatever stretch freq/mode hold for, which can be minutes, and one
     number for all of it (the median of its samples) left the compass
     needle standing still through a real slew and then jumping at the run
-    boundary. It is its own time series now -- see hud_az_marks.
+    boundary. It is its own time series now -- see hud_az_marks."""
+    runs = rig_runs(segs, telemetry, offset_h)
+    run_times = [r[0] for r in runs]
 
-    Comparing the two frequency sources exactly (Hz for Hz) is unsound:
-    the WAV metadata and rigctld-via-telemetry don't agree to the exact
-    Hz even when nothing changed. Checked against this real round's own
-    data: a systematic disagreement of 160/250/300/310 Hz (depending on
-    band) shows up on *every* segment's very first telemetry sample, which
-    would otherwise look like a spurious retune right at the start of
-    almost every segment. Genuine retunes in the same data are >=1000 Hz
-    (mostly round kHz steps, as a human tuning by hand would produce) --
-    a clean gap, zero occurrences between 310 Hz and 1000 Hz -- so
-    FREQ_MATCH_TOLERANCE_HZ=500 safely separates "same frequency, two
-    slightly disagreeing sources" from "the operator actually retuned"."""
     events: list[tuple[float, float, SegState]] = []
-    for s in segs:
+    for i_seg, s in enumerate(segs):
         if s.ptt is None and s.freq_hz is None and s.mode is None:
             continue
 
         utc_start = s.wall - timedelta(hours=offset_h)
         utc_end = utc_start + timedelta(seconds=s.dur)
-        inside = sorted(
-            (t for t in telemetry if utc_start <= t.t < utc_end), key=lambda t: t.t
-        )
-
-        # Runs of consecutive (freq_hz, mode), seeded from the WAV's own
-        # metadata, not from telemetry -- only sub-divided when a later
-        # telemetry sample shows a genuine change within the segment
-        # (frequency beyond FREQ_MATCH_TOLERANCE_HZ, mode by exact string
-        # match -- mode has no equivalent rounding-disagreement problem).
-        runs: list[tuple[tuple, list[TelemetrySample]]] = [((s.freq_hz, s.mode), [])]
-        cur_freq, cur_mode = s.freq_hz, s.mode
-        for t in inside:
-            new_freq = t.freq_hz if t.freq_hz is not None else cur_freq
-            new_mode = t.mode if t.mode is not None else cur_mode
-            freq_changed = (
-                new_freq is not None
-                and cur_freq is not None
-                and abs(new_freq - cur_freq) > FREQ_MATCH_TOLERANCE_HZ
-            )
-            mode_changed = new_mode is not None and new_mode != cur_mode
-            if freq_changed or mode_changed:
-                cur_freq, cur_mode = new_freq, new_mode
-                runs.append(((cur_freq, cur_mode), [t]))
-            else:
-                runs[-1][1].append(t)
+        # Filenames are stamped to the whole second, so a segment's nominal
+        # span routinely runs past the next one's start -- half of every round
+        # on disk, by up to 1.6 s. The video timeline butts them together and
+        # they never overlap on it, so the overrun is an artefact and must not
+        # collect observations that belong to the segment after this one.
+        if i_seg + 1 < len(segs):
+            utc_end = min(utc_end, segs[i_seg + 1].wall - timedelta(hours=offset_h))
+        # The run in force at the segment's start, then every one beginning
+        # inside it. A segment carrying only ptt has contributed no
+        # observation of its own, so it can precede every run there is.
+        i = bisect.bisect_right(run_times, utc_start) - 1
+        held = (runs[i][1], runs[i][2]) if i >= 0 else (None, None)
+        spans: list[tuple[datetime, int | None, str | None]] = [(utc_start, *held)]
+        spans += runs[i + 1 : bisect.bisect_left(run_times, utc_end)]
 
         seg_end = s.audio_t + _eff(s)
-        for i, (key, samples) in enumerate(runs):
+        for k, (utc, freq_hz, mode) in enumerate(spans):
             start = (
                 s.audio_t
-                if i == 0
-                else audio_time_for(samples[0].t + timedelta(hours=offset_h), segs)
+                if k == 0
+                else audio_time_for(utc + timedelta(hours=offset_h), segs)
             )
             end = (
-                audio_time_for(runs[i + 1][1][0].t + timedelta(hours=offset_h), segs)
-                if i + 1 < len(runs)
+                audio_time_for(spans[k + 1][0] + timedelta(hours=offset_h), segs)
+                if k + 1 < len(spans)
                 else seg_end
             )
             if end <= start:
                 continue
-            freq_hz, mode = key
             events.append((start, end, SegState(ptt=s.ptt, freq_hz=freq_hz, mode=mode)))
     return events
 

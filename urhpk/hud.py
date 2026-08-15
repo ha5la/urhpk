@@ -316,17 +316,14 @@ def hud_chip_marks(
 ) -> list[tuple[float, str | None, str | None]]:
     """(video_t, band, mode) wherever the lit pair of chips changes.
 
-    Read from telemetry rather than from SegState for the same reason the
-    compass reads hud_az_marks: since icom_net the radio pushes freq/mode the
-    instant either changes, so this is the source that knows, and it keeps
-    reporting across the stretches where nothing was being recorded.
-
-    A line silent about the rig carries the current pair forward; an explicit
-    `rig_offline` one puts both chips out, which is the honest reading when
-    the radio has gone away rather than merely stayed put."""
+    Read from rig_runs rather than from SegState for the same reason the
+    compass reads hud_az_marks: a SegState run is whatever stretch freq/mode
+    hold for *within one segment*, so it says nothing across the stretches
+    where nothing was being recorded, which is exactly where the operator
+    tunes."""
     marks: list[tuple[float, str | None, str | None]] = []
     last: tuple[str | None, str | None] | None = None
-    for utc, freq_hz, mode in rig_runs(telemetry):
+    for utc, freq_hz, mode in rig_runs(segs, telemetry, offset_h):
         pair = (band_from_hz(freq_hz) if freq_hz else None, mode)
         if pair != last:
             marks.append((audio_time_for(utc + timedelta(hours=offset_h), segs), *pair))

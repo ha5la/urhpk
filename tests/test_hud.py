@@ -272,6 +272,24 @@ class TestHudSources:
             (3.0, "2M", "CW"),
         ]
 
+    def test_chip_marks_light_from_the_wav_metadata_when_a_round_has_no_telemetry(
+        self,
+    ):
+        # The July 4 rounds predate the telemetry log entirely -- 56 WAVs and
+        # no *-telemetry.jsonl at all. Reading telemetry alone left every chip
+        # dark for the whole video while the QRG readout beside them, which
+        # has always seen the WAV metadata, worked fine.
+        segs = [
+            _hud_seg(dur=10.0, audio_t=0.0, wall=datetime(2026, 8, 3, 20, 0, 0)),
+            _hud_seg(dur=10.0, audio_t=10.0, wall=datetime(2026, 8, 3, 20, 0, 10)),
+        ]
+        segs[0].freq_hz, segs[0].mode = 144174000, "CW"
+        segs[1].freq_hz, segs[1].mode = 432200000, "SSB"
+        assert hud.hud_chip_marks([], segs, offset_h=2) == [
+            (0.0, "2M", "CW"),
+            (10.0, "70CM", "SSB"),
+        ]
+
     def test_s_marks_read_the_scope_sweeps_own_centre_bins(self):
         segs = [_hud_seg()]  # 20:00 local == 18:00 UTC at offset 2
         ts = datetime(2026, 8, 3, 18, 0, 30, tzinfo=timezone.utc).timestamp()

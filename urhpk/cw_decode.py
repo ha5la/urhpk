@@ -86,7 +86,7 @@ DEBOUNCE_DIT_FRAC = 0.5  # on/off runs shorter than this fraction of the segment
 
 # The trust gate's four thresholds.
 MAX_OVER_S = 35.0  # a real over is short; longer is a listening period.
-# Unlike FREQ_MATCH_TOLERANCE_HZ there is no clean statistical
+# Unlike the frequency change test there is no clean statistical
 # gap to sit in -- real segment durations run continuously from
 # 30s past 100s -- so this is an evidence-backed nudge (was
 # 30.0) for one confirmed 32.5s exchange with a full locator,
