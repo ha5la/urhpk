@@ -547,6 +547,13 @@ def main() -> None:
         "cutoff, so a short preview is much faster to build)",
     )
     ap.add_argument(
+        "--no-video",
+        action="store_true",
+        help="stop after writing the chapters and .srt -- they are ready in "
+        "about a second, and checking them beats waiting out a whole render "
+        "to find the timeline wrong",
+    )
+    ap.add_argument(
         "--cast",
         help="asciinema cast (v2) recording of the logger/irssi terminal, "
         "shown as a large picture-in-picture -- synced from "
@@ -856,6 +863,9 @@ def main() -> None:
     with open(stem + ".srt", "w") as fh:
         fh.write(build_srt(qsos, windows))
     print(f"wrote {stem}.chapters.txt and {stem}.srt")
+
+    if args.no_video:
+        return
 
     wav = os.path.splitext(args.out)[0] + ".concat.wav"
     print("concatenating audio ...")

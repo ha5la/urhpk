@@ -57,6 +57,7 @@ band field, so this only matters for merging QSO lists, not for rendering.
 | `--webcam FILE` | Webcam/selfie clip, shown as a small picture-in-picture bottom-right; repeat for a round captured in several Alt+V clips |
 | `--webcam-offset SECONDS` | Manual fallback sync correction for `--webcam`, bypassing automatic sync entirely |
 | `--scope FILE` | `.scope` recording (from `puskas_logger.py`) — replaces the audio-derived waterfall with the radio's own spectrum wherever it covers |
+| `--no-video` | Stop after the chapters and `.srt` — they are ready in about a second, so a wrong timeline shows up without waiting out a render |
 | `--hud-demo OUT.png` | Write one HUD bar with dummy values and exit; needs no recording at all |
 | `--hud-preview OUT.png` | Write one HUD bar built from this recording at `--hud-preview-t SECONDS`, and exit |
 | `--hud-theme DIR` | HUD theme directory (`artwork.png` + `theme.json`), default the `hud-theme/` beside the script |
