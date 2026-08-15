@@ -19,6 +19,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -50,12 +51,18 @@ QSO 003 HA1VHF  2M CW
 """
 
 
-@pytest.fixture
-def rendered(tmp_path):
+class Render(NamedTuple):
+    stem: Path  # the output path with its suffix dropped
+    stdout: str
+
+
+@pytest.fixture(scope="module")
+def rendered(tmp_path_factory):
     if not ROUND.is_dir():
         pytest.skip(f"no recorded round at {ROUND}")
 
-    out = tmp_path / "out.mp4"
+    tmp = tmp_path_factory.mktemp("render")
+    out = tmp / "out.mp4"
     proc = subprocess.run(
         [
             "uv",
@@ -81,21 +88,21 @@ def rendered(tmp_path):
         timeout=300,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    return tmp_path / "out"
+    return Render(tmp / "out", proc.stdout)
 
 
 def test_the_chapters_are_the_ones_the_round_earned(rendered):
-    assert rendered.with_suffix(".chapters.txt").read_text() == CHAPTERS
+    assert rendered.stem.with_suffix(".chapters.txt").read_text() == CHAPTERS
 
 
 def test_the_captions_are_the_ones_the_round_earned(rendered):
-    assert rendered.with_suffix(".srt").read_text() == SRT
+    assert rendered.stem.with_suffix(".srt").read_text() == SRT
 
 
 def test_no_video_stops_before_the_render(rendered):
     """The flag's whole point: none of the expensive outputs exist."""
-    assert not rendered.with_suffix(".mp4").exists()
-    assert not rendered.with_suffix(".concat.wav").exists()
+    assert not rendered.stem.with_suffix(".mp4").exists()
+    assert not rendered.stem.with_suffix(".concat.wav").exists()
 
 
 if __name__ == "__main__":  # a quick manual run without pytest
