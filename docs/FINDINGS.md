@@ -326,6 +326,41 @@ above rather than trusting the settings, shows it in the toolbar and records it 
 telemetry. Measured drift with NTP working: four samples over 18 minutes spanned
 19-49 ms, with no trend — below what one poll of the monitor can even resolve.
 
+**...and `contest_video.py` then ignored every one of those records.** The offset
+is measured to ±25 ms and written ~24 times over a two-hour round, but
+`load_telemetry` never parsed the `clock_offset_s` key and nothing at render time
+referenced it. So every video the project has produced places its WAV-derived times
+(all the audio, hence the HUD, the chapters and the CW ticker) against its
+laptop-clock sources with an uncorrected offset whose size was sitting on disk the
+whole time.
+
+**Rejected: correlating polled PTT against WAV boundaries to measure the same
+offset.** Superficially attractive — a PTT transition is timestamped by the radio
+(the WAV) and by the laptop (telemetry), so the pair measures the difference. Two
+findings kill it:
+
+- **PTT cannot be had unsolicited.** Per the capture work above, the only
+  unsolicited pushes are freq/mode Transceive frames and scope sweeps; wfview polls
+  `1c 00` at 1–3 Hz. So the laptop-side stamp carries poll jitter that has to be
+  compensated rather than measured.
+- **The radio-side stamp is quantised to a whole second** — filename and `title`
+  tag alike — so each correlation observes the radio's clock to only ±0.5 s. Even
+  averaged over hundreds of transitions that lands in the same tens-of-milliseconds
+  range as the rollover burst, in exchange for a new CI-V polling path.
+
+That second point is a general limit, not an artifact of this approach: **the WAV
+timeline cannot be made sub-second accurate at all.** Corroborating evidence from
+the August round — inter-segment gaps computed from filenames range from −1.58 s to
++1.0 s, and a negative gap is physically impossible, so at least 1.5 s of that
+spread is quantisation rather than signal. The clock offset is worth removing
+anyway because it is *systematic* across every segment while the quantisation is
+random per segment; removing it removes a bias, it does not buy sub-second
+accuracy.
+
+Telemetry-side PTT keeps one live use unrelated to clocks: the S-meter slot
+switches to Po on transmit (see the meter findings), so anything consuming the
+meters needs PTT to label the reading.
+
 ## contest_video.py
 
 ### The webcam drift diagnosis
@@ -415,7 +450,9 @@ a directory-entry update, independent of size.
   sampler built `freq_hz` by re-parsing the logger's own toolbar string
   (`f"{freq_hz / 1e6:.3f}"`), quantising to the nearest kHz — 144299840 →
   `"144.300"` → 144300000, exactly the reported 160 Hz. New recordings don't have
-  it; the tolerance stays for the old ones.
+  it. The tolerance is gone: the change test now rounds both sources to kHz, which
+  is the resolution the QRG readout displays and the band lookup needs, so the
+  disagreement cannot express itself at all and no constant has to encode its size.
 - **Telemetry was overwhelmingly duplicate before it became change-only**: on the
   real July round only **616 of 9313** lines carried anything new.
 - **Rejected: making every real-over segment a snap candidate** for QSO timing,

@@ -343,18 +343,75 @@ unit-testable, and `hud_draw.py` knows nothing about where its numbers came from
 - **UTC offset is derived, not hardcoded**: EDI times are UTC, WAV filenames local;
   `derive_utc_offset` rounds the span-midpoint difference to whole hours, so DST
   handles itself.
-- **WAV metadata is ground truth for RX/TX and the starting QRG/mode.** The IC-9700
-  writes a `title` tag into every file with frequency, mode and RX/TX as of the
-  instant it started recording — no polling lag at all. `wav.read_wav_title` parses the
-  RIFF `LIST/INFO/INAM` chunk directly rather than shelling out to `ffprobe` per
-  file (6500× faster; see FINDINGS.md). `ptt` therefore needs no telemetry: it
-  cannot legitimately change mid-segment, since a real transition is exactly what
-  cuts a new file. freq/mode *can* change inside a long listening segment, which is
-  what telemetry sub-divides (`build_state_events`), seeded from the WAV value.
+### Which source is the truth, field by field
+
+The single most confusing thing in this codebase has been that two sources describe
+the same radio and neither is wholly better. Settled, and not to be re-litigated
+field by field in individual functions:
+
+| field | source of truth | the other source's role |
+|---|---|---|
+| `ptt` | **WAV metadata, always** | telemetry has no ptt field, by design |
+| `freq_hz`, `mode`, and the `band` derived from them | **telemetry** | WAV metadata is a genuine second observation, not a fallback |
+| radio↔laptop clock offset | **`clock_offset_s` in telemetry** | nothing else measures it |
+
+- **`ptt` is the WAV's alone, because a PTT transition is *what cuts the file*** —
+  the fact and its timestamp are the same event, so nothing can beat it. The
+  IC-9700 writes a `title` tag into every file with frequency, mode and RX/TX as of
+  the instant it started recording; `wav.read_wav_title` parses the RIFF
+  `LIST/INFO/INAM` chunk directly rather than shelling out to `ffprobe` per file
+  (6500× faster; see FINDINGS.md). ptt also cannot legitimately change mid-segment.
+  Telemetry carried ptt once (the July round still has it) and it was removed:
+  re-deriving it from a poll is a worse copy of a lossless record.
+- **freq/mode are the union of both sources as plain timestamped observations,
+  latest-wins** (`rig_runs`). Neither is seeded from nor corrected by the other, and
+  there is deliberately no branch on which generation of round is being read —
+  the right behaviour falls out of the timestamps:
+  - A WAV sample is *exactly* timed but exists only at segment boundaries.
+  - Pre-icom_net telemetry was a 1 Hz sample, so a freshly-cut segment genuinely
+    carries newer information and wins at that instant — which is why the WAV
+    metadata is not merely a fallback for old rounds.
+  - Post-icom_net telemetry is pushed the instant either value changes, so it is
+    denser and lag-free and dominates on its own.
+  - While the radio is disconnected telemetry stops producing samples entirely, but
+    the radio's own recorder keeps cutting WAVs, so the WAV samples take over.
+- **"Did it change?" is asked at kHz**, the resolution the QRG readout displays and
+  the band lookup needs. The two sources do not agree below that on old rounds
+  (WAV metadata has 10 Hz resolution, the old sampler re-parsed a kHz-rounded
+  string), and comparing them exactly fragments `state_events`, `cw_decode`'s CW
+  ranges and the HUD's frame reuse. Genuine retunes are kHz steps, so nothing real
+  is lost. This replaced a `FREQ_MATCH_TOLERANCE_HZ = 500` whose justification
+  needed archaeology to understand; see FINDINGS.md for that history.
+
+### Two independent timing errors, only one of which is fixable
+
+- **The radio's clock against this laptop's** — systematic across the whole round,
+  and *measured*: `_clock_monitor_run` pins it to ±25 ms every `CLOCK_SAMPLE_S` and
+  writes `{"t", "clock_offset_s"}`. Applied **piecewise** — each measurement holds
+  until the next — because the physical process is a clock that free-runs and is
+  then stepped by NTP, not one that drifts smoothly; interpolating would smooth
+  across exactly the discontinuity that matters, and the monitor already signals a
+  step by dropping to unknown. A round with no such records gets no correction.
+- **The 1-second resolution of a WAV's own timestamp** — the radio names files on
+  the SD card to the second, and the `title` tag is no finer, so each segment's
+  placement in wall time is quantised. This is *not* fixable from the recording and
+  no amount of clock correction touches it. It is random per segment, whereas the
+  clock offset is systematic, which is why removing the offset is still worth doing:
+  it removes a bias, it does not make the timeline sub-second accurate.
 - **Telemetry (`--telemetry`) is optional and partial by source.** Records mention
   only what changed — `{"t", "freq_hz", "mode"}` from the rig, `{"t", "az"}` from
   the rotator — so every field carries forward across the records that don't
-  mention it. Three rules that each cost a bug:
+  mention it. Four generations of it exist on disk, which is why the reader is
+  permissive and why "is telemetry present at all" is a real question:
+
+  | round | telemetry |
+  |---|---|
+  | `urhob2026cw`, `urhob2026mix` (Jul 4) | **none** — WAVs only |
+  | `2026-jul` (Jul 6) | one combined line per second, `az freq_hz mode ptt` |
+  | `2026-aug` (Aug 3) | one combined line per second, `az freq_hz mode` |
+  | `test`, `test2` (Aug 11–12) | change-driven, separate rig/rot/meters/clock records |
+
+  Three rules that each cost a bug:
   - **`load_telemetry` must accept both stamp precisions**, whole seconds (the
     original 1 Hz sampler) and microseconds (the current writer). Note the failure
     mode if it stops: it swallows a bad line via `except ValueError: continue`, so a
