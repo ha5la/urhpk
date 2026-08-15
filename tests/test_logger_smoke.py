@@ -31,7 +31,7 @@ import pytest
 
 from urhpk.wiring import RIG_SERVER_PORT
 
-pytestmark = pytest.mark.smoke
+pytestmark = [pytest.mark.smoke, pytest.mark.timeout(60)]
 
 LOGGER = str(Path(__file__).resolve().parent.parent / "puskas_logger.py")
 

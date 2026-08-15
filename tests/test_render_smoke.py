@@ -26,7 +26,7 @@ from typing import NamedTuple
 
 import pytest
 
-pytestmark = pytest.mark.smoke
+pytestmark = [pytest.mark.smoke, pytest.mark.timeout(60)]
 
 ROOT = Path(__file__).resolve().parent.parent
 ROUND = ROOT / "test"

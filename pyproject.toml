@@ -14,6 +14,7 @@ dev-dependencies = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "pytest-cov>=6.0",
+    "pytest-timeout>=2.3",
     "ruff>=0.9",
     "pre-commit>=4.0",
 ]
@@ -31,10 +32,19 @@ ignore = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["."]
-# Smoke tests start a real logger on a pty and cost ~20s; they are opt-in with
+# Smoke tests start a real logger on a pty and cost ~11s; they are opt-in with
 # `-m smoke` so the default run and pre-commit stay fast.
-addopts = "--cov=urhpk --cov=contest_video --cov=puskas_logger --cov=on4kst_irc_bridge --cov=puskas_harvester --cov=puskas_standings --cov=hamlib_supervisor --cov-report=term-missing --cov-report=html -m 'not smoke'"
+#
+# Coverage is not here: it costs ~25% of the run, and its share grows with the
+# size of the source rather than with test slowness, which would make the
+# suite's own budget (tests/conftest.py) measure the wrong thing. CI asks for
+# it explicitly, which is what produces the published htmlcov.
+addopts = "-m 'not smoke'"
 markers = ["smoke: drives a real process end to end; opt in with -m smoke"]
+# Anything slower than this is a hang or a guessed sleep -- the slowest honest
+# test measures an age growing over time and takes 1.12s.
+timeout = 5
+timeout_method = "signal"
 
 [tool.coverage.run]
 omit = ["tests/*"]

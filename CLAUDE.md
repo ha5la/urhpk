@@ -102,8 +102,16 @@ actually used in.
 
 Enforced by `pre-commit`, not by a checklist here — one-time setup per clone:
 `uv run pre-commit install`. What runs is defined in `.pre-commit-config.yaml`,
-the only source of truth; CI runs the same config rather than a separately
-maintained list of steps.
+the only source of truth; CI runs the same config, plus one step of its own that
+re-runs the suite under coverage to publish the report.
+
+**The suite has a budget**: 5 s per test (`pytest-timeout`, in
+`pyproject.toml`) and 12 s for the whole default run (`tests/conftest.py`,
+which prints the ten slowest tests when it trips). Coverage is deliberately not
+in `addopts` — its cost grows with the size of the source, which would make the
+budget measure the wrong thing — so the ceiling is quoted against a plain
+`uv run pytest`. It stays quiet in CI, whose shared runner is too variable to
+hold to a wall-clock number.
 
 **Ruff policy**: both `ruff check` and `ruff format` run via pre-commit. Aligned
 assignment style is not preserved — `ruff format` collapses it, accepted as worth
