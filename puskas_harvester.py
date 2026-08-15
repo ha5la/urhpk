@@ -14,17 +14,8 @@ Usage:  uv run puskas_harvester.py
 """
 
 import json
-import time
-import urllib.request
 
-from mrasz_api import (
-    BASE_URL,
-    CACHE_DIR,
-    HEADERS,
-    LIST_URL,
-    REQUEST_DELAY,
-    REQUEST_TIMEOUT,
-)
+from mrasz_api import BASE_URL, CACHE_DIR, EVENT_LIST_TTL, LIST_URL
 from mrasz_api import cached_get as _cached_get
 from wiring import PUSKAS_DIR, SEEN_STATIONS
 
@@ -37,23 +28,10 @@ CONTEST_ID = "67952021b55b621ae6619a4e"
 
 
 def fetch_event_ids() -> list[str]:
-    CACHE_DIR.mkdir(exist_ok=True)
-    list_cache = CACHE_DIR / "events_list.json"
-    if list_cache.exists():
-        data = json.loads(list_cache.read_text(encoding="utf-8"))
-    else:
-        print(f"  GET {LIST_URL}")
-        try:
-            req = urllib.request.Request(LIST_URL, headers=HEADERS)
-            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
-                data = json.loads(resp.read())
-            list_cache.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-            time.sleep(REQUEST_DELAY)
-        except Exception as e:
-            print(f"  [error] {LIST_URL} → {e}")
-            return []
+    print(f"  GET {LIST_URL}")
+    data = _cached_get(LIST_URL, max_age=EVENT_LIST_TTL)
+    if not data:
+        return []
 
     rounds = [
         e

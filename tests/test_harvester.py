@@ -2,6 +2,7 @@
 
 import json
 
+import mrasz_api
 import puskas_harvester
 from puskas_harvester import (
     CONTEST_ID,
@@ -10,6 +11,14 @@ from puskas_harvester import (
     fetch_qsos,
     fetch_round_codes,
 )
+
+
+def _stub_event_list(tmp_path, monkeypatch, events) -> None:
+    """Put `events` where cached_get will find them, and nowhere near the network."""
+    monkeypatch.setattr(mrasz_api, "CACHE_DIR", tmp_path)
+    mrasz_api.cache_path(mrasz_api.LIST_URL.replace(mrasz_api.BASE_URL, "")).write_text(
+        json.dumps(events)
+    )
 
 
 def _event(eid: str, deadline: str, claimed: bool = True) -> dict:
@@ -23,36 +32,42 @@ def _event(eid: str, deadline: str, claimed: bool = True) -> dict:
 
 class TestFetchEventIds:
     def test_returns_ids_oldest_submitdeadline_first(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(puskas_harvester, "CACHE_DIR", tmp_path)
-        events = [
-            _event("newest", "2026-05-11T22:59:00.000Z"),
-            _event("oldest", "2026-02-09T22:59:00.000Z"),
-            _event("middle", "2026-03-09T22:59:00.000Z"),
-        ]
-        (tmp_path / "events_list.json").write_text(json.dumps(events))
+        _stub_event_list(
+            tmp_path,
+            monkeypatch,
+            [
+                _event("newest", "2026-05-11T22:59:00.000Z"),
+                _event("oldest", "2026-02-09T22:59:00.000Z"),
+                _event("middle", "2026-03-09T22:59:00.000Z"),
+            ],
+        )
         assert fetch_event_ids() == ["oldest", "middle", "newest"]
 
     def test_excludes_unclaimed_events(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(puskas_harvester, "CACHE_DIR", tmp_path)
-        events = [
-            _event("claimed", "2026-03-09T22:59:00.000Z", claimed=True),
-            _event("unclaimed", "2026-04-13T21:59:00.000Z", claimed=False),
-        ]
-        (tmp_path / "events_list.json").write_text(json.dumps(events))
+        _stub_event_list(
+            tmp_path,
+            monkeypatch,
+            [
+                _event("claimed", "2026-03-09T22:59:00.000Z", claimed=True),
+                _event("unclaimed", "2026-04-13T21:59:00.000Z", claimed=False),
+            ],
+        )
         assert fetch_event_ids() == ["claimed"]
 
     def test_excludes_other_contests(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(puskas_harvester, "CACHE_DIR", tmp_path)
-        events = [
-            _event("puskas", "2026-03-09T22:59:00.000Z"),
-            {
-                "_id": "other",
-                "isClaimed": True,
-                "contest": {"_id": "000000000000000000000000"},
-                "submitDeadline": "2026-04-01T00:00:00.000Z",
-            },
-        ]
-        (tmp_path / "events_list.json").write_text(json.dumps(events))
+        _stub_event_list(
+            tmp_path,
+            monkeypatch,
+            [
+                _event("puskas", "2026-03-09T22:59:00.000Z"),
+                {
+                    "_id": "other",
+                    "isClaimed": True,
+                    "contest": {"_id": "000000000000000000000000"},
+                    "submitDeadline": "2026-04-01T00:00:00.000Z",
+                },
+            ],
+        )
         assert fetch_event_ids() == ["puskas"]
 
 
