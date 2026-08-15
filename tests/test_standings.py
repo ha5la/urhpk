@@ -327,3 +327,172 @@ class TestEventSelection:
         # 2026's own rounds carry their own evaluation; only earlier years are
         # borrowed, and only where the organiser has finished with them.
         assert [e["code"] for e in ps.history_events(events, 2026)] == ["PKUV-2025-2"]
+
+
+class TestFetchRound:
+    def _recording_get(self, monkeypatch, payloads):
+        calls = []
+
+        def fake_get(url, max_age=None, **kw):
+            calls.append((url, max_age))
+            for fragment, payload in payloads.items():
+                if fragment in url:
+                    return payload
+            return None
+
+        monkeypatch.setattr(ps, "cached_get", fake_get)
+        return calls
+
+    def _payload(self, callsign, score):
+        return [
+            {
+                "evalCategory": {"code": "PKUV-2026-08-SO-BP"},
+                "logs": [{"_id": {"callsign": callsign}, "score": score}],
+            }
+        ]
+
+    def test_an_evaluated_round_brings_back_both_scores(self, monkeypatch):
+        self._recording_get(
+            monkeypatch,
+            {
+                "claimed": self._payload("HA5LA", 3289),
+                "preliminary": self._payload("HA5LA", 3000),
+            },
+        )
+        rnd = ps.fetch_round({"_id": "e1", "code": "PKUV-2026-06", "isFinal": True})
+        assert rnd.claimed == {("SO-BP", "HA5LA"): 3289}
+        assert rnd.evaluated == {("SO-BP", "HA5LA"): 3000}
+        assert not rnd.pending
+
+    def test_an_evaluated_round_is_cached_forever(self, monkeypatch):
+        calls = self._recording_get(monkeypatch, {"claimed": [], "preliminary": []})
+        ps.fetch_round({"_id": "e1", "code": "PKUV-2026-06", "isFinal": True})
+        assert [max_age for _, max_age in calls] == [None, None]
+
+    def test_a_pending_round_is_not_asked_for_an_evaluation(self, monkeypatch):
+        calls = self._recording_get(
+            monkeypatch, {"claimed": self._payload("HA5LA", 3289)}
+        )
+        rnd = ps.fetch_round({"_id": "e2", "code": "PKUV-2026-08", "isFinal": False})
+        assert rnd.pending
+        assert [url.split("?")[0].rsplit("/", 1)[-1] for url, _ in calls] == ["claimed"]
+
+    def test_a_pending_round_expires_from_the_cache(self, monkeypatch):
+        calls = self._recording_get(monkeypatch, {"claimed": []})
+        ps.fetch_round({"_id": "e2", "code": "PKUV-2026-08", "isFinal": False})
+        assert calls[0][1] == ps.PENDING_TTL
+
+    def test_a_missing_payload_is_an_empty_round(self, monkeypatch):
+        self._recording_get(monkeypatch, {})
+        rnd = ps.fetch_round({"_id": "e3", "code": "PKUV-2026-08", "isFinal": False})
+        assert rnd.claimed == {}
+
+
+class TestCategoryForCallsign:
+    def test_the_most_recent_round_decides(self):
+        rounds = [
+            _round("R1", {("KEZDO", "HG5P"): 1}),
+            _round("R2", {("SO-BP", "HG5P"): 1}),
+        ]
+        assert ps.category_for_callsign(rounds, "HG5P") == "SO-BP"
+
+    def test_a_checklog_is_not_a_category(self):
+        rounds = [_round("R1", {("CHECKLOG", "HA5XX"): 0, ("SO-BP", "HA5XX"): 5})]
+        assert ps.category_for_callsign(rounds, "HA5XX") == "SO-BP"
+
+    def test_an_unknown_station_has_none(self):
+        assert ps.category_for_callsign([_round("R1", {})], "HA5LA") is None
+
+
+class TestRender:
+    def _rounds(self):
+        return [
+            _round(
+                "PKUV-2026-01",
+                {("SO-BP", "SLOPPY"): 100, ("SO-BP", "CLEAN"): 100},
+                {("SO-BP", "SLOPPY"): 50, ("SO-BP", "CLEAN"): 100},
+            ),
+            _round("PKUV-2026-02", {("SO-BP", "SLOPPY"): 300, ("SO-BP", "CLEAN"): 200}),
+        ]
+
+    def _render(self, me="CLEAN"):
+        rounds = self._rounds()
+        retention = Retention(rounds, min_samples=1)
+        return ps.render(standings(rounds, "SO-BP", retention), "SO-BP", rounds, me)
+
+    def test_names_the_evaluated_and_the_pending_rounds(self):
+        out = self._render()
+        assert "1 evaluated, 1 claimed only" in out
+        assert "PKUV-2026-01" in out and "PKUV-2026-02" in out
+
+    def test_marks_the_operators_own_row(self):
+        assert "* 1. CLEAN" in self._render(me="CLEAN")
+
+    def test_a_row_that_moved_carries_its_naive_place(self):
+        out = self._render()
+        assert "(naive #2)" in out  # CLEAN leads on adjusted, trails on naive
+        assert "(naive #1)" in out
+
+    def test_a_row_that_did_not_move_says_nothing(self):
+        rounds = [_round("PKUV-2026-01", {("SO-BP", "A"): 100})]
+        out = ps.render(standings(rounds, "SO-BP", Retention([])), "SO-BP", rounds, "A")
+        assert "naive #" not in out
+
+    def test_an_empty_category_says_so(self):
+        assert "(nobody)" in ps.render([], "SO-VI", [], None)
+
+
+class TestMain:
+    def _stub(self, monkeypatch, rounds, events=None):
+        monkeypatch.setattr(
+            ps, "contest_events", lambda: events or [_event("PKUV-2026-01")]
+        )
+        monkeypatch.setattr(ps, "fetch_round", lambda e: rounds[e["code"]])
+        monkeypatch.setattr(ps, "my_callsign", lambda: None)
+
+    def test_prints_the_table_for_the_operators_category(self, monkeypatch, capsys):
+        self._stub(
+            monkeypatch,
+            {"PKUV-2026-01": _round("PKUV-2026-01", {("SO-BP", "HA5LA"): 543})},
+        )
+        assert ps.main(["--callsign", "ha5la"]) == 0
+        out = capsys.readouterr().out
+        assert "SO-BP" in out
+        assert "* 1. HA5LA" in out
+
+    def test_an_explicit_category_overrides_the_callsign(self, monkeypatch, capsys):
+        self._stub(
+            monkeypatch,
+            {
+                "PKUV-2026-01": _round(
+                    "PKUV-2026-01",
+                    {("SO-BP", "HA5LA"): 543, ("SO-VI", "HA1VHF"): 7142},
+                )
+            },
+        )
+        assert ps.main(["--callsign", "HA5LA", "--category", "SO-VI"]) == 0
+        assert "HA1VHF" in capsys.readouterr().out
+
+    def test_a_year_without_rounds_is_an_error(self, monkeypatch, capsys):
+        self._stub(monkeypatch, {})
+        assert ps.main(["--year", "1999"]) == 1
+        assert "no 1999 rounds" in capsys.readouterr().err
+
+    def test_an_unplaceable_callsign_lists_the_categories(self, monkeypatch, capsys):
+        self._stub(
+            monkeypatch,
+            {"PKUV-2026-01": _round("PKUV-2026-01", {("SO-BP", "HA5LA"): 543})},
+        )
+        assert ps.main(["--callsign", "NOBODY"]) == 1
+        assert "SO-BP" in capsys.readouterr().err
+
+    def test_refresh_stops_pending_rounds_being_served_from_cache(
+        self, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(ps, "PENDING_TTL", 3600)
+        self._stub(
+            monkeypatch,
+            {"PKUV-2026-01": _round("PKUV-2026-01", {("SO-BP", "HA5LA"): 543})},
+        )
+        ps.main(["--callsign", "HA5LA", "--refresh"])
+        assert ps.PENDING_TTL == 0
