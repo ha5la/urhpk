@@ -10,6 +10,11 @@ dependencies = [
     "tqdm>=4.70.0",
 ]
 
+[project.optional-dependencies]
+# Render-only, and 50 MB of it: contest_video.py asks for this group in its own
+# shebang so the logger's environment on the contest laptop stays without it.
+render = ["opencv-python-headless>=4.10"]
+
 [tool.uv]
 dev-dependencies = [
     "pytest>=8.0",
