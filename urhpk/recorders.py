@@ -23,6 +23,11 @@ from urhpk import icom_net, webcam_log
 
 WEBCAM_DEVICE = "/dev/video0"  # find with: v4l2-ctl --list-devices
 WEBCAM_AUDIO_SOURCE = "default"  # find with: pactl list short sources
+# The capture mode, pinned -- see _webcam_capture_cmd. Check a new camera's
+# own table with: v4l2-ctl -d /dev/video0 --list-formats-ext
+WEBCAM_FORMAT = "mjpeg"
+WEBCAM_SIZE = "848x480"
+WEBCAM_FPS = "30"
 
 
 # ──────────────────────────────────────────────────────────────
@@ -237,6 +242,21 @@ def _webcam_capture_cmd(device: str, audio_source: str, out_path: str) -> list[s
     for a multi-hour round without competing for CPU with the radio/rotator
     threads or the UI itself.
 
+    The capture mode is pinned because ffmpeg otherwise inherits whatever the
+    last application left the camera in, and rounds recorded at different
+    modes without anyone choosing one: YUYV 1280x720 for a real round, which
+    this camera's USB bandwidth caps at 10fps against a 30fps render, and
+    640x480 for the test captures. All three parts matter --
+
+    - mjpeg, because YUYV only reaches 30fps below 848x480 here;
+    - 848x480, because the 4:3 modes are a horizontal crop of the sensor
+      (640x480 sees 76% of the width 1280x720 does, measured by feature-
+      matching one frame of each), and horizontal is the axis the PiP's face
+      framing pans along. 720p costs 2280 MiB/h against 960 and lands in a
+      245x250 recess either way;
+    - 30, matching RENDER_FPS, so the PiP's motion is the camera's rather
+      than a resampler's.
+
     -use_wallclock_as_timestamps 1 on the v4l2 input stamps every captured
     frame with the real gettimeofday wallclock, so ffmpeg logs an exact
     frame-0 UTC start in the *-webcam.log. webcam_finalize_name reads it back
@@ -253,6 +273,12 @@ def _webcam_capture_cmd(device: str, audio_source: str, out_path: str) -> list[s
         "-y",
         "-f",
         "v4l2",
+        "-input_format",
+        WEBCAM_FORMAT,
+        "-video_size",
+        WEBCAM_SIZE,
+        "-framerate",
+        WEBCAM_FPS,
         "-use_wallclock_as_timestamps",
         "1",
         "-i",

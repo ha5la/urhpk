@@ -1181,6 +1181,28 @@ class TestWebcamCaptureCmd:
         # before the camera's own -i /dev/video0 (an input option)
         assert i < cmd.index("/dev/video0") - 1
 
+    def test_pins_the_capture_mode(self):
+        # Left unpinned, ffmpeg inherits whatever mode the last application
+        # left the camera in: one real round recorded YUYV 1280x720, which the
+        # USB bandwidth caps at 10fps, and the test captures got 640x480. All
+        # three must be input options, before the camera's -i.
+        cmd = _webcam_capture_cmd("/dev/video0", "default", "out.mp4")
+        for flag, value in (
+            ("-input_format", "mjpeg"),
+            ("-video_size", "848x480"),
+            ("-framerate", "30"),
+        ):
+            assert cmd[cmd.index(flag) + 1] == value
+            assert cmd.index(flag) < cmd.index("/dev/video0") - 1
+
+    def test_capture_is_sixteen_by_nine(self):
+        # The 4:3 modes are a horizontal crop of this sensor -- 640x480 sees
+        # 76% of the width 1280x720 does -- and horizontal is the axis the
+        # PiP's face framing pans along.
+        cmd = _webcam_capture_cmd("/dev/video0", "default", "out.mp4")
+        w, h = (int(v) for v in cmd[cmd.index("-video_size") + 1].split("x"))
+        assert w / h == pytest.approx(16 / 9, abs=0.02)
+
 
 class TestWebcamPreciseStart:
     def test_parses_video_input_start_time(self, tmp_path):

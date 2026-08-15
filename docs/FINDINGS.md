@@ -448,6 +448,48 @@ render — 4 %. Hence no cache and no sidecar. Keyframe-only decoding would cost
 1 min instead, but a keyframe every 25 s is 288 samples for the median to stand
 on rather than 1,440.
 
+### The webcam capture mode, and why 4:3 is the wrong shape
+
+Found while asking why the August clip was 1280×720 at 10 fps and the test
+captures 640×480: `_webcam_capture_cmd` passed no `-input_format`,
+`-video_size` or `-framerate`, so ffmpeg inherited whatever mode the last
+application had left the camera in. Nobody had chosen either.
+
+This camera's own table (`v4l2-ctl --list-formats-ext`) explains the 10 fps —
+uncompressed YUYV at 720p is USB-bandwidth-capped:
+
+| format | 1280×720 | 848×480 | 640×480 |
+|---|---|---|---|
+| YUYV | 10 fps | 20 fps | 30 fps |
+| MJPG | 30 fps | 30 fps | 30 fps |
+
+**The 4:3 modes are a horizontal crop of the sensor, not a taller view of it.**
+Measured by capturing one frame in each mode and feature-matching them against
+the 720p frame (ORB + `estimateAffinePartial2D`):
+
+| mode | horizontal field | vertical field |
+|---|---|---|
+| 848×480 | 98.2 % of 720p | 98.9 % |
+| 640×360 | 99.6 % | 99.6 % |
+| 640×480 | **75.9 %** | 101.2 % |
+
+That 24 % is spent on exactly the axis the PiP's face framing pans along, which
+rules 640×480 out despite it being the one 4:3 mode that reaches 30 fps
+uncompressed.
+
+Sustained rate and cost, measured with the logger's own encoder settings over
+30 s each (a 20 s sample is contaminated by camera warmup and reads ~27 fps):
+
+| mode | measured | disk | crop into the 245×250 recess |
+|---|---|---|---|
+| 640×360 | 30.0 fps | 600 MiB/h | 353×360 → 1.44× downscale |
+| **848×480** | 30.0 fps | 960 MiB/h | 470×480 → 1.92× |
+| 1280×720 | 30.0 fps | 2280 MiB/h | 706×720 → 2.88× |
+
+848×480 is what is pinned: the full sensor field, 30 fps to match `RENDER_FPS`,
+and under half the disk August spent to record a third of the frame rate
+(4,055 MiB for that round).
+
 ### Terminal PiP (pyte + tmux)
 
 - **Stock pyte silently drops three CSI sequences tmux needs.** tmux clears or
