@@ -40,6 +40,7 @@ import wiring
 from cast_render import parse_cast_header, render_cast_video
 from chapters import build_chapters, build_srt
 from cw_decode import (
+    MAX_OVER_S,
     decode_round,
 )
 from hud import (
@@ -764,9 +765,10 @@ def main() -> None:
     decoded = sum(len(s.events) for s in segs) + sum(len(ev) for _, _, _, ev in cw_raw)
     trusted_overs = sum(1 for s in segs if s.events) + len(cw_raw)
     print(f"  {decoded} characters from {trusted_overs} trusted overs")
-    if cw_raw:
+    recovered = sum(1 for s, _, _, _ in cw_raw if s.dur > MAX_OVER_S)
+    if recovered:
         print(
-            f"  including {len(cw_raw)} CW exchange(s) recovered from "
+            f"  including {recovered} CW exchange(s) recovered from "
             f"otherwise-too-long listening segments"
         )
 

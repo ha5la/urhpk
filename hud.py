@@ -21,34 +21,20 @@ from scope_render import SCOPE_AMP_MAX
 from timeline import Qso, Segment, _eff, audio_time_for
 
 
-def _mode_at(t: float, state_events: list[tuple[float, float, SegState]]) -> str | None:
-    for start, end, st in state_events:
-        if start <= t < end:
-            return st.mode
-    return None
-
-
 def ticker_chunks(
     segs: list[Segment],
-    state_events: list[tuple[float, float, SegState]] | None,
     cw_spans: list[tuple[float, float, list[CharEvent]]] | None,
 ) -> list[tuple[float, float, list[CharEvent]]]:
     """Trusted CW content as one chronological list of (start, end, events).
 
-    Two sources merge here: segments decoded whole (dur <= MAX_OVER_S, one
-    chunk each), and telemetry-confirmed CW sub-ranges recovered from an
-    otherwise-too-long segment we only listened to (see decode_cw_subranges)
-    -- possibly several per segment, since we may have followed more than one
-    on-air exchange without ever transmitting ourselves. Segments telemetry
-    confirms were *not* CW are skipped outright: the decoder runs blind on
-    every segment (there's no way to know the mode in advance) and gate_events
-    rejects most non-CW noise, but a strong tone in voice audio can
-    occasionally still slip through trusted -- telemetry's own mode is ground
-    truth where we have it."""
+    Two sources merge here: the CW-mode spans decode_round confirmed against
+    telemetry -- possibly several per segment, since we may have followed
+    more than one on-air exchange without ever transmitting ourselves -- and
+    the whole-segment decode of any segment whose mode was never known at
+    all. Both have already been judged; nothing is filtered here."""
     chunks: list[tuple[float, float, list[CharEvent]]] = []
     for s in segs:
-        mode = _mode_at(s.audio_t, state_events) if state_events is not None else None
-        if s.events and (mode is None or mode == "CW"):
+        if s.events:
             chunks.append((s.audio_t, s.audio_t + _eff(s), s.events))
     chunks.extend(cw_spans or [])
     chunks.sort(key=lambda c: c[0])
@@ -520,5 +506,5 @@ def build_hud_timeline(
         az_marks=hud_az_marks(telemetry or [], segs, offset_h),
         s_marks=hud_s_marks(scope_records or [], segs, offset_h),
         meter_marks=hud_meter_marks(telemetry or [], segs, offset_h),
-        stream=ticker_stream(ticker_chunks(segs, state_events, cw_spans)),
+        stream=ticker_stream(ticker_chunks(segs, cw_spans)),
     )

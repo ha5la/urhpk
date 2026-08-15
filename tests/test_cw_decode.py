@@ -16,6 +16,7 @@ from cw_decode import (
     _quality,
     cw_subranges,
     decode_cw_subranges,
+    decode_round,
     decode_segment,
     gate_events,
 )
@@ -359,12 +360,13 @@ class TestGate:
         assert _dominance("TTTTTTTT") == 1.0
 
 
-class TestLongSegmentCwRecovery:
-    """decode_cw_subranges recovers CW content from a segment too long to
-    decode as a whole (see MAX_OVER_S) -- e.g. two other stations
-    negotiating a CW frequency over voice, working each other in CW, then
-    moving on, all while we just listened without ever transmitting
-    ourselves, so our own recorder never split the file."""
+class TestTelemetryConfirmedCwDecoding:
+    """decode_cw_subranges decodes the CW-mode spans telemetry confirms
+    within a segment, whatever the segment's own starting mode was and
+    however long the segment is -- e.g. two other stations negotiating a CW
+    frequency over voice, working each other in CW, then moving on, all
+    while we just listened without ever transmitting ourselves, so our own
+    recorder never split the file."""
 
     def test_gate_events_check_duration_false_bypasses_length_but_not_quality(self):
         ev = [CharEvent(0.1 * i, c) for i, c in enumerate("HA5LA DE HG7F")]
@@ -443,6 +445,66 @@ class TestLongSegmentCwRecovery:
         # nothing should be extracted or decoded
         state_events = [(0.0, total_dur, SegState(mode="SSB"))]
         assert decode_cw_subranges(seg, state_events, PITCH) == []
+
+    def test_decode_round_follows_a_switch_into_cw_inside_a_short_segment(
+        self, tmp_path
+    ):
+        # Regression test for a real case: a listening segment well under
+        # MAX_OVER_S that started in SSB and was switched to CW partway.
+        # The CW is real and decodable, and the mode the segment happened to
+        # start in is not what decides whether it is decoded.
+        p = str(tmp_path / "20260706_165056A.wav")
+        text = "TEST HA5MIG"
+        _write_long_wav_with_cw_window(p, 30.0, 10.0, text)
+        seg = Segment(p, datetime(2026, 7, 6, 16, 50, 56), 30.0, 0.0, mode="SSB")
+        assert seg.dur <= MAX_OVER_S
+
+        state_events = [
+            (0.0, 10.0, SegState(mode="SSB")),
+            (10.0, 30.0, SegState(mode="CW")),
+        ]
+        spans = decode_round([seg], state_events, PITCH)
+        assert len(spans) == 1
+        s, t0, _, events = spans[0]
+        assert s is seg and abs(t0 - 10.0) < 0.01
+        assert "".join(e.ch for e in events).strip() == text
+        # ... and the SSB head is not decoded alongside it
+        assert seg.events == []
+
+    def test_decode_round_ignores_cw_audio_after_a_switch_out_of_cw(self, tmp_path):
+        # The mirror case, also real: the segment started in CW and was
+        # switched away partway. A strong tone in the voice audio that
+        # follows can pass the trust gate on its own, and reached the ticker
+        # as one confirmed 59-character run of noise.
+        p = str(tmp_path / "20260706_170747A.wav")
+        _write_long_wav_with_cw_window(p, 30.0, 15.0, "TEST HA5MIG")
+        seg = Segment(p, datetime(2026, 7, 6, 17, 7, 47), 30.0, 0.0, mode="CW")
+        state_events = [
+            (0.0, 13.0, SegState(mode="CW")),
+            (13.0, 30.0, SegState(mode="SSB")),
+        ]
+        assert decode_round([seg], state_events, PITCH) == []
+        assert seg.events == []
+
+    def test_decode_round_decodes_a_segment_with_no_state_of_its_own_whole(
+        self, tmp_path
+    ):
+        # build_state_events skips a segment whose WAV carries no IC-9700
+        # metadata, so there is no confirmed mode to follow and nothing to
+        # extract. Such a segment keeps the mode-blind whole-file decode.
+        p = str(tmp_path / "20260704_120000A.wav")
+        text = "HG7F DE HA5LA"
+        _write_cw(p, text, wpm=24)
+        w = wave.open(p)
+        dur = w.getnframes() / w.getframerate()
+        w.close()
+        seg = Segment(p, datetime(2026, 7, 4, 12, 0, 0), dur, 0.0)
+        assert seg.mode is None
+
+        assert decode_round([seg], [], PITCH) == []
+        assert "".join(e.ch for e in seg.events).replace(" ", "") == text.replace(
+            " ", ""
+        )
 
     def test_remap_audio_t_preserves_a_long_segment_with_recovered_cw(self):
         # Without the exemption, --skip-gaps' outpoint trimming in

@@ -363,14 +363,19 @@ intermediate wav.
   since `gate_events` would reject it on duration alone — that alone roughly halved
   decode time. The pitch is auto-detected per segment; `--pitch` is only a fallback
   for when nothing is found at all.
-- **`decode_cw_subranges` recovers CW hidden inside a long segment** — our recorder
-  only splits on *our* PTT, so listening to two other stations work each other stays
-  one long file. It decodes the telemetry-confirmed CW sub-ranges within it, with
-  the duration gate disabled (`check_duration=False`): mode confirmation is stronger
-  evidence than length, and a two-way exchange between others can legitimately run
-  longer than one of our overs. Its output is kept **out** of `s.events`, so
-  `--skip-gaps` needs an explicit `cw_span_segs` exemption or `remap_audio_t` would
-  trim away the very audio just recovered.
+- **What gets decoded is a telemetry-confirmed CW span, not a segment** — our
+  recorder only splits on *our* PTT, so a segment's own recorded mode is only its
+  mode at the instant the file was cut, and anything from a mid-over retune to two
+  other stations working each other in CW happens inside one file. `decode_round`
+  asks `cw_subranges` for the CW-mode spans within each segment and decodes those,
+  with the duration gate disabled (`check_duration=False`): mode confirmation is
+  stronger evidence than length, and a two-way exchange between others can
+  legitimately run longer than one of our overs. Touching spans are joined first —
+  a run also ends at every retune, and a one-second sliver has too few ON runs for
+  `_estimate_dit`. The output is kept **out** of `s.events`, so `--skip-gaps` needs
+  an explicit `cw_span_segs` exemption or `remap_audio_t` would trim away the very
+  audio just recovered. A segment whose WAV carries no IC-9700 metadata has no
+  known mode at all and keeps the mode-blind whole-file decode.
 - **`--duration SECONDS` trims before the decode loop**, not after — decoding is the
   dominant cost, so a 10-minute preview of a 2-hour round decodes ~12× less audio.
   QSOs past the cutoff are dropped before chapters/SRT are built.

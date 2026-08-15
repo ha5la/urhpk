@@ -352,10 +352,10 @@ def _cw_segs():
     ]  # fmt: skip
 
 
-def _ticker_at(t, segs, state_events=None, cw_spans=None):
+def _ticker_at(t, segs, cw_spans=None):
     tl = hud.HudTimeline(
         segs=segs,
-        stream=hud.ticker_stream(hud.ticker_chunks(segs, state_events, cw_spans)),
+        stream=hud.ticker_stream(hud.ticker_chunks(segs, cw_spans)),
     )
     return "".join(ch for _, ch in tl.at(t).ticker)
 
@@ -391,7 +391,7 @@ class TestTickerScrolling:
             events=[CharEvent(t, c) for t, c in keyed],
         )  # fmt: skip
         return hud.HudTimeline(
-            segs=[seg], stream=hud.ticker_stream(hud.ticker_chunks([seg], None, None))
+            segs=[seg], stream=hud.ticker_stream(hud.ticker_chunks([seg], None))
         )
 
     def _spacing(self, tl, t):
@@ -427,24 +427,3 @@ class TestTickerScrolling:
     def test_fast_keying_never_overlaps(self):
         tl = self._tl([(i * 0.01, c) for i, c in enumerate("ABCDE")])
         assert self._spacing(tl, 0.2) == [hud.HUD_TICKER_CELL_COLS] * 4
-
-
-class TestTickerModeGating:
-    def _segs(self):
-        return _cw_segs()
-
-    def test_hidden_when_telemetry_says_not_cw(self):
-        # The decoder runs blind on every segment and a strong tone in voice
-        # audio can occasionally slip past gate_events; telemetry's own mode
-        # is ground truth where we have it.
-        state = [(0.0, 5.0, SegState(False, 144300000, "SSB"))]
-        assert _ticker_at(1.0, self._segs(), state) == ""
-
-    def test_shown_when_telemetry_says_cw(self):
-        state = [(0.0, 5.0, SegState(False, 144174000, "CW"))]
-        assert _ticker_at(1.5, self._segs(), state) == "HI"
-
-    def test_shown_when_mode_is_unknown(self):
-        # No positive evidence it is *not* CW -- e.g. no --telemetry at all --
-        # so keep the decode rather than suppressing it.
-        assert _ticker_at(1.5, self._segs(), None) == "HI"

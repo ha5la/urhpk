@@ -452,25 +452,43 @@ def decode_cw_subranges(
     return out
 
 
+def _mode_is_known(
+    seg: Segment, state_events: list[tuple[float, float, SegState]]
+) -> bool:
+    """Whether anything at all is known about what mode `seg` was recorded
+    in. False only for a segment build_state_events skipped -- one whose WAV
+    carries no IC-9700 metadata, so there is neither a starting mode to seed
+    from nor any way to place a telemetry sample inside it."""
+    seg_start, seg_end = seg.audio_t, seg.audio_t + seg.dur
+    return any(end > seg_start and start < seg_end for start, end, _ in state_events)
+
+
 def decode_round(
     segs: list[Segment],
     state_events: list[tuple[float, float, SegState]],
     pitch: float = 600.0,
 ) -> list[tuple[Segment, float, float, list[CharEvent]]]:
-    """Decode every segment of a round, populating each one's `.events` and
-    returning the sub-ranges recovered from the segments too long to decode
-    as a whole.
+    """Decode a round's CW, as (segment, t0, t1, events) per decoded span.
 
-    Segments longer than MAX_OVER_S are never decoded as a whole (see
-    decode_segment) -- but one can still contain a real CW exchange between
-    *other* stations that we only listened to, with no PTT of our own to
-    split the file on. decode_cw_subranges recovers those from state_events'
-    telemetry-confirmed CW sub-ranges. Offsets stay segment-relative (t0, t1)
-    rather than resolved to absolute video-timeline time here, so they stay
-    valid even if remap_audio_t (--skip-gaps) later shifts audio_t."""
+    Wherever the mode is known, the CW-mode spans state_events confirms are
+    what gets decoded -- not the segment. The mode a segment was recorded in
+    is only its mode at the instant the recorder cut the file: our own
+    recorder splits on our own PTT alone, so anything from a mid-over retune
+    to two other stations negotiating a CW frequency over voice and then
+    working each other happens inside one file, whatever its length. Deciding
+    from the segment both missed the CW that started after the file did and
+    trusted the voice audio that followed CW which stopped before it ended.
+
+    Offsets stay segment-relative (t0, t1) rather than resolved to absolute
+    video-timeline time here, so they stay valid even if remap_audio_t
+    (--skip-gaps) later shifts audio_t.
+
+    A segment with no known mode at all is decoded whole onto its own
+    `.events`, mode-blind, with the trust gate the only judge -- there is
+    nothing to extract and nothing better to do."""
     out: list[tuple[Segment, float, float, list[CharEvent]]] = []
     for s in segs:
-        if s.dur > MAX_OVER_S:
+        if _mode_is_known(s, state_events):
             for t0, t1, events in decode_cw_subranges(s, state_events, pitch):
                 out.append((s, t0, t1, events))
             continue

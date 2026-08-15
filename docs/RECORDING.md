@@ -80,15 +80,17 @@ single PNG in about a second.
   is robust per file. Segments longer than `MAX_OVER_S` (35 s) are skipped before
   any signal processing at all, since they'd be rejected on duration alone
   regardless of decode quality.
-- **A segment we only listened to can still hide CW between *other* stations**
-  if it runs past `MAX_OVER_S` (e.g. we followed someone else's whole
-  exchange without ever transmitting). `decode_cw_subranges`/`cw_subranges`
-  recover this: they find telemetry-confirmed CW-mode sub-ranges inside the
-  long segment and decode just those, without the duration gate (the
-  sub-range's own length isn't suspicious the way an unexplained long
-  segment is — telemetry mode confirmation is already stronger evidence of
-  genuine CW than length). Needs `--telemetry`; without it, nothing inside
-  an over-length segment is ever recovered.
+- **CW is looked for where telemetry says the radio was in CW**, not where a
+  segment says it started in CW. The mode stamped in a WAV is the mode at the
+  instant the recorder cut the file, and the radio can be switched afterwards —
+  either way round. `decode_cw_subranges`/`cw_subranges` find the
+  telemetry-confirmed CW-mode sub-ranges inside a segment and decode just those,
+  without the duration gate (a sub-range's own length isn't suspicious the way an
+  unexplained long segment is — telemetry mode confirmation is already stronger
+  evidence of genuine CW than length). This is also how CW between *other*
+  stations is recovered from a segment we only listened to for minutes without
+  ever transmitting. Needs `--telemetry` to find a change the WAV doesn't know
+  about; without it the WAV's own starting mode is all there is.
 - **CW tone is auto-detected per segment**, not assumed to be 600 Hz (IC-9700
   sidetone default) for the whole round — `--pitch` is now only a fallback
   for the rare case `_detect_pitch` finds nothing (e.g. true silence). Found
