@@ -26,6 +26,7 @@ Amateur radio contest toolset for the Puskás URH Kupa, plus a general-purpose
 uv run puskas_harvester.py          # once, before the round
 ./sync-clock.sh                     # right before the round starts
 ./run-recorded-round.sh             # right before the round starts
+uv run contest_video.py -o out.mp4  # after it, from the round directory
 ```
 
 See [docs/PIPELINE.md](docs/PIPELINE.md) for the round from harvest to upload,

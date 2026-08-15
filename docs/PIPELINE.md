@@ -91,6 +91,14 @@ Copy the WAV segments off the radio's SD card into `recording/` next to the log,
 then:
 
 ```
+uv run contest_video.py -o out.mp4
+```
+
+With no positional argument it takes every input from the round directory it is
+run in and prints what it found. The equivalent spelled out, which is what to
+fall back on when a directory holds something unusual:
+
+```
 uv run contest_video.py recording *.edi \
   --telemetry *-telemetry.jsonl --input-log *-input.jsonl \
   --cast *.cast --scope *.scope -o out.mp4 \

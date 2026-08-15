@@ -97,6 +97,25 @@ def rendered(tmp_path_factory):
     return _render(tmp_path_factory.mktemp("render"), EVERY_INPUT)
 
 
+@pytest.fixture(scope="module")
+def discovered(tmp_path_factory):
+    """The same round, invoked with no inputs at all."""
+    if not ROUND.is_dir():
+        pytest.skip(f"no recorded round at {ROUND}")
+    return _render(tmp_path_factory.mktemp("discovered"), [])
+
+
+def test_discovery_finds_every_input_the_explicit_run_names(discovered):
+    for name in EVERY_INPUT:
+        if not name.startswith("--"):
+            assert name in discovered.stdout
+
+
+def test_the_discovered_round_is_the_round_that_was_spelled_out(discovered):
+    assert discovered.stem.with_suffix(".chapters.txt").read_text() == CHAPTERS
+    assert discovered.stem.with_suffix(".srt").read_text() == SRT
+
+
 def test_the_chapters_are_the_ones_the_round_earned(rendered):
     assert rendered.stem.with_suffix(".chapters.txt").read_text() == CHAPTERS
 

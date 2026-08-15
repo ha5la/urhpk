@@ -1,6 +1,6 @@
 # 19 — Defaults discovered from the round directory
 
-Status: ready-for-agent
+Status: resolved
 
 Split out of **07**, which is about the render's progress and shares no code with
 this: one adds `tqdm` to four loops, the other adds a pure function and an
@@ -57,6 +57,33 @@ read better and would silently overwrite finished renders in `2026-aug/` and
 error is the same condition from the other side, and that guard's docstring
 refuses only the project root on purpose — widening it risks a false positive
 that costs a round.
+
+## Answer
+
+Built as described. `wiring.discover_round_inputs` returns a frozen
+`RoundInputs`; `tests/test_wiring.py` covers the eight cases, including the two
+that would have cost a render — two `.cast` files naming both, and `out.mp4` /
+`contest_video.hud.mp4` / a finished render never being taken for a webcam clip.
+
+The pure function cannot reach the argparse path, so the smoke suite got the
+end-to-end half: `test/` rendered with `--no-video` and *no arguments at all*
+produces the same chapters and `.srt` as the invocation that spells out all
+seven inputs. Both were confirmed to fail with discovery disabled before being
+kept.
+
+The stronger check is that the two invocations produce the same *video*: the
+full `test/` round at 720p, rendered from bare `contest_video.py --res 720p`,
+matched the hand-typed run byte for byte on all five artifacts —
+`cast.mp4 e2b71827`, `hud.mp4 25df7038`, `scope.mp4 5290df01`,
+`concat.wav 21e718e9`, `out.mp4 4738d097`.
+
+`PIPELINE.md` §3 now leads with the one-line form and keeps the explicit one
+below it as the fallback; RECORDING.md and ARCHITECTURE.md say what discovery
+refuses to do, and the README quick start ends with the render.
+
+Incidentally confirmed 02's design: running the suite while the 720p render had
+three cores gave 12.21s and tripped the ceiling. That is the load sensitivity
+the CI stand-down exists for — unloaded, the same suite is 7.17s.
 
 ## Rejected: fixed filenames instead of globs
 

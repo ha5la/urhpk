@@ -35,6 +35,7 @@ import os
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from urhpk import wiring
 from urhpk.cast_render import parse_cast_header, render_cast_video
@@ -518,9 +519,15 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    # recdir/edi are optional only so --hud-demo can run with no recording at
-    # hand; every other mode still requires both (checked right after parsing).
-    ap.add_argument("recdir", nargs="?", help="directory of timestamped WAV segments")
+    # recdir/edi are optional because --hud-demo runs with no recording at hand,
+    # and because giving neither means "find them here" (checked right after
+    # parsing); every other mode still requires both.
+    ap.add_argument(
+        "recdir",
+        nargs="?",
+        help="directory of timestamped WAV segments -- omit it, and every "
+        "other input too, to take them from the round directory you are in",
+    )
     ap.add_argument(
         "edi",
         nargs="*",
@@ -657,6 +664,34 @@ def main() -> None:
         draw_hud_frame(hud_demo_state(), art).save(args.hud_demo)
         print(f"wrote {args.hud_demo} (dummy values)")
         return
+
+    # Neither positional given means "find them here". All or nothing: there is
+    # no half-discovered state to reason about, and a scripted invocation that
+    # names its recording keeps naming every other input too. A flag given
+    # explicitly still wins over what was found.
+    if not args.recdir and not args.edi:
+        try:
+            found = wiring.discover_round_inputs(Path())
+        except ValueError as exc:
+            ap.error(str(exc))
+        args.recdir = found.recdir
+        args.edi = found.edi
+        args.telemetry = args.telemetry or found.telemetry
+        args.input_log = args.input_log or found.input_log
+        args.cast = args.cast or found.cast
+        args.scope = args.scope or found.scope
+        args.webcam = args.webcam or found.webcams
+        print("found in this round directory:")
+        for label, value in (
+            ("recording", args.recdir),
+            ("edi", ", ".join(args.edi)),
+            ("telemetry", args.telemetry),
+            ("input-log", args.input_log),
+            ("cast", args.cast),
+            ("scope", args.scope),
+            ("webcam", ", ".join(args.webcam or [])),
+        ):
+            print(f"  {label:<10} {value or '--'}")
 
     if not args.recdir or not args.edi:
         ap.error("recdir and at least one EDI file are required")

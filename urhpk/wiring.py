@@ -8,6 +8,7 @@ than in whichever script happens to mention them first.
 """
 
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 # This module sits one directory down from the project root, so one step up —
@@ -57,3 +58,47 @@ def require_round_directory(cwd: Path | None = None) -> None:
     if message:
         print(message, file=sys.stderr)
         sys.exit(2)
+
+
+@dataclass(frozen=True)
+class RoundInputs:
+    """Everything contest_video.py needs, found by looking at the round."""
+
+    recdir: str
+    edi: list[str]
+    telemetry: str | None
+    input_log: str | None
+    cast: str | None
+    scope: str | None
+    webcams: list[str]
+
+
+def _one(directory: Path, pattern: str) -> str | None:
+    """The single file matching `pattern`, or None if the round has none."""
+    found = sorted(directory.glob(pattern))
+    if len(found) > 1:
+        names = ", ".join(p.name for p in found)
+        raise ValueError(f"more than one {pattern} in {directory}: {names}")
+    return str(found[0]) if found else None
+
+
+def discover_round_inputs(directory: Path) -> RoundInputs:
+    """The round's own files, by the names the components that wrote them use."""
+    recdir = directory / "recording"
+    if not recdir.is_dir():
+        raise ValueError(f"no recording/ in {directory} -- is this a round directory?")
+    edi = sorted(directory.glob("*.edi"))
+    if not edi:
+        raise ValueError(f"no .edi log in {directory}")
+    return RoundInputs(
+        recdir=str(recdir),
+        edi=[str(p) for p in edi],
+        telemetry=_one(directory, "*-telemetry.jsonl"),
+        input_log=_one(directory, "*-input.jsonl"),
+        cast=_one(directory, "*.cast"),
+        scope=_one(directory, "*.scope"),
+        # Never plain *.mp4: the renders live in the round directory too. Sorted
+        # by name is sorted by capture time -- the prefix is one round's own, and
+        # what follows it is a fixed-width UTC stamp.
+        webcams=[str(p) for p in sorted(directory.glob("*-webcam-*.mp4"))],
+    )

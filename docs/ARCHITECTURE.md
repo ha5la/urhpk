@@ -277,7 +277,15 @@ logger's own terminal and the operator's webcam.
 
 ```
 uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4]
+uv run contest_video.py [-o OUT.mp4]      # inputs taken from the round directory
 ```
+The second form is all-or-nothing on the positionals: give neither and
+`wiring.discover_round_inputs` fills every slot from the directory, give one and
+nothing is discovered. Flags always win over what was found. The discovery
+refuses ambiguity rather than resolving it — two `.cast` files is an error, not
+the newer one — and it never globs plain `*.mp4`, because the renders live in
+the round directory beside the webcam clips.
+
 Dependencies: `numpy`, `pyte`, `pillow`, `tqdm` (`pyproject.toml`) +
 `ffmpeg`/`ffprobe`.
 

@@ -40,6 +40,18 @@ The matching EDI log lives next to it (`urhob2026cw/260704-HA5LA-2M.edi`).
 ```
 uv run contest_video.py RECORDING_DIR EDI_FILE [EDI_FILE ...] [-o OUT.mp4] [options]
 ```
+
+**Or name nothing at all.** Run it from the round directory with no positional
+argument and it takes every input from the directory itself: `recording/`, every
+`*.edi`, and whichever of `*-telemetry.jsonl`, `*-input.jsonl`, `*.cast`,
+`*.scope` and `*-webcam-*.mp4` the round left behind. It prints what it found
+before it starts. Any flag you do give wins over what it found, so
+`--res 720p --duration 1200` on its own is the whole preview invocation.
+
+It refuses to guess: two `.cast` files in one directory is an error naming both,
+not a coin toss paid for three hours later. An input the round simply does not
+have is skipped, exactly as leaving its flag off would.
+
 Pass more than one EDI file to merge multiple bands worked in one recording
 (e.g. a 2M + 70CM round) into a single timeline — a WAV segment carries no
 band field, so this only matters for merging QSO lists, not for rendering.
