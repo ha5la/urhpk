@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from rig_state import (
+from urhpk.rig_state import (
     InputLogEvent,
     TelemetrySample,
     build_state_events,
@@ -10,7 +10,7 @@ from rig_state import (
     load_telemetry,
     match_qso_times,
 )
-from timeline import (
+from urhpk.timeline import (
     Qso,
     Segment,
 )

@@ -6,10 +6,7 @@ import math
 import numpy as np
 from PIL import Image, ImageDraw
 
-import cw_decode
-import hud
-import hud_draw
-import video_format
+from urhpk import cw_decode, hud, hud_draw, video_format
 
 _ART = None
 

@@ -16,9 +16,9 @@ import wave
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-import edi
-from cw_decode import MAX_OVER_S, CharEvent
-from wav import parse_wav_title, read_wav_title
+from urhpk import edi
+from urhpk.cw_decode import MAX_OVER_S, CharEvent
+from urhpk.wav import parse_wav_title, read_wav_title
 
 
 @dataclass

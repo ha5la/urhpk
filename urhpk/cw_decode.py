@@ -18,11 +18,11 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from wav import read_wav_range
+from urhpk.wav import read_wav_range
 
 if TYPE_CHECKING:
-    from rig_state import SegState
-    from timeline import Segment
+    from urhpk.rig_state import SegState
+    from urhpk.timeline import Segment
 
 
 MORSE = {

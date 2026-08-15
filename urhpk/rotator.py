@@ -11,8 +11,8 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 
-from recorders import telemetry_rot_record, telemetry_write
-from wiring import ROTCTLD_HOST, ROTCTLD_PORT
+from urhpk.recorders import telemetry_rot_record, telemetry_write
+from urhpk.wiring import ROTCTLD_HOST, ROTCTLD_PORT
 
 POLL_S = 1
 TIMEOUT_S = 2.0

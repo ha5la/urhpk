@@ -5,6 +5,11 @@ not break. PIPELINE.md is the high-level story these pieces serve; FINDINGS.md
 has the measurements and dead ends behind the rules stated here; CLAUDE.md has
 the development principles.
 
+The project root holds the six programs a person runs, and nothing else in
+Python; everything they import lives in `urhpk/`. An entry point stays at the
+root because `sys.path[0]` is the *script's* directory, which is what makes
+`urhpk.*` resolve when one is launched by path from a round directory.
+
 ## on4kst_irc_bridge.py
 
 General ON4KST↔IRC bridge with optional Puskás URH Kupa sked support. The
@@ -77,7 +82,7 @@ uv run puskas_harvester.py
   observed in any Puskás round appears first)
 - All API responses cached in `.puskas_cache/` via `mrasz_api`; delete it to force a fresh fetch
 
-## mrasz_api.py – the contest server, cached
+## urhpk/mrasz_api.py – the contest server, cached
 
 `bb.mrasz.hu/nest` is read by two components, so the fetch and its cache live in one
 place and the cache is shared.
@@ -139,13 +144,13 @@ Run permanently (tmux, or a `systemd --user` unit) alongside the contest tools.
   rig moved to `icom_net.py`, which also removed the reason to want async rig state
   here. See FINDINGS.md for why async state isn't available from Hamlib at all.
 
-## icom_net.py – Direct Icom Ethernet CI-V client
+## urhpk/icom_net.py – Direct Icom Ethernet CI-V client
 
 The IC-9700 is reachable over Ethernet, but there is no plain "CI-V over TCP" port
 on the radio: the only way in is Icom's own network-remote-control protocol (what
 RS-BA1 and wfview speak) — UDP, authenticated, stateful. This is a minimal client
 for it in pure stdlib Python. `puskas_logger.py` uses it as its **only** rig
-interface; it is also usable standalone (`uv run icom_net.py <radio-ip>`).
+interface; it is also usable standalone (`uv run urhpk/icom_net.py <radio-ip>`).
 
 **Asynchronous throughout**: `connect()` and `close()` are coroutines, the two
 receive loops are tasks over `loop.create_datagram_endpoint`, and there is no thread
@@ -289,18 +294,18 @@ above it.
 
 | Module | What it owns |
 |---|---|
-| `wav.py` | The recorder's WAV files: the IC-9700 title tag, reading a time range |
-| `cw_decode.py` | The signal chain (pitch → envelope → hysteresis → Morse) and the trust gate |
-| `timeline.py` | `Segment`, `Qso`, the EDI read, and wall clock ↔ audio time |
-| `webcam_sync.py` | The one stream with no trustworthy clock: its start, and its drift |
-| `rig_state.py` | Telemetry and input log; RX/TX + QRG/mode events; QSO time matching |
-| `qso_windows.py` | Where each QSO sits in the finished video |
-| `chapters.py` | YouTube chapters and SRT captions |
-| `cast_render.py` | The terminal PiP: an asciinema `.cast` replayed into frames |
-| `scope_render.py` | The spectrum-scope waterfall background |
-| `hud.py` | The HUD's data layer: what the bar shows at any moment |
-| `hud_draw.py` | The HUD's drawing layer: artwork, sprites, readouts |
-| `video_format.py` | Frame size and rate — the two facts all three renderers must agree on |
+| `urhpk/wav.py` | The recorder's WAV files: the IC-9700 title tag, reading a time range |
+| `urhpk/cw_decode.py` | The signal chain (pitch → envelope → hysteresis → Morse) and the trust gate |
+| `urhpk/timeline.py` | `Segment`, `Qso`, the EDI read, and wall clock ↔ audio time |
+| `urhpk/webcam_sync.py` | The one stream with no trustworthy clock: its start, and its drift |
+| `urhpk/rig_state.py` | Telemetry and input log; RX/TX + QRG/mode events; QSO time matching |
+| `urhpk/qso_windows.py` | Where each QSO sits in the finished video |
+| `urhpk/chapters.py` | YouTube chapters and SRT captions |
+| `urhpk/cast_render.py` | The terminal PiP: an asciinema `.cast` replayed into frames |
+| `urhpk/scope_render.py` | The spectrum-scope waterfall background |
+| `urhpk/hud.py` | The HUD's data layer: what the bar shows at any moment |
+| `urhpk/hud_draw.py` | The HUD's drawing layer: artwork, sprites, readouts |
+| `urhpk/video_format.py` | Frame size and rate — the two facts all three renderers must agree on |
 
 The data/drawing split inside the HUD is the one worth preserving deliberately:
 `hud.py` needs no art, no fonts and no ffmpeg, which is what makes it fully
@@ -468,7 +473,7 @@ The HUD's rule is that the more important a value, the bigger it is drawn.
   not to code.** `--hud-theme-check` draws every rect back onto the artwork, which
   is the only way to check a hand-edited theme; several recesses can't be
   auto-detected because their interiors are too close in brightness to the panel.
-  `HUD_THEME_DIR` is script-relative — renders run from a contest directory.
+  `HUD_THEME_DIR` is project-relative — renders run from a contest directory.
 - **`hud_art(theme, W, H)` prepares everything once per render** (crop and scale the
   bar, scale every rect, cut/key/pre-scale the sprites); a frame is then a copy plus
   values. `draw_hud_frame` is called ~24,000 times for a 2 h round.
@@ -776,11 +781,11 @@ and the radio's single network session is what the logger exists to own.
 
 | Module | What it owns |
 |---|---|
-| `logbook.py` | QSOs, duplicates, scoring, and the EDI export and crash-recovery read |
-| `loc_cache.py` | Which locator a callsign uses, merged from three sources |
-| `recorders.py` | The round's side-channel files: telemetry, input box, scope, webcam |
-| `rotator.py` | The rotator poll task, the current bearing, "point there" |
-| `rig_server.py` | The rigctld dialect on 4532, answering from a state snapshot |
+| `urhpk/logbook.py` | QSOs, duplicates, scoring, and the EDI export and crash-recovery read |
+| `urhpk/loc_cache.py` | Which locator a callsign uses, merged from three sources |
+| `urhpk/recorders.py` | The round's side-channel files: telemetry, input box, scope, webcam |
+| `urhpk/rotator.py` | The rotator poll task, the current bearing, "point there" |
+| `urhpk/rig_server.py` | The rigctld dialect on 4532, answering from a state snapshot |
 
 `rig_server.serve` takes a `snapshot()` callable rather than reading the
 logger's `_rig`, which is what lets it live outside the file holding that state.

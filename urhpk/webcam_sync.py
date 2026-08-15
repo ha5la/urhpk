@@ -22,8 +22,8 @@ from typing import NamedTuple
 
 import numpy as np
 
-from timeline import Qso, Segment, audio_time_for, derive_utc_offset
-from wav import read_wav_range
+from urhpk.timeline import Qso, Segment, audio_time_for, derive_utc_offset
+from urhpk.wav import read_wav_range
 
 _WEBCAM_TS_RE = re.compile(r"(\d{8}_\d{6})")
 

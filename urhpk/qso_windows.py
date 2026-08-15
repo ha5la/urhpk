@@ -15,8 +15,8 @@ from __future__ import annotations
 import statistics
 from datetime import datetime, timedelta
 
-from cw_decode import MAX_OVER_S
-from timeline import Qso, Segment, audio_time_for
+from urhpk.cw_decode import MAX_OVER_S
+from urhpk.timeline import Qso, Segment, audio_time_for
 
 
 def _bursts(segs: list[Segment]) -> list[list[Segment]]:

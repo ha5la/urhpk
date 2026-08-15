@@ -36,17 +36,17 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 
-import wiring
-from cast_render import parse_cast_header, render_cast_video
-from chapters import build_chapters, build_srt
-from cw_decode import (
+from urhpk import wiring
+from urhpk.cast_render import parse_cast_header, render_cast_video
+from urhpk.chapters import build_chapters, build_srt
+from urhpk.cw_decode import (
     MAX_OVER_S,
     decode_round,
 )
-from hud import (
+from urhpk.hud import (
     build_hud_timeline,
 )
-from hud_draw import (
+from urhpk.hud_draw import (
     HUD_THEME_DIR,
     draw_hud_frame,
     hud_art,
@@ -56,16 +56,16 @@ from hud_draw import (
     load_hud_theme,
     render_hud_video,
 )
-from icom_net import read_scope_records
-from qso_windows import qso_windows
-from rig_state import (
+from urhpk.icom_net import read_scope_records
+from urhpk.qso_windows import qso_windows
+from urhpk.rig_state import (
     build_state_events,
     load_input_log,
     load_telemetry,
     match_qso_times,
 )
-from scope_render import render_scope_video
-from timeline import (
+from urhpk.scope_render import render_scope_video
+from urhpk.timeline import (
     GAP_KEEP_S,
     Qso,
     Segment,
@@ -79,8 +79,8 @@ from timeline import (
     stream_start,
     trim_to_duration,
 )
-from video_format import RENDER_FPS, RESOLUTIONS
-from webcam_sync import (
+from urhpk.video_format import RENDER_FPS, RESOLUTIONS
+from urhpk.webcam_sync import (
     WebcamClip,
     parse_webcam_precise_filename,
     parse_webcam_wall,

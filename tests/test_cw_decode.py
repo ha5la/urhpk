@@ -8,8 +8,8 @@ from datetime import datetime
 
 import numpy as np
 
-import cw_decode
-from cw_decode import (
+from urhpk import cw_decode
+from urhpk.cw_decode import (
     MAX_OVER_S,
     CharEvent,
     _dominance,
@@ -20,10 +20,10 @@ from cw_decode import (
     decode_segment,
     gate_events,
 )
-from rig_state import (
+from urhpk.rig_state import (
     SegState,
 )
-from timeline import (
+from urhpk.timeline import (
     GAP_KEEP_S,
     Segment,
     remap_audio_t,

@@ -2,7 +2,7 @@
 
 import pytest
 
-import edi
+from urhpk import edi
 
 
 class TestModeFromRadio:

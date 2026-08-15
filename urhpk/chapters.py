@@ -8,7 +8,7 @@ of ffmpeg.
 
 from __future__ import annotations
 
-from timeline import Qso
+from urhpk.timeline import Qso
 
 MIN_CHAPTER_GAP_S = 10  # YouTube ignores chapters closer together than this
 CAPTION_DUR_S = 8.0  # how long each SRT cue is shown

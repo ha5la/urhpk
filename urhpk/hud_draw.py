@@ -24,14 +24,15 @@ from datetime import datetime
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from hud import (
+from urhpk.hud import (
     HUD_MATRIX_ROWS,
     HUD_TICKER_CELL_COLS,
     HUD_TICKER_CHARS,
     HudState,
     HudTimeline,
 )
-from video_format import RENDER_FPS
+from urhpk.video_format import RENDER_FPS
+from urhpk.wiring import PROJECT_ROOT
 
 # --- the artwork: theme file, sprites, prepared layout -----------------------
 #
@@ -50,10 +51,10 @@ from video_format import RENDER_FPS
 # separated from it, so those were read by hand -- which is why the check tool
 # exists at all.
 #
-# Script-relative, not CWD-relative: renders are run from a contest
+# Project-relative, not CWD-relative: renders are run from a contest
 # directory (`cd 26augusztus && uv run ../contest_video.py ...`), where a
 # relative "hud-theme" would not exist.
-HUD_THEME_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hud-theme")
+HUD_THEME_DIR = str(PROJECT_ROOT / "hud-theme")
 _THEME_OUTLINES = {  # group -> colour, matching what the overlay draws
     "slots": (0, 255, 255),
     "chips": (255, 140, 0),

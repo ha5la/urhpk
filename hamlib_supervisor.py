@@ -39,7 +39,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from wiring import ROTCTLD_PORT
+from urhpk.wiring import ROTCTLD_PORT
 
 # ============================================================
 # Configuration

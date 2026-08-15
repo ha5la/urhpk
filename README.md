@@ -16,7 +16,7 @@ Amateur radio contest toolset for the Puskás URH Kupa, plus a general-purpose
 | `puskas_standings.py` | Where the year stands, carried forward over the rounds the organiser has not evaluated yet |
 | `contest_video.py` | Annotated CW contest video from a timestamped recording + EDI log |
 | `hamlib_supervisor.py` | Starts/stops rotctld based on USB device presence (inotify, no polling) |
-| `icom_net.py` | Direct Ethernet CI-V client for Icom radios (IC-9700 etc.), bypassing rigctld; instant push freq/mode updates, plus real spectrum-scope capture |
+| `urhpk/icom_net.py` | Direct Ethernet CI-V client for Icom radios (IC-9700 etc.), bypassing rigctld; instant push freq/mode updates, plus real spectrum-scope capture |
 | `run-recorded-round.sh` | The round entrypoint — recorded irssi + logger, plus rig/rotator supervision and the bridge in a background window |
 | `sync-clock.sh` | Forces an immediate chrony resync (offset + drift rate) right before a round starts |
 

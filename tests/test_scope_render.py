@@ -5,17 +5,17 @@ from datetime import datetime, timezone
 import numpy as np
 
 import contest_video as cv
-from icom_net import write_scope_record
-from scope_render import (
+from urhpk.icom_net import write_scope_record
+from urhpk.scope_render import (
     SCOPE_AMP_MAX,
     _resize_scope_row,
     _scope_colormap,
     render_scope_video,
 )
-from timeline import (
+from urhpk.timeline import (
     Segment,
 )
-from webcam_sync import WebcamClip
+from urhpk.webcam_sync import WebcamClip
 
 
 def _epoch(y, mo, d, h, mi, s):

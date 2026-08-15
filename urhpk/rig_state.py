@@ -17,7 +17,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from timeline import Qso, Segment, _eff, audio_time_for
+from urhpk.timeline import Qso, Segment, _eff, audio_time_for
 
 
 @dataclass

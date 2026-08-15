@@ -13,12 +13,12 @@ import bisect
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from cw_decode import CharEvent
-from geo import distance_between, initial_bearing, maidenhead_to_latlon
-from icom_net import band_from_hz
-from rig_state import SegState, TelemetrySample
-from scope_render import SCOPE_AMP_MAX
-from timeline import Qso, Segment, _eff, audio_time_for
+from urhpk.cw_decode import CharEvent
+from urhpk.geo import distance_between, initial_bearing, maidenhead_to_latlon
+from urhpk.icom_net import band_from_hz
+from urhpk.rig_state import SegState, TelemetrySample
+from urhpk.scope_render import SCOPE_AMP_MAX
+from urhpk.timeline import Qso, Segment, _eff, audio_time_for
 
 
 def ticker_chunks(

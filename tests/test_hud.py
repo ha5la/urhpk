@@ -4,22 +4,20 @@ Nothing here draws; hud_draw's own tests cover that half."""
 
 from datetime import datetime, timezone
 
-import hud
-import rig_state
-import timeline as tl
-import video_format
-from cw_decode import (
+from urhpk import hud, rig_state, video_format
+from urhpk import timeline as tl
+from urhpk.cw_decode import (
     CharEvent,
 )
-from geo import initial_bearing, maidenhead_to_latlon
-from rig_state import (
+from urhpk.geo import initial_bearing, maidenhead_to_latlon
+from urhpk.rig_state import (
     SegState,
     TelemetrySample,
 )
-from scope_render import (
+from urhpk.scope_render import (
     SCOPE_AMP_MAX,
 )
-from timeline import (
+from urhpk.timeline import (
     Qso,
     Segment,
 )

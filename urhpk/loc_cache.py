@@ -14,10 +14,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import edi
-from geo import is_locator
-from logbook import MY_LOGS_DIR
-from wiring import ON4KST_SEEN, SEEN_STATIONS
+from urhpk import edi
+from urhpk.geo import is_locator
+from urhpk.logbook import MY_LOGS_DIR
+from urhpk.wiring import ON4KST_SEEN, SEEN_STATIONS
 
 
 def _from_my_logs() -> dict[str, str]:

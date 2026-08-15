@@ -12,25 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import icom_net
-import loc_cache
 import puskas_logger as pl
-import recorders
-import rig_server
-import rotator
-import webcam_log
-from geo import haversine_km, initial_bearing, is_locator, maidenhead_to_latlon
-from logbook import (
-    BANDS,
-    MODES,
-    QSO,
-    LogBook,
-    _is_dup_in_log,
-    band_summary,
-    load_from_edi,
-    tname_for,
-    write_edi,
-)
 from puskas_logger import (
     _bearing_arrow,
     _edi_qso_count,
@@ -42,7 +24,21 @@ from puskas_logger import (
     parse_input,
     recorder_warnings,
 )
-from recorders import (
+from tests.helpers import wait_until
+from urhpk import icom_net, loc_cache, recorders, rig_server, rotator, webcam_log
+from urhpk.geo import haversine_km, initial_bearing, is_locator, maidenhead_to_latlon
+from urhpk.logbook import (
+    BANDS,
+    MODES,
+    QSO,
+    LogBook,
+    _is_dup_in_log,
+    band_summary,
+    load_from_edi,
+    tname_for,
+    write_edi,
+)
+from urhpk.recorders import (
     _webcam_capture_cmd,
     _webcam_precise_name,
     input_log_open,
@@ -54,7 +50,6 @@ from recorders import (
     webcam_status,
     webcam_toggle,
 )
-from tests.helpers import wait_until
 
 # ──────────────────────────────────────────────────────────────
 # Helpers
@@ -2261,7 +2256,7 @@ class TestSignalTeardown:
 
 class TestScopeRecorder:
     def test_on_scope_appends_records_readable_by_icom_net(self, tmp_path):
-        import icom_net
+        from urhpk import icom_net
 
         path = tmp_path / "test.scope"
         recorders._scope_rec["path"] = path

@@ -17,7 +17,8 @@ import struct
 
 import pytest
 
-from icom_net import (
+from tests.helpers import wait_until
+from urhpk.icom_net import (
     CIV_CONTROLLER_ADDR,
     CIV_IC9700_ADDR,
     CIV_PARAM_FILE_SPLIT,
@@ -32,7 +33,6 @@ from icom_net import (
     parse_civ_data_packet,
     split_civ_frames,
 )
-from tests.helpers import wait_until
 
 
 def _envelope(

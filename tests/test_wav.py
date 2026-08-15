@@ -4,11 +4,11 @@ import struct
 import wave
 from datetime import datetime
 
-from timeline import (
+from urhpk.timeline import (
     Segment,
     read_wav_metadata,
 )
-from wav import parse_wav_title
+from urhpk.wav import parse_wav_title
 
 
 def _write_wav_with_title(path: str, title: str) -> None:

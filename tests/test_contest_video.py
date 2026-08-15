@@ -6,11 +6,9 @@ tests -- each branch can be right while the graph that joins them is wrong."""
 import json
 import re
 
-import cast_render
 import contest_video as cv
-import hud_draw
-import video_format
-from webcam_sync import WebcamClip
+from urhpk import cast_render, hud_draw, video_format
+from urhpk.webcam_sync import WebcamClip
 
 WEBCAM = WebcamClip("w.mp4", 0.0)
 

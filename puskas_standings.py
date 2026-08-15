@@ -24,7 +24,7 @@ import re
 import sys
 from dataclasses import dataclass
 
-from mrasz_api import BASE_URL, EVENT_LIST_TTL, LIST_URL, cached_get
+from urhpk.mrasz_api import BASE_URL, EVENT_LIST_TTL, LIST_URL, cached_get
 
 CONTEST_ID = "67952021b55b621ae6619a4e"
 # How many rounds a station must have had evaluated before its own error rate is

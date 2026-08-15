@@ -3,8 +3,8 @@
 import json
 from unittest.mock import MagicMock, patch
 
-import mrasz_api
-from mrasz_api import cached_get
+from urhpk import mrasz_api
+from urhpk.mrasz_api import cached_get
 
 
 def _urlopen_returning(payload):

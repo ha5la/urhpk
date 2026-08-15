@@ -2,12 +2,12 @@
 
 from datetime import datetime
 
-from cw_decode import (
+from urhpk.cw_decode import (
     MAX_OVER_S,
     CharEvent,
 )
-from qso_windows import burst_starts, qso_windows
-from timeline import (
+from urhpk.qso_windows import burst_starts, qso_windows
+from urhpk.timeline import (
     Qso,
     Segment,
     parse_edi,

@@ -1,6 +1,6 @@
 # 17 — The library modules leave the root
 
-Status: ready-for-agent
+Status: resolved
 
 Blocked by: 01 (end-to-end test)
 
@@ -48,6 +48,29 @@ unverified risk on. After 01 is green it is a mechanical afternoon.
     argument, so the test will not catch a wrong default — check by hand.
 - **Docs**: ARCHITECTURE.md names the modules throughout; README's components
   table lists only entry points and is unaffected.
+
+## Answer
+
+22 modules moved, 6 entry points left at the root. Two departures from the
+plan above:
+
+- **`icom_net.py` went into the package after all.** The ticket kept it at the
+  root for its shebang, but three modules that moved — `hud`, `recorders`,
+  `scope_render` — import it, so the root would have stayed a dependency of
+  `urhpk/`. It imports nothing but stdlib, so `uv run urhpk/icom_net.py
+  <radio-ip>` still runs it standalone. README and ARCHITECTURE.md name the
+  new path.
+- **`mrasz_api.py` and `puskas_standings.py`** postdate the ticket: the first
+  moved, the second is an entry point and stayed.
+
+`HUD_THEME_DIR` now reads `wiring.PROJECT_ROOT / "hud-theme"` rather than
+climbing `__file__` a second time, so one module knows where the root is.
+`PROJECT_ROOT` itself gained the extra `.parent`, checked by hand as the ticket
+asked: the root is still refused as a round directory and `urhpk/` is not.
+
+**Verified byte-for-byte.** The `test/` round rendered at 720p with every side
+input, before the move and after it: same md5. Plus 707 unit tests and all 10
+smoke tests, and each entry point launched by path from a round directory.
 
 ## Comments
 

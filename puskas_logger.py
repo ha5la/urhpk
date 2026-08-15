@@ -30,13 +30,9 @@ from prompt_toolkit.formatted_text import HTML, FormattedText
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import DynamicStyle, Style
 
-import edi
-import icom_net
-import loc_cache
-import rig_server
-import rotator
-from geo import is_locator
-from logbook import (
+from urhpk import edi, icom_net, loc_cache, rig_server, rotator
+from urhpk.geo import is_locator
+from urhpk.logbook import (
     BANDS,
     MODES,
     QSO,
@@ -47,7 +43,7 @@ from logbook import (
     save_all,
     tname_for,
 )
-from recorders import (
+from urhpk.recorders import (
     forget_meters,
     input_log_open,
     log_input_event,
@@ -66,7 +62,7 @@ from recorders import (
     webcam_stop_if_running,
     webcam_toggle,
 )
-from wiring import (
+from urhpk.wiring import (
     RIG_SERVER_PORT,
     require_round_directory,
 )

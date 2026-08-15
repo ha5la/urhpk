@@ -7,8 +7,8 @@ import numpy as np
 import pyte
 from PIL import Image, ImageDraw, ImageFont
 
-import cast_render
-from cast_render import (
+from urhpk import cast_render
+from urhpk.cast_render import (
     CAST_BG,
     _cast_color,
     _CastScreen,

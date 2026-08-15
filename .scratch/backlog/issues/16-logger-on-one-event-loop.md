@@ -1,6 +1,6 @@
 # 16 — Put the logger on one event loop
 
-Status: done — pending one real session with the IC-9700 (see the bottom)
+Status: resolved
 
 Blocked by: 01 (end-to-end test)
 
@@ -126,3 +126,7 @@ a recording is stopped, once per recording.
 a green suite. The abandoned-session behaviour (a half-registered session blocks
 reconnecting for tens of seconds) is exactly the kind of thing the fake radio
 does not model.
+
+**Done**: `test2/` is that session — 2026-08-12, three days after the refactor
+landed. Live CI-V telemetry (frequency, mode, rotator) and 2.7 MB of scope
+stream, so the radio's session state machine was driven by the real thing.

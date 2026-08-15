@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-import edi
-from geo import bearing_between, distance_between, is_locator
+from urhpk import edi
+from urhpk.geo import bearing_between, distance_between, is_locator
 
 BANDS = ("2M", "70CM", "23CM")
 MODES = ("SSB", "CW", "FM")

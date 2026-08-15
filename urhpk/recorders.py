@@ -19,8 +19,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-import icom_net
-import webcam_log
+from urhpk import icom_net, webcam_log
 
 WEBCAM_DEVICE = "/dev/video0"  # find with: v4l2-ctl --list-devices
 WEBCAM_AUDIO_SOURCE = "default"  # find with: pactl list short sources

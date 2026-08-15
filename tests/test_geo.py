@@ -8,10 +8,10 @@ variant won, so these pin the behaviour the blanket excepts used to provide.
 
 import pytest
 
-import geo
 import on4kst_irc_bridge as bridge
 import puskas_logger as pl
-from geo import (
+from urhpk import geo
+from urhpk.geo import (
     bearing_between,
     distance_between,
     haversine_km,

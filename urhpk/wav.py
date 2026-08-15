@@ -13,7 +13,7 @@ import wave
 
 import numpy as np
 
-import edi
+from urhpk import edi
 
 _WAV_TITLE_RE = re.compile(
     r"(\d+)\.(\d+)\.(\d+)\s+(\S+)\s+.*?(RX|TX)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s*$"

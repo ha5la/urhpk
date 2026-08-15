@@ -40,7 +40,7 @@ import sys
 import time
 import urllib.request
 
-from geo import (
+from urhpk.geo import (
     bearing_between,
     distance_between,
     haversine_km,
@@ -48,7 +48,7 @@ from geo import (
     latlon_to_maidenhead,
     maidenhead_to_latlon,
 )
-from wiring import ON4KST_SEEN, PUSKAS_DIR, RIG_SERVER_HOST, RIG_SERVER_PORT
+from urhpk.wiring import ON4KST_SEEN, PUSKAS_DIR, RIG_SERVER_HOST, RIG_SERVER_PORT
 
 # ============================================================
 # Configuration

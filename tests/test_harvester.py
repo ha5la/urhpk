@@ -2,7 +2,6 @@
 
 import json
 
-import mrasz_api
 import puskas_harvester
 from puskas_harvester import (
     CONTEST_ID,
@@ -11,6 +10,7 @@ from puskas_harvester import (
     fetch_qsos,
     fetch_round_codes,
 )
+from urhpk import mrasz_api
 
 
 def _stub_event_list(tmp_path, monkeypatch, events) -> None:

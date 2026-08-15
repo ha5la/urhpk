@@ -3,11 +3,11 @@
 from datetime import datetime
 
 import contest_video as cv
-import timeline as tl
-from cw_decode import (
+from urhpk import timeline as tl
+from urhpk.cw_decode import (
     CharEvent,
 )
-from timeline import (
+from urhpk.timeline import (
     GAP_KEEP_S,
     Segment,
     _eff,

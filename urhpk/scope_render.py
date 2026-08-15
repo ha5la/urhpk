@@ -12,8 +12,8 @@ import subprocess
 
 import numpy as np
 
-from icom_net import read_scope_records
-from video_format import RENDER_FPS
+from urhpk.icom_net import read_scope_records
+from urhpk.video_format import RENDER_FPS
 
 # ---------------------------------------------------------------------------
 

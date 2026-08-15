@@ -2,9 +2,9 @@
 
 from datetime import datetime
 
-from chapters import CAPTION_DUR_S, _srt_time, _yt_time, build_chapters, build_srt
-from qso_windows import qso_windows
-from timeline import (
+from urhpk.chapters import CAPTION_DUR_S, _srt_time, _yt_time, build_chapters, build_srt
+from urhpk.qso_windows import qso_windows
+from urhpk.timeline import (
     Qso,
     Segment,
     parse_edi,

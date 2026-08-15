@@ -15,9 +15,9 @@ Usage:  uv run puskas_harvester.py
 
 import json
 
-from mrasz_api import BASE_URL, CACHE_DIR, EVENT_LIST_TTL, LIST_URL
-from mrasz_api import cached_get as _cached_get
-from wiring import PUSKAS_DIR, SEEN_STATIONS
+from urhpk.mrasz_api import BASE_URL, CACHE_DIR, EVENT_LIST_TTL, LIST_URL
+from urhpk.mrasz_api import cached_get as _cached_get
+from urhpk.wiring import PUSKAS_DIR, SEEN_STATIONS
 
 CONTEST_ID = "67952021b55b621ae6619a4e"
 

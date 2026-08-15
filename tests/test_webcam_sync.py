@@ -5,14 +5,13 @@ from datetime import datetime
 import numpy as np
 
 import contest_video as cv
-import video_format
-import webcam_sync
-from timeline import (
+from urhpk import video_format, webcam_sync
+from urhpk.timeline import (
     Qso,
     Segment,
     derive_utc_offset,
 )
-from webcam_sync import (
+from urhpk.webcam_sync import (
     WebcamClip,
     _find_offset_correction,
     _rms_envelope,

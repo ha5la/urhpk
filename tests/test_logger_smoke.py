@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pytest
 
-from wiring import RIG_SERVER_PORT
+from urhpk.wiring import RIG_SERVER_PORT
 
 pytestmark = pytest.mark.smoke
 

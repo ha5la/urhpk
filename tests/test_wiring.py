@@ -7,7 +7,7 @@ prevents — so the negative cases matter more here than the positive one.
 
 import pytest
 
-import wiring
+from urhpk import wiring
 
 
 class TestContractsAgree:

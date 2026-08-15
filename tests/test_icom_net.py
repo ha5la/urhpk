@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from icom_net import (
+from urhpk.icom_net import (
     CIV_CONTROLLER_ADDR,
     CIV_IC9700_ADDR,
     CIV_PARAM_FILE_SPLIT,

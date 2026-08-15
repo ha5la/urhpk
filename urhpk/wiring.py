@@ -10,10 +10,10 @@ than in whichever script happens to mention them first.
 import sys
 from pathlib import Path
 
-# This module sits in the project root, so no walking up is needed — and none
-# is wanted: the answer must not depend on the current directory, which is the
-# very thing being checked.
-PROJECT_ROOT = Path(__file__).resolve().parent
+# This module sits one directory down from the project root, so one step up —
+# and no searching: the answer must not depend on the current directory, which
+# is the very thing being checked.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 PUSKAS_DIR = Path.home() / ".puskas"
 
