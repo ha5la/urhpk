@@ -60,6 +60,7 @@ from urhpk.hud_draw import (
 from urhpk.icom_net import read_scope_records
 from urhpk.qso_windows import qso_windows
 from urhpk.rig_state import (
+    apply_clock_offset,
     build_state_events,
     load_input_log,
     load_telemetry,
@@ -711,6 +712,21 @@ def main() -> None:
     offset_h = derive_utc_offset(segs, qsos_all)
     print(f"{my_callsign} {mywwl}: {len(qsos_all)} QSOs, UTC+{offset_h} local")
 
+    # Before anything reads a segment's wall time -- the cast and scope sync
+    # just below, and every source aligned after them -- and after offset_h,
+    # which is derived to the hour and cannot care about a sub-second shift.
+    telemetry = load_telemetry(args.telemetry) if args.telemetry else []
+    moved = apply_clock_offset(segs, telemetry, offset_h)
+    if moved:
+        shifts = sorted(t.clock_offset_s for t in telemetry if t.clock_offset_s)
+        print(
+            f"  clock: radio led the laptop by {shifts[0]:+.2f}..{shifts[-1]:+.2f}s "
+            f"over {len(shifts)} measurements -- {moved} segments moved onto the "
+            f"laptop's clock"
+        )
+    elif args.telemetry:
+        print("  clock: no radio/laptop offset measured this round -- uncorrected")
+
     cast_start = None
     cast_rate = 0.0
     if args.cast:
@@ -791,11 +807,10 @@ def main() -> None:
             f"({len(segs)} segments)"
         )
 
-    telemetry = load_telemetry(args.telemetry) if args.telemetry else []
     state_events = build_state_events(segs, telemetry, offset_h)
     known = sum(1 for _, _, st in state_events if st.ptt is not None)
     suffix = (
-        f" ({args.telemetry} refines freq/mode within long segments)"
+        f" ({args.telemetry} refines freq/mode between the WAVs' own tags)"
         if args.telemetry
         else ""
     )

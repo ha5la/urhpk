@@ -5,6 +5,7 @@ from datetime import datetime
 from urhpk.rig_state import (
     InputLogEvent,
     TelemetrySample,
+    apply_clock_offset,
     build_state_events,
     load_input_log,
     load_telemetry,
@@ -14,6 +15,10 @@ from urhpk.timeline import (
     Qso,
     Segment,
 )
+
+
+def _clock(t, offset_s):
+    return TelemetrySample(t, None, None, None, clock_offset_s=offset_s)
 
 
 class TestTelemetryAlignment:
@@ -180,6 +185,62 @@ class TestTelemetryAlignment:
         ]
         assert clock_sample.az is None and not clock_sample.az_offline
         assert clock_sample.vd is None and not clock_sample.meters_offline
+
+    def test_load_telemetry_reads_the_clock_offset(self, tmp_path):
+        f = tmp_path / "telem.jsonl"
+        f.write_text(
+            '{"t": "2026-08-12T17:56:00.371436Z", "clock_offset_s": 0.13}\n'
+            '{"t": "2026-08-12T17:56:01.000000Z", "freq_hz": 144174000}\n'
+        )
+        clock, rig = load_telemetry(str(f))
+        assert clock.clock_offset_s == 0.13
+        assert rig.clock_offset_s is None
+
+    def test_the_clock_offset_moves_the_wavs_onto_the_laptops_clock(self):
+        # clock_offset_s is how far the radio's clock *leads* the laptop's, and
+        # a WAV's timestamp is the radio's, so it is subtracted to land the
+        # segment where the rest of the round -- telemetry, input log, EDI --
+        # already is.
+        segs = [
+            self._wav_seg(
+                datetime(2026, 8, 12, 12, 0, 0), 1.0, 0.0, 144174000, "CW", True
+            )
+        ]
+        telemetry = [_clock(datetime(2026, 8, 12, 11, 59, 0), 0.5)]
+        assert apply_clock_offset(segs, telemetry, offset_h=0) == 1
+        assert segs[0].wall == datetime(2026, 8, 12, 11, 59, 59, 500000)
+
+    def test_each_clock_measurement_holds_until_the_next_one(self):
+        # Piecewise, not interpolated: the radio's clock free-runs and is then
+        # stepped by NTP, so smoothing between two measurements would smooth
+        # across exactly the discontinuity that matters.
+        segs = [
+            self._wav_seg(datetime(2026, 8, 12, h, m, 0), 1.0, i, 144174000, "CW", True)
+            for i, (h, m) in enumerate([(11, 55), (12, 5), (12, 15)])
+        ]
+        telemetry = [
+            _clock(datetime(2026, 8, 12, 12, 0, 0), 0.5),
+            _clock(datetime(2026, 8, 12, 12, 10, 0), -0.25),
+        ]
+        assert apply_clock_offset(segs, telemetry, offset_h=0) == 3
+        assert [s.wall for s in segs] == [
+            # before the first measurement, which is still the best estimate
+            datetime(2026, 8, 12, 11, 54, 59, 500000),
+            datetime(2026, 8, 12, 12, 4, 59, 500000),
+            datetime(2026, 8, 12, 12, 15, 0, 250000),
+        ]
+
+    def test_a_round_with_no_clock_records_is_left_alone(self):
+        segs = [
+            self._wav_seg(
+                datetime(2026, 8, 12, 12, 0, 0), 1.0, 0.0, 144174000, "CW", True
+            )
+        ]
+        telemetry = [
+            TelemetrySample(datetime(2026, 8, 12, 12, 0, 0), 144174000, "CW", None)
+        ]
+        assert apply_clock_offset(segs, telemetry, offset_h=0) == 0
+        assert segs[0].wall == datetime(2026, 8, 12, 12, 0, 0)
 
     def test_load_telemetry_distinguishes_absent_az_from_null_az(self, tmp_path):
         # Both land as az=None, but they mean opposite things: an absent key

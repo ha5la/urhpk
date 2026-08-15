@@ -46,6 +46,10 @@ class TelemetrySample:
     # And again for the rig: an explicit `"freq_hz": null` is the logger saying
     # the radio went away, which a rotator line silent about the rig is not.
     rig_offline: bool = False
+    # How far the radio's clock led the laptop's when the monitor last pinned
+    # a minute rollover. Written only on a successful measurement, never null,
+    # so absent means "unmeasured" with no ambiguity -- see apply_clock_offset.
+    clock_offset_s: float | None = None
 
 
 @dataclass
@@ -98,6 +102,7 @@ def load_telemetry(path: str) -> list[TelemetrySample]:
                 id_raw=rec.get("id"),
                 swr=rec.get("swr"),
                 po=rec.get("po"),
+                clock_offset_s=rec.get("clock_offset_s"),
             )
         )
     return samples
@@ -141,6 +146,40 @@ def load_input_log(path: str) -> list[InputLogEvent]:
             )
         )
     return out
+
+
+def apply_clock_offset(
+    segs: list[Segment], telemetry: list[TelemetrySample], offset_h: int
+) -> int:
+    """Move the segments off the radio's clock and onto the laptop's, in place.
+
+    A WAV's timestamp is the radio's own, and every other source in a round --
+    telemetry, the input log, the EDI -- is the laptop's, so any difference
+    between the two clocks is a systematic error in how the audio lines up
+    with all of them. `clock_offset_s` is how far the radio *leads*, pinned to
+    ±25 ms by the logger's rollover burst, so it is subtracted.
+
+    Applied piecewise, each measurement holding until the next, because the
+    radio's clock free-runs and is then stepped by NTP: interpolating would
+    smooth across exactly the discontinuity that matters. Segments before the
+    first measurement take that first one, which is the only estimate there
+    is and beats leaving the round's opening minutes uncorrected while the
+    rest of it moves. A round whose telemetry carries no measurement at all is
+    left exactly as it was; returns how many segments were moved.
+
+    This removes a bias, it does not make the timeline sub-second accurate --
+    the radio stamps its filenames to the whole second, which nothing can
+    undo. See ARCHITECTURE.md on the two independent timing errors."""
+    marks = sorted(
+        (t.t, t.clock_offset_s) for t in telemetry if t.clock_offset_s is not None
+    )
+    if not marks:
+        return 0
+    times = [m[0] for m in marks]
+    for s in segs:
+        i = bisect.bisect_right(times, s.wall - timedelta(hours=offset_h)) - 1
+        s.wall -= timedelta(seconds=marks[max(i, 0)][1])
+    return len(segs)
 
 
 def _khz(freq_hz: int | None) -> int | None:
