@@ -24,6 +24,7 @@ import numpy as np
 
 from urhpk.timeline import Qso, Segment, audio_time_for, derive_utc_offset
 from urhpk.wav import read_wav_range
+from urhpk.webcam_face import FaceScan
 
 _WEBCAM_TS_RE = re.compile(r"(\d{8}_\d{6})")
 
@@ -31,11 +32,15 @@ _WEBCAM_TS_RE = re.compile(r"(\d{8}_\d{6})")
 class WebcamClip(NamedTuple):
     """One capture on the output timeline: where its own frame 0 lands
     (seconds into the video) and the clock-drift rate its timeline is scaled
-    by. A round has one per Alt+V start/stop pair."""
+    by. A round has one per Alt+V start/stop pair.
+
+    `face` is filled in later, by webcam_face, and is None when the detector
+    was unavailable -- the clip is placed in time here, framed there."""
 
     path: str
     start: float
     rate: float = 0.0
+    face: FaceScan | None = None
 
 
 def parse_webcam_wall(path: str) -> datetime:

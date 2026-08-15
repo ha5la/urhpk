@@ -1,4 +1,4 @@
-#!/usr/bin/env -S uv run
+#!/usr/bin/env -S uv run --extra render
 """Produce an annotated CW contest video from a recording + EDI log.
 
 Given a directory of timestamped WAV segments (split on RX/TX switches, as
@@ -82,6 +82,7 @@ from urhpk.timeline import (
     trim_to_duration,
 )
 from urhpk.video_format import RENDER_FPS, RESOLUTIONS
+from urhpk.webcam_face import face_crop, scan_faces
 from urhpk.webcam_sync import (
     WebcamClip,
     parse_webcam_precise_filename,
@@ -340,13 +341,25 @@ def render(
         # one's tpad-cloned last frame is what stays on screen.
         fx, fy, fw, fh = hud_face
         pip_x, pip_y = fx, H - hud_h + fy
-        fit = f"crop=min(iw\\,ih*{fw}/{fh}):min(ih\\,iw*{fh}/{fw}),scale={fw}:{fh}"
+        centred = f"crop=min(iw\\,ih*{fw}/{fh}):min(ih\\,iw*{fh}/{fw})"
         for i, clip in enumerate(webcams):
             last = i == len(webcams) - 1
             idx = add_input(["-itsoffset", f"{clip.start:.3f}", "-i", clip.path])
+            # Each clip is cropped onto its own face: the operator cannot see
+            # the Alt+V capture while it records, and a centred crop left them
+            # off-centre for a third of a real round. Without a scan (no
+            # detector installed) the crop is the size-agnostic expression it
+            # always was.
+            crop = centred
+            if clip.face:
+                cx, cy, cw, ch = face_crop(
+                    *clip.face.source, fw, fh, face_cx=clip.face.cx
+                )
+                crop = f"crop={cw}:{ch}:{cx}:{cy}"
             fchain += (
                 f";[{idx}:v]setpts=PTS/{1 - clip.rate:.8f},fps={RENDER_FPS},"
-                f"{fit},tpad=stop_mode=clone:stop_duration=99999[pip{i}]"
+                f"{crop},scale={fw}:{fh},"
+                f"tpad=stop_mode=clone:stop_duration=99999[pip{i}]"
                 f";[{cur}][pip{i}]overlay=x={pip_x}:y={pip_y}:"
                 f"enable='gte(t,{clip.start:.3f})'[{'v' if last else f'v{i}'}]"
             )
@@ -848,6 +861,23 @@ def main() -> None:
     if dropped:
         print(f"  {len(dropped)} webcam clip(s) start after the cut ends -- dropped")
         webcams = [c for c in webcams if c.start < total]
+
+    # After the cut has dropped what it drops, so a preview never scans a clip
+    # it will not show, and before anything is rendered, so the operator
+    # watching the first minutes sees where the PiP will be framed.
+    for i, clip in enumerate(webcams):
+        tag = f"webcam {i + 1}/{len(webcams)}" if len(webcams) > 1 else "webcam"
+        scan = scan_faces(clip.path)
+        if scan is None:
+            print(f"  {tag}: face framing unavailable (no opencv) -- centred crop")
+        elif scan.cx is None:
+            print(f"  {tag}: no face found in {scan.samples} samples -- centred crop")
+        else:
+            print(
+                f"  {tag}: face framing centred on x={scan.cx:.0f} of "
+                f"{scan.source[0]} ({scan.hits}/{scan.samples} samples)"
+            )
+        webcams[i] = clip._replace(face=scan)
 
     if cast_start is not None and cast_start >= total:
         print("  cast starts after the cut ends -- dropping the PiP overlay")

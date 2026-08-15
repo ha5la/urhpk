@@ -22,6 +22,8 @@ from pathlib import Path
 from statistics import median
 from typing import NamedTuple
 
+from urhpk.progress import stage_bar
+
 MODEL = Path(__file__).with_name("face_detection_yunet_2023mar.onnx")
 DETECT_W, DETECT_H = 640, 360
 SAMPLE_S = 5.0
@@ -108,7 +110,7 @@ def _probe(path: str) -> tuple[int, int, float]:
     return s["width"], s["height"], float(out["format"]["duration"])
 
 
-def scan_faces(path: str, sample_s: float = SAMPLE_S, progress=None) -> FaceScan | None:
+def scan_faces(path: str, sample_s: float = SAMPLE_S) -> FaceScan | None:
     """Sample the clip and detect a face in each sampled frame.
 
     None means the detector is unavailable, which is a different thing from a
@@ -149,20 +151,20 @@ def scan_faces(path: str, sample_s: float = SAMPLE_S, progress=None) -> FaceScan
     dets: list[Detection] = []
     n = 0
     frame_bytes = DETECT_W * DETECT_H * 3
-    while True:
-        buf = proc.stdout.read(frame_bytes)
-        if len(buf) < frame_bytes:
-            break
-        _, faces = det.detect(
-            np.frombuffer(buf, np.uint8).reshape(DETECT_H, DETECT_W, 3)
-        )
-        for f in faces if faces is not None else []:
-            dets.append(
-                (n, f[0] * scale, f[1] * scale, f[2] * scale, f[3] * scale, f[14])
+    with stage_bar("face framing", int(dur / sample_s) + 1, unit="sample") as bar:
+        while True:
+            buf = proc.stdout.read(frame_bytes)
+            if len(buf) < frame_bytes:
+                break
+            _, faces = det.detect(
+                np.frombuffer(buf, np.uint8).reshape(DETECT_H, DETECT_W, 3)
             )
-        n += 1
-        if progress:
-            progress.update(1)
+            for f in faces if faces is not None else []:
+                dets.append(
+                    (n, f[0] * scale, f[1] * scale, f[2] * scale, f[3] * scale, f[14])
+                )
+            n += 1
+            bar.update(1)
     proc.stdout.close()
     proc.wait()
     return FaceScan(face_centre(dets), (src_w, src_h), n, len({d[0] for d in dets}))

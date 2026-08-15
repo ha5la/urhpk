@@ -439,6 +439,16 @@ Clock drift is the round's, not the clip's — one laptop clock against the
 radio's — so it is fitted from the longest clip and the others use that rate,
 each keeping its own exact start. `--webcam-offset` applies to every clip.
 
+**Framing is automatic.** Each clip is scanned for the operator's face and
+cropped onto it rather than onto the middle of the frame, which matters because
+Alt+V records with no preview to sit straight in front of: on a real round the
+centred crop was off-centre for a third of it. One crop per clip, from the
+median — it does not follow you around — and the crop's x is the only thing
+that moves. The scan costs about 4 % of the render, prints where it landed
+before any frame is drawn, and falls back to the old centred crop if the
+optional detector is missing (`uv sync --extra render`, which
+`contest_video.py`'s shebang asks for by itself).
+
 ## Telemetry file
 
 `puskas_logger.py` writes `YYMMDD-CALL-telemetry.jsonl` to the round's CWD,

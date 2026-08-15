@@ -8,6 +8,7 @@ import re
 
 import contest_video as cv
 from urhpk import cast_render, hud_draw, video_format
+from urhpk.webcam_face import FaceScan
 from urhpk.webcam_sync import WebcamClip
 
 WEBCAM = WebcamClip("w.mp4", 0.0)
@@ -78,6 +79,29 @@ class TestHudRender:
         graph = cmd[cmd.index("-filter_complex") + 1]
         assert f"scale={face[2]}:{face[3]}" in graph
         assert f"overlay=x={face[0]}:" in graph
+
+    def test_a_scanned_clip_is_cropped_onto_its_own_face(self):
+        clip = WebcamClip("w.mp4", 0.0, face=FaceScan(782.0, (1280, 720), 1440, 1423))
+        cmd = _render_cmd(webcams=[clip], hud_face=(940, 20, 245, 250))
+        graph = cmd[cmd.index("-filter_complex") + 1]
+        assert "crop=706:720:429:0" in graph
+
+    def test_an_unscanned_clip_keeps_the_centred_crop(self):
+        # no detector installed: the crop stays the expression it always was,
+        # which needs no frame size of its own
+        cmd = _render_cmd(webcams=[WEBCAM], hud_face=(940, 20, 245, 250))
+        graph = cmd[cmd.index("-filter_complex") + 1]
+        assert "crop=min(iw\\,ih*245/250)" in graph
+
+    def test_each_clip_gets_its_own_crop(self):
+        clips = [
+            WebcamClip("a.mp4", 0.0, face=FaceScan(782.0, (1280, 720), 10, 10)),
+            WebcamClip("b.mp4", 90.0, face=FaceScan(300.0, (640, 480), 10, 10)),
+        ]
+        cmd = _render_cmd(webcams=clips, hud_face=(940, 20, 245, 250))
+        graph = cmd[cmd.index("-filter_complex") + 1]
+        assert "crop=706:720:429:0" in graph
+        assert "crop=470:480:65:0" in graph
 
 
 class TestSideStreamTrimming:

@@ -315,6 +315,7 @@ above it.
 | `urhpk/cw_decode.py` | The signal chain (pitch → envelope → hysteresis → Morse) and the trust gate |
 | `urhpk/timeline.py` | `Segment`, `Qso`, the EDI read, and wall clock ↔ audio time |
 | `urhpk/webcam_sync.py` | The one stream with no trustworthy clock: its start, and its drift |
+| `urhpk/webcam_face.py` | Where that stream is cropped: the face the PiP is framed on |
 | `urhpk/rig_state.py` | Telemetry and input log; RX/TX + QRG/mode events; QSO time matching |
 | `urhpk/qso_windows.py` | Where each QSO sits in the finished video |
 | `urhpk/chapters.py` | YouTube chapters and SRT captions |
@@ -497,6 +498,11 @@ cannot show — layout, PiP, waterfall.
 - **A round's webcam clips share that one recess, stacked in time order**
   (`sync_webcams` sorts them; each overlay is enabled from its own start). Between
   two clips the earlier one's `tpad`-cloned last frame is what stays on screen.
+- **Each clip's crop is its own, and is a constant.** `webcam_face` scans the clip
+  and the crop is centred on the median face; a clip with no scan (no detector
+  installed) keeps the size-agnostic centred expression. The crop must not vary
+  with time — a PiP that follows the operator's head is the visual glitch the
+  logger's rule forbids, and the motion it would chase is 0.14 % of a round.
 - **Every side stream needs `tpad=stop_mode=clone`** so a clip shorter than the
   round cannot end the shared filtergraph early and silently truncate the main
   video and audio. This is a real risk class with multi-input filtergraphs.

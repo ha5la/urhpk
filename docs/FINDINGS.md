@@ -407,6 +407,47 @@ needs a full second copy of the file on disk at exactly the point in a round whe
 free space is tightest. The rename that replaced it took 0.006 s on that same file —
 a directory-entry update, independent of size.
 
+### Where the face actually is
+
+The PiP took a centred crop, which assumes the operator sits in the middle of a
+frame. YuNet over the whole August round (2 h Alt+V capture, 1280×720, sampled
+every 5 s, 1440 samples, 98.8 % hit rate, longest miss run 10 s) says otherwise:
+the face centre's median is **x = 782 of 1280** — 0.61 of the width — with p5→p95
+spanning 689→938. Vertically it barely moves (68 px of 720 across p5→p95).
+
+The cause is feedback, not habit. The July round was shot on a phone front
+camera the operator could watch while recording; the Alt+V laptop capture that
+replaced it shows no preview, and every future round is the second kind.
+
+How far the face centre strays from the crop centre (half-width 353 px):
+
+| | > ½ half-width | > 0.8 | worst |
+|---|---|---|---|
+| centred crop | 36.8 % of the round | 7.8 % | 491 px — outside the crop; the operator was partly out of the PiP |
+| crop on the median face | 4.2 % | 0.14 % | 350 px |
+
+**Rejected: tracking the face.** That 0.14 % is a single 10 s excursion in two
+hours — the operator reaching past the camera — so a tracker would spend
+smoothing constants, a lost-face policy and `sendcmd` keyframing on it, and buy
+a jitter failure mode in exchange.
+
+Re-detecting on the **rendered** 245×250 PiP, which is the measurement that
+counts, the static crop leaves the face 18.5 px from the recess centre at the
+median and 57.1 px at p95, against the centred crop's 48.9 and 93.0. The
+detector also finds a face in 1426 of 1440 rendered frames rather than 1393:
+the centred crop loses it outright 33 times more often.
+
+**Rejected: zooming in on the face.** The detector's box is 46 % of the frame
+height, so the whole head with hair and headset is ~64 % — the existing
+full-height crop already fills ~60 % of the recess, which is the framing a zoom
+would have been aiming for. Only x moves.
+
+Cost is not a reason to be clever: 6.2 min to decode a 2 h clip at one sample
+per 5 s plus 1.2 min of detection (49 ms/frame at 640×360), against a ~3 h
+render — 4 %. Hence no cache and no sidecar. Keyframe-only decoding would cost
+1 min instead, but a keyframe every 25 s is 288 samples for the median to stand
+on rather than 1,440.
+
 ### Terminal PiP (pyte + tmux)
 
 - **Stock pyte silently drops three CSI sequences tmux needs.** tmux clears or
