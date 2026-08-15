@@ -26,8 +26,8 @@ def parse_wav_title(title: str) -> tuple[int, str, bool] | None:
     'TX 2026-07-06 16:00:37' -> (144299840, 'SSB', True).
 
     This is ground truth straight from the radio at the exact instant it
-    started recording the file -- unlike telemetry (a separate 1 Hz poll,
-    not synced to the WAV split at all), there is no possible lag here.
+    started recording the file -- telemetry is not synced to the WAV split
+    at all, so nothing else pins the moment a file was cut this precisely.
     Returns None if the title doesn't match this format (not an IC-9700
     recording, or a future firmware changing it)."""
     m = _WAV_TITLE_RE.search(title)

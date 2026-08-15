@@ -157,9 +157,9 @@ def telemetry_rot_record(now: datetime, az: float | None) -> dict:
 
 # ──────────────────────────────────────────────────────────────
 # Input-box recorder — event-triggered (one line per keystroke), not
-# polled: a 1 Hz sample like telemetry would blur or entirely miss fast
-# typing, and the buffer only changes on a keypress in the first place, so
-# there's nothing to poll. Feeds contest_video.py's typewriter overlay.
+# polled: sampling on any interval would blur or entirely miss fast typing,
+# and the buffer only changes on a keypress in the first place, so there's
+# nothing to poll. Feeds contest_video.py's typewriter overlay.
 #
 # Two event kinds share the file: "text" (one per keystroke, the full
 # current buffer contents) and "qso" (one per QSO actually appended to the

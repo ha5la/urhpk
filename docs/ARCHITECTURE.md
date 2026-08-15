@@ -978,9 +978,9 @@ one forward across the events that don't mention it.
 - Event-triggered, not polled: `session.default_buffer.on_text_changed` fires
   `_on_buffer_changed`, which appends `{"t": <UTC with microseconds>, "event":
   "text", "text": <full current buffer>}` to `YYMMDD-CALL-input.jsonl` on every
-  keystroke. A 1 Hz poll like the telemetry recorder would blur or entirely
-  miss fast typing, and the buffer only changes on a keypress in the first
-  place, so there's nothing to poll.
+  keystroke. Sampling on any interval would blur or entirely miss fast typing,
+  and the buffer only changes on a keypress in the first place, so there's
+  nothing to poll.
 - Microsecond precision matters here: it timestamps individual keystrokes.
   (`contest_video.py` parses the `'text'` events but no longer draws anything
   from them — the terminal PiP shows the real typing — so they exist for a
