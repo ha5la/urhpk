@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from urhpk.cw_decode import CharEvent
 from urhpk.geo import distance_between, initial_bearing, maidenhead_to_latlon
 from urhpk.icom_net import band_from_hz
-from urhpk.rig_state import SegState, TelemetrySample
+from urhpk.rig_state import SegState, TelemetrySample, rig_runs
 from urhpk.scope_render import SCOPE_AMP_MAX
 from urhpk.timeline import Qso, Segment, _eff, audio_time_for
 
@@ -325,20 +325,11 @@ def hud_chip_marks(
     `rig_offline` one puts both chips out, which is the honest reading when
     the radio has gone away rather than merely stayed put."""
     marks: list[tuple[float, str | None, str | None]] = []
-    freq_hz: int | None = None
-    mode: str | None = None
     last: tuple[str | None, str | None] | None = None
-    for t in sorted(telemetry, key=lambda s: s.t):
-        if t.rig_offline:
-            freq_hz, mode = None, None
-        elif t.freq_hz is not None or t.mode is not None:
-            freq_hz = t.freq_hz if t.freq_hz is not None else freq_hz
-            mode = t.mode if t.mode is not None else mode
-        else:
-            continue
+    for utc, freq_hz, mode in rig_runs(telemetry):
         pair = (band_from_hz(freq_hz) if freq_hz else None, mode)
         if pair != last:
-            marks.append((audio_time_for(t.t + timedelta(hours=offset_h), segs), *pair))
+            marks.append((audio_time_for(utc + timedelta(hours=offset_h), segs), *pair))
             last = pair
     return marks
 

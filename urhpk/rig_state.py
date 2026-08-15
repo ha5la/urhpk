@@ -140,6 +140,35 @@ def load_input_log(path: str) -> list[InputLogEvent]:
     return out
 
 
+def rig_runs(
+    telemetry: list[TelemetrySample],
+) -> list[tuple[datetime, int | None, str | None]]:
+    """(utc, freq_hz, mode) at every instant either of them changes.
+
+    The one answer to "what was the radio tuned to, and in what mode, at time
+    t" -- see this module's docstring for why telemetry is the source of that
+    and the WAV metadata is not.
+
+    A line silent about the rig carries the current pair forward; an explicit
+    `rig_offline` one ends the carry-forward with a (None, None) run, which is
+    the honest reading when the radio has gone away rather than merely stayed
+    put."""
+    runs: list[tuple[datetime, int | None, str | None]] = []
+    freq_hz: int | None = None
+    mode: str | None = None
+    for t in sorted(telemetry, key=lambda s: s.t):
+        if t.rig_offline:
+            freq_hz, mode = None, None
+        elif t.freq_hz is not None or t.mode is not None:
+            freq_hz = t.freq_hz if t.freq_hz is not None else freq_hz
+            mode = t.mode if t.mode is not None else mode
+        else:
+            continue
+        if not runs or (freq_hz, mode) != runs[-1][1:]:
+            runs.append((t.t, freq_hz, mode))
+    return runs
+
+
 FREQ_MATCH_TOLERANCE_HZ = 500  # see build_state_events' docstring
 
 
