@@ -390,16 +390,26 @@ def cw_subranges(
     -- stays one long file. state_events (from build_state_events) already
     carries the right sub-division for this, seeded from the WAV's own
     starting mode and refined by telemetry wherever it shows a genuine
-    change within the segment."""
+    change within the segment.
+
+    A state run also ends at every retune, so one continuous CW period
+    arrives as several touching runs and is joined back into one range
+    here. The join is not cosmetic: each range is decoded on its own, and
+    _estimate_dit needs several ON runs to estimate a dit from, which a
+    one-second sliver of a real over does not have."""
     seg_start, seg_end = seg.audio_t, seg.audio_t + seg.dur
     out: list[tuple[float, float]] = []
     for start, end, st in state_events:
         if st.mode != "CW":
             continue
         s0, s1 = max(start, seg_start), min(end, seg_end)
-        if s1 > s0:
-            out.append((s0 - seg.audio_t, s1 - seg.audio_t))
-    return out
+        if s1 <= s0:
+            continue
+        if out and s0 <= out[-1][1]:
+            out[-1] = (out[-1][0], s1)
+        else:
+            out.append((s0, s1))
+    return [(s0 - seg.audio_t, s1 - seg.audio_t) for s0, s1 in out]
 
 
 def decode_cw_subranges(

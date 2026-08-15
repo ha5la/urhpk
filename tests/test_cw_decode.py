@@ -389,6 +389,23 @@ class TestLongSegmentCwRecovery:
         # seg spans [1000, 1300); results are relative to seg.audio_t (1000)
         assert cw_subranges(seg, state_events) == [(10.0, 80.0), (200.0, 300.0)]
 
+    def test_cw_subranges_merges_runs_that_only_a_retune_split(self):
+        # A state run ends at every frequency change too, not just at a mode
+        # change, so one continuous CW period arrives as several touching
+        # runs. Decoded one at a time a one-second sliver has no chance --
+        # _estimate_dit needs several ON runs to estimate from -- and the
+        # whole period is one span regardless of how often we retuned inside
+        # it. Taken from a real segment: (3,4) (4,5) (5,7) (7,27).
+        seg = Segment("a", datetime(2026, 7, 6, 16, 47, 11), 27.0, 1000.0)
+        state_events = [
+            (1000.0, 1003.0, SegState(freq_hz=144_300_000, mode="FM")),
+            (1003.0, 1004.0, SegState(freq_hz=144_300_000, mode="CW")),
+            (1004.0, 1005.0, SegState(freq_hz=144_310_000, mode="CW")),
+            (1005.0, 1007.0, SegState(freq_hz=144_325_000, mode="CW")),
+            (1007.0, 1027.0, SegState(freq_hz=144_330_000, mode="CW")),
+        ]
+        assert cw_subranges(seg, state_events) == [(3.0, 27.0)]
+
     def test_decode_cw_subranges_recovers_cw_from_a_too_long_segment(self, tmp_path):
         # Regression test for a real reported case: two other stations
         # negotiate a CW frequency over voice, work each other in CW, then
