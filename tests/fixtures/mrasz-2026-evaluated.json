@@ -1,0 +1,1319 @@
+{
+ "rounds": {
+  "PKUV-2026-01": [
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-01-KEZDO"
+    },
+    "logs": [
+     {
+      "_id": {
+       "callsign": "HA5BEN"
+      },
+      "score": 1020
+     },
+     {
+      "_id": {
+       "callsign": "HA3MAR"
+      },
+      "score": 481
+     },
+     {
+      "_id": {
+       "callsign": "HA8KIF"
+      },
+      "score": 396
+     }
+    ]
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-01-SO-VI"
+    },
+    "logs": [
+     {
+      "_id": {
+       "callsign": "HA1VHF"
+      },
+      "score": 3358
+     },
+     {
+      "_id": {
+       "callsign": "HA7NS"
+      },
+      "score": 3276
+     },
+     {
+      "_id": {
+       "callsign": "HA3KHB"
+      },
+      "score": 1597
+     },
+     {
+      "_id": {
+       "callsign": "HA6IGM"
+      },
+      "score": 1487
+     },
+     {
+      "_id": {
+       "callsign": "HG8YKO"
+      },
+      "score": 396
+     },
+     {
+      "_id": {
+       "callsign": "HA9CD"
+      },
+      "score": 340
+     },
+     {
+      "_id": {
+       "callsign": "HA2MI"
+      },
+      "score": 321
+     },
+     {
+      "_id": {
+       "callsign": "HA1ZN"
+      },
+      "score": 136
+     },
+     {
+      "_id": {
+       "callsign": "HA1WD"
+      },
+      "score": 40
+     },
+     {
+      "_id": {
+       "callsign": "HA1MP"
+      },
+      "score": 28
+     }
+    ]
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-01-SO-BP"
+    },
+    "logs": [
+     {
+      "_id": {
+       "callsign": "HA5OO"
+      },
+      "score": 1489
+     },
+     {
+      "_id": {
+       "callsign": "HA5MA"
+      },
+      "score": 1452
+     },
+     {
+      "_id": {
+       "callsign": "HA3FMR"
+      },
+      "score": 1423
+     },
+     {
+      "_id": {
+       "callsign": "HG0SZA"
+      },
+      "score": 1206
+     },
+     {
+      "_id": {
+       "callsign": "HG5O"
+      },
+      "score": 1033
+     },
+     {
+      "_id": {
+       "callsign": "HA5FQ"
+      },
+      "score": 890
+     },
+     {
+      "_id": {
+       "callsign": "HG5P"
+      },
+      "score": 734
+     },
+     {
+      "_id": {
+       "callsign": "HA5MIG"
+      },
+      "score": 587
+     },
+     {
+      "_id": {
+       "callsign": "HA5LA"
+      },
+      "score": 543
+     },
+     {
+      "_id": {
+       "callsign": "HA5TI"
+      },
+      "score": 497
+     },
+     {
+      "_id": {
+       "callsign": "HA5CZ"
+      },
+      "score": 426
+     }
+    ]
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-01-NOHA"
+    },
+    "logs": []
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-01-CHECKLOG",
+     "isCheckLog": true
+    },
+    "logs": []
+   }
+  ],
+  "PKUV-2026-02": [
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-02-KEZDO"
+    },
+    "logs": [
+     {
+      "_id": {
+       "callsign": "HA5BEN"
+      },
+      "score": 1517
+     },
+     {
+      "_id": {
+       "callsign": "HA3MAR"
+      },
+      "score": 681
+     }
+    ]
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-02-SO-VI"
+    },
+    "logs": [
+     {
+      "_id": {
+       "callsign": "HA1VHF"
+      },
+      "score": 6582
+     },
+     {
+      "_id": {
+       "callsign": "HA7NS"
+      },
+      "score": 3858
+     },
+     {
+      "_id": {
+       "callsign": "HA3KHB"
+      },
+      "score": 3410
+     },
+     {
+      "_id": {
+       "callsign": "HA9CD"
+      },
+      "score": 1088
+     },
+     {
+      "_id": {
+       "callsign": "HA6IGM"
+      },
+      "score": 1058
+     },
+     {
+      "_id": {
+       "callsign": "HA3KGC"
+      },
+      "score": 709
+     },
+     {
+      "_id": {
+       "callsign": "HA1WD"
+      },
+      "score": 99
+     },
+     {
+      "_id": {
+       "callsign": "HA1MP"
+      },
+      "score": 28
+     },
+     {
+      "_id": {
+       "callsign": "HG3FNM"
+      },
+      "score": 0
+     }
+    ]
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-02-SO-BP"
+    },
+    "logs": [
+     {
+      "_id": {
+       "callsign": "HA5UA"
+      },
+      "score": 3377
+     },
+     {
+      "_id": {
+       "callsign": "HA4ND"
+      },
+      "score": 2229
+     },
+     {
+      "_id": {
+       "callsign": "HA3FMR"
+      },
+      "score": 2069
+     },
+     {
+      "_id": {
+       "callsign": "HG5O"
+      },
+      "score": 2042
+     },
+     {
+      "_id": {
+       "callsign": "HA5MA"
+      },
+      "score": 1677
+     },
+     {
+      "_id": {
+       "callsign": "HG0SZA"
+      },
+      "score": 1471
+     },
+     {
+      "_id": {
+       "callsign": "HA5OO"
+      },
+      "score": 1448
+     },
+     {
+      "_id": {
+       "callsign": "HA5FQ"
+      },
+      "score": 1055
+     },
+     {
+      "_id": {
+       "callsign": "HG5P"
+      },
+      "score": 853
+     },
+     {
+      "_id": {
+       "callsign": "HA5LA"
+      },
+      "score": 815
+     },
+     {
+      "_id": {
+       "callsign": "HA5MIG"
+      },
+      "score": 533
+     },
+     {
+      "_id": {
+       "callsign": "HA5CZ"
+      },
+      "score": 432
+     }
+    ]
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-02-NOHA"
+    },
+    "logs": []
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-02-CHECKLOG",
+     "isCheckLog": true
+    },
+    "logs": []
+   }
+  ],
+  "PKUV-2026-03": [
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-03-KEZDO"
+    },
+    "logs": [
+     {
+      "_id": {
+       "callsign": "HA3MAR"
+      },
+      "score": 678
+     },
+     {
+      "_id": {
+       "callsign": "HA8KIF"
+      },
+      "score": 65
+     }
+    ]
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-03-SO-VI"
+    },
+    "logs": [
+     {
+      "_id": {
+       "callsign": "HA1VHF"
+      },
+      "score": 6537
+     },
+     {
+      "_id": {
+       "callsign": "HA3KHB"
+      },
+      "score": 5285
+     },
+     {
+      "_id": {
+       "callsign": "HA7NS"
+      },
+      "score": 4156
+     },
+     {
+      "_id": {
+       "callsign": "HG8YKO"
+      },
+      "score": 3304
+     },
+     {
+      "_id": {
+       "callsign": "HA1DW"
+      },
+      "score": 1986
+     },
+     {
+      "_id": {
+       "callsign": "HA9CD"
+      },
+      "score": 1801
+     },
+     {
+      "_id": {
+       "callsign": "HA6IGM"
+      },
+      "score": 1394
+     },
+     {
+      "_id": {
+       "callsign": "HG3FNM"
+      },
+      "score": 467
+     },
+     {
+      "_id": {
+       "callsign": "HA1MP"
+      },
+      "score": 14
+     },
+     {
+      "_id": {
+       "callsign": "HA3KGC"
+      },
+      "score": 0
+     }
+    ]
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-03-SO-BP"
+    },
+    "logs": [
+     {
+      "_id": {
+       "callsign": "HA5OO"
+      },
+      "score": 2994
+     },
+     {
+      "_id": {
+       "callsign": "HA3FMR"
+      },
+      "score": 2862
+     },
+     {
+      "_id": {
+       "callsign": "HA4ND"
+      },
+      "score": 2586
+     },
+     {
+      "_id": {
+       "callsign": "HG0SZA"
+      },
+      "score": 2098
+     },
+     {
+      "_id": {
+       "callsign": "HA5MA"
+      },
+      "score": 1533
+     },
+     {
+      "_id": {
+       "callsign": "HA5FQ"
+      },
+      "score": 1167
+     },
+     {
+      "_id": {
+       "callsign": "HA5MIG"
+      },
+      "score": 712
+     },
+     {
+      "_id": {
+       "callsign": "HA5LA"
+      },
+      "score": 505
+     },
+     {
+      "_id": {
+       "callsign": "HG5P"
+      },
+      "score": 465
+     },
+     {
+      "_id": {
+       "callsign": "HA5CQZ"
+      },
+      "score": 120
+     }
+    ]
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-03-NOHA"
+    },
+    "logs": []
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-03-CHECKLOG",
+     "isCheckLog": true
+    },
+    "logs": []
+   }
+  ],
+  "PKUV-2026-04": [
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-04-KEZDO"
+    },
+    "logs": [
+     {
+      "_id": {
+       "callsign": "HA5BEN"
+      },
+      "score": 1245
+     },
+     {
+      "_id": {
+       "callsign": "HA3MAR"
+      },
+      "score": 227
+     },
+     {
+      "_id": {
+       "callsign": "HA5TAM"
+      },
+      "score": 10
+     }
+    ]
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-04-SO-VI"
+    },
+    "logs": [
+     {
+      "_id": {
+       "callsign": "HA1VHF"
+      },
+      "score": 5232
+     },
+     {
+      "_id": {
+       "callsign": "HA3KHB"
+      },
+      "score": 4194
+     },
+     {
+      "_id": {
+       "callsign": "HA7NS"
+      },
+      "score": 2864
+     },
+     {
+      "_id": {
+       "callsign": "HG3FNM"
+      },
+      "score": 483
+     }
+    ]
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-04-SO-BP"
+    },
+    "logs": [
+     {
+      "_id": {
+       "callsign": "HA5OO"
+      },
+      "score": 2261
+     },
+     {
+      "_id": {
+       "callsign": "HG5O"
+      },
+      "score": 1860
+     },
+     {
+      "_id": {
+       "callsign": "HA4ND"
+      },
+      "score": 1644
+     },
+     {
+      "_id": {
+       "callsign": "HA5LA"
+      },
+      "score": 1353
+     },
+     {
+      "_id": {
+       "callsign": "HG0SZA"
+      },
+      "score": 1034
+     },
+     {
+      "_id": {
+       "callsign": "HA5MA"
+      },
+      "score": 757
+     },
+     {
+      "_id": {
+       "callsign": "HA4BF"
+      },
+      "score": 550
+     },
+     {
+      "_id": {
+       "callsign": "HA5TI"
+      },
+      "score": 524
+     },
+     {
+      "_id": {
+       "callsign": "HA5CQZ"
+      },
+      "score": 36
+     }
+    ]
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-04-NOHA"
+    },
+    "logs": []
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-04-CHECKLOG",
+     "isCheckLog": true
+    },
+    "logs": []
+   }
+  ],
+  "PKUV-2026-05": [
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-05-KEZDO"
+    },
+    "logs": [
+     {
+      "_id": {
+       "callsign": "HA5BEN"
+      },
+      "score": 1686
+     },
+     {
+      "_id": {
+       "callsign": "HA5KFZ"
+      },
+      "score": 844
+     },
+     {
+      "_id": {
+       "callsign": "HG5P"
+      },
+      "score": 741
+     },
+     {
+      "_id": {
+       "callsign": "HA7PB"
+      },
+      "score": 526
+     }
+    ]
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-05-SO-VI"
+    },
+    "logs": [
+     {
+      "_id": {
+       "callsign": "HA1VHF"
+      },
+      "score": 6838
+     },
+     {
+      "_id": {
+       "callsign": "HA3KHB"
+      },
+      "score": 4811
+     },
+     {
+      "_id": {
+       "callsign": "HA7NS"
+      },
+      "score": 3476
+     },
+     {
+      "_id": {
+       "callsign": "HA6IGM"
+      },
+      "score": 1358
+     },
+     {
+      "_id": {
+       "callsign": "HG8YKO"
+      },
+      "score": 1072
+     },
+     {
+      "_id": {
+       "callsign": "HA1DW"
+      },
+      "score": 659
+     },
+     {
+      "_id": {
+       "callsign": "HG3FNM"
+      },
+      "score": 632
+     },
+     {
+      "_id": {
+       "callsign": "HA9CD"
+      },
+      "score": 297
+     },
+     {
+      "_id": {
+       "callsign": "HA1WD"
+      },
+      "score": 36
+     },
+     {
+      "_id": {
+       "callsign": "HA1MP"
+      },
+      "score": 27
+     }
+    ]
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-05-SO-BP"
+    },
+    "logs": [
+     {
+      "_id": {
+       "callsign": "HA5LA"
+      },
+      "score": 2590
+     },
+     {
+      "_id": {
+       "callsign": "HG5O"
+      },
+      "score": 2327
+     },
+     {
+      "_id": {
+       "callsign": "HG0SZA"
+      },
+      "score": 2132
+     },
+     {
+      "_id": {
+       "callsign": "HA5OO"
+      },
+      "score": 1486
+     },
+     {
+      "_id": {
+       "callsign": "HA5FQ"
+      },
+      "score": 1199
+     },
+     {
+      "_id": {
+       "callsign": "HA5MIG"
+      },
+      "score": 490
+     },
+     {
+      "_id": {
+       "callsign": "HA3MAR"
+      },
+      "score": 426
+     },
+     {
+      "_id": {
+       "callsign": "HA5CZ"
+      },
+      "score": 327
+     },
+     {
+      "_id": {
+       "callsign": "HA1ECP/P"
+      },
+      "score": 142
+     },
+     {
+      "_id": {
+       "callsign": "HA5TU"
+      },
+      "score": 124
+     },
+     {
+      "_id": {
+       "callsign": "HA5CQZ"
+      },
+      "score": 95
+     }
+    ]
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-05-NOHA"
+    },
+    "logs": []
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-05-CHECKLOG",
+     "isCheckLog": true
+    },
+    "logs": []
+   }
+  ],
+  "PKUV-2026-06": [
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-06-KEZDO"
+    },
+    "logs": [
+     {
+      "_id": {
+       "callsign": "HA5BEN"
+      },
+      "score": 1773
+     },
+     {
+      "_id": {
+       "callsign": "HA7PB"
+      },
+      "score": 423
+     },
+     {
+      "_id": {
+       "callsign": "HA5TAM"
+      },
+      "score": 0
+     }
+    ]
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-06-SO-VI"
+    },
+    "logs": [
+     {
+      "_id": {
+       "callsign": "HA1VHF"
+      },
+      "score": 8937
+     },
+     {
+      "_id": {
+       "callsign": "HA3KHB"
+      },
+      "score": 5958
+     },
+     {
+      "_id": {
+       "callsign": "HA7NS"
+      },
+      "score": 3338
+     },
+     {
+      "_id": {
+       "callsign": "HG8YKO"
+      },
+      "score": 2280
+     },
+     {
+      "_id": {
+       "callsign": "HA9CD"
+      },
+      "score": 1485
+     },
+     {
+      "_id": {
+       "callsign": "HA3GO"
+      },
+      "score": 540
+     },
+     {
+      "_id": {
+       "callsign": "HA1DW"
+      },
+      "score": 432
+     },
+     {
+      "_id": {
+       "callsign": "HA3KGC"
+      },
+      "score": 258
+     }
+    ]
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-06-SO-BP"
+    },
+    "logs": [
+     {
+      "_id": {
+       "callsign": "HA5LA"
+      },
+      "score": 2641
+     },
+     {
+      "_id": {
+       "callsign": "HG5O"
+      },
+      "score": 2266
+     },
+     {
+      "_id": {
+       "callsign": "HA4ND"
+      },
+      "score": 1966
+     },
+     {
+      "_id": {
+       "callsign": "HG0SZA"
+      },
+      "score": 1963
+     },
+     {
+      "_id": {
+       "callsign": "HA4BF"
+      },
+      "score": 1506
+     },
+     {
+      "_id": {
+       "callsign": "HA5FQ"
+      },
+      "score": 1454
+     },
+     {
+      "_id": {
+       "callsign": "HA5MA"
+      },
+      "score": 1068
+     },
+     {
+      "_id": {
+       "callsign": "HG5P"
+      },
+      "score": 977
+     },
+     {
+      "_id": {
+       "callsign": "HA5MIG"
+      },
+      "score": 375
+     },
+     {
+      "_id": {
+       "callsign": "HA3MAR"
+      },
+      "score": 362
+     },
+     {
+      "_id": {
+       "callsign": "HA5CZ"
+      },
+      "score": 329
+     },
+     {
+      "_id": {
+       "callsign": "HA5CQZ"
+      },
+      "score": 147
+     },
+     {
+      "_id": {
+       "callsign": "HA5FMT"
+      },
+      "score": 19
+     }
+    ]
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-06-NOHA"
+    },
+    "logs": [
+     {
+      "_id": {
+       "callsign": "YO5AVN"
+      },
+      "score": 2120
+     },
+     {
+      "_id": {
+       "callsign": "YO5BQD"
+      },
+      "score": 0
+     }
+    ]
+   },
+   {
+    "evalCategory": {
+     "code": "PKUV-2026-06-CHECKLOG",
+     "isCheckLog": true
+    },
+    "logs": []
+   }
+  ]
+ },
+ "merged": [
+  {
+   "evalCategory": {
+    "code": "PKUV-2026-0MERGED-URH-OK-KEZDO"
+   },
+   "logs": [
+    {
+     "_id": {
+      "callsign": "HA5BEN"
+     },
+     "score": 7241
+    },
+    {
+     "_id": {
+      "callsign": "HA3MAR"
+     },
+     "score": 2067
+    },
+    {
+     "_id": {
+      "callsign": "HA7PB"
+     },
+     "score": 949
+    },
+    {
+     "_id": {
+      "callsign": "HA5KFZ"
+     },
+     "score": 844
+    },
+    {
+     "_id": {
+      "callsign": "HG5P"
+     },
+     "score": 741
+    },
+    {
+     "_id": {
+      "callsign": "HA8KIF"
+     },
+     "score": 461
+    },
+    {
+     "_id": {
+      "callsign": "HA5TAM"
+     },
+     "score": 10
+    }
+   ]
+  },
+  {
+   "evalCategory": {
+    "code": "PKUV-2026-0MERGED-URH-PK-VIDEK"
+   },
+   "logs": [
+    {
+     "_id": {
+      "callsign": "HA1VHF"
+     },
+     "score": 37484
+    },
+    {
+     "_id": {
+      "callsign": "HA3KHB"
+     },
+     "score": 25255
+    },
+    {
+     "_id": {
+      "callsign": "HA7NS"
+     },
+     "score": 20968
+    },
+    {
+     "_id": {
+      "callsign": "HG8YKO"
+     },
+     "score": 7052
+    },
+    {
+     "_id": {
+      "callsign": "HA6IGM"
+     },
+     "score": 5297
+    },
+    {
+     "_id": {
+      "callsign": "HA9CD"
+     },
+     "score": 5011
+    },
+    {
+     "_id": {
+      "callsign": "HA1DW"
+     },
+     "score": 3077
+    },
+    {
+     "_id": {
+      "callsign": "HG3FNM"
+     },
+     "score": 1582
+    },
+    {
+     "_id": {
+      "callsign": "HA3KGC"
+     },
+     "score": 967
+    },
+    {
+     "_id": {
+      "callsign": "HA3GO"
+     },
+     "score": 540
+    },
+    {
+     "_id": {
+      "callsign": "HA2MI"
+     },
+     "score": 321
+    },
+    {
+     "_id": {
+      "callsign": "HA1WD"
+     },
+     "score": 175
+    },
+    {
+     "_id": {
+      "callsign": "HA1ZN"
+     },
+     "score": 136
+    },
+    {
+     "_id": {
+      "callsign": "HA1MP"
+     },
+     "score": 97
+    }
+   ]
+  },
+  {
+   "evalCategory": {
+    "code": "PKUV-2026-0MERGED-URH-PK-PEST"
+   },
+   "logs": [
+    {
+     "_id": {
+      "callsign": "HG0SZA"
+     },
+     "score": 9904
+    },
+    {
+     "_id": {
+      "callsign": "HA5OO"
+     },
+     "score": 9678
+    },
+    {
+     "_id": {
+      "callsign": "HG5O"
+     },
+     "score": 9528
+    },
+    {
+     "_id": {
+      "callsign": "HA5LA"
+     },
+     "score": 8447
+    },
+    {
+     "_id": {
+      "callsign": "HA4ND"
+     },
+     "score": 8425
+    },
+    {
+     "_id": {
+      "callsign": "HA5MA"
+     },
+     "score": 6487
+    },
+    {
+     "_id": {
+      "callsign": "HA3FMR"
+     },
+     "score": 6354
+    },
+    {
+     "_id": {
+      "callsign": "HA5FQ"
+     },
+     "score": 5765
+    },
+    {
+     "_id": {
+      "callsign": "HA5UA"
+     },
+     "score": 3377
+    },
+    {
+     "_id": {
+      "callsign": "HG5P"
+     },
+     "score": 3029
+    },
+    {
+     "_id": {
+      "callsign": "HA5MIG"
+     },
+     "score": 2697
+    },
+    {
+     "_id": {
+      "callsign": "HA4BF"
+     },
+     "score": 2056
+    },
+    {
+     "_id": {
+      "callsign": "HA5CZ"
+     },
+     "score": 1514
+    },
+    {
+     "_id": {
+      "callsign": "HA5TI"
+     },
+     "score": 1021
+    },
+    {
+     "_id": {
+      "callsign": "HA3MAR"
+     },
+     "score": 788
+    },
+    {
+     "_id": {
+      "callsign": "HA5CQZ"
+     },
+     "score": 398
+    },
+    {
+     "_id": {
+      "callsign": "HA1ECP/P"
+     },
+     "score": 142
+    },
+    {
+     "_id": {
+      "callsign": "HA5TU"
+     },
+     "score": 124
+    },
+    {
+     "_id": {
+      "callsign": "HA5FMT"
+     },
+     "score": 19
+    }
+   ]
+  },
+  {
+   "evalCategory": {
+    "code": "PKUV-2026-0MERGED-URH-PK-NON-HA"
+   },
+   "logs": [
+    {
+     "_id": {
+      "callsign": "YO5AVN"
+     },
+     "score": 2120
+    },
+    {
+     "_id": {
+      "callsign": "YO5BQD"
+     },
+     "score": 0
+    }
+   ]
+  }
+ ]
+}

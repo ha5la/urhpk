@@ -24,6 +24,7 @@ flowchart TD
     MP4 --> U["<b>4. Upload</b><br/>youtubeuploader …<br/><i>lands private — you publish by hand</i>"]
 
     EDI --> S["<b>Submit the log</b><br/>bb.mrasz.hu"]
+    S --> ST["<b>5. Where it landed</b><br/>uv run puskas_standings.py<br/><i>any time after</i>"]
 ```
 
 ## 1. Before the round — harvest
@@ -110,6 +111,23 @@ part that actually counts for the contest; everything else here is storytelling.
 **The video goes to YouTube** via `youtubeuploader`, as a deliberate manual step
 after reviewing the render. It lands *private*; flipping it to public is a human
 decision made in YouTube Studio, and nothing in this repo auto-publishes.
+
+## 5. Where the round landed
+
+```
+uv run puskas_standings.py
+```
+
+The organiser publishes the annual table only for rounds it has finished
+evaluating, which runs two to three months behind, so between submitting a log
+and seeing it counted there is a long gap the website says nothing about. This
+rebuilds the table from the per-round results and carries it forward over the
+rounds still outstanding, using the competitors' claimed scores for those.
+
+It prints two totals. Claimed scores flatter everyone — the cross-check has not
+run yet — so beside the naive total is one that scales each pending round by
+what that station has historically kept after evaluation. When the two columns
+disagree about the order, the order genuinely is not decided yet.
 
 ### Uploading a rendered video to YouTube
 `contest_video.py` only renders the mp4 + `.chapters.txt` + `.srt` — it does not upload.

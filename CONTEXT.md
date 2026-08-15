@@ -52,6 +52,25 @@ _Avoid_: session, contest
 The time bounds of one round.
 _Avoid_: session start, session end
 
+**Claimed score**:
+What a competitor's own submitted log adds up to, before the organiser
+cross-checks it against everyone else's. Published within days of a round, and
+always the higher of the two numbers.
+_Avoid_: preliminary score, provisional score
+
+**Evaluated score**:
+What is left of a claimed score after the cross-check throws out the QSOs the
+other station recorded differently or not at all. This is the one that counts,
+and it arrives two to three months late. The MRASZ API serves it from
+`/preliminary`, which is the endpoint's name and not this term.
+_Avoid_: final score, preliminary score, real score
+
+**Retention**:
+Evaluated score ÷ claimed score for one station in one round — the fraction of
+its own claim that survived. Averaged over a station's rounds, it is the only
+basis this project has for guessing what an un-evaluated round is really worth.
+_Avoid_: accuracy, error rate, bad percent
+
 ### Connection
 
 **Session** survives in this project as a word for *connections only*. It is not

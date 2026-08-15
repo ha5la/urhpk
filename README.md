@@ -13,6 +13,7 @@ Amateur radio contest toolset for the Puskás URH Kupa, plus a general-purpose
 | `on4kst_irc_bridge.py` | ON4KST ↔ IRC bridge; connect any IRC client to ON4KST chat |
 | `puskas_logger.py` | Contest QSO logger; rig control via `icom_net` (direct Ethernet, push updates) + rotctld; exports EDI files |
 | `puskas_harvester.py` | Pre-contest data collector; fetches all stations → `puskas-seen-stations.json` |
+| `puskas_standings.py` | Where the year stands, carried forward over the rounds the organiser has not evaluated yet |
 | `contest_video.py` | Annotated CW contest video from a timestamped recording + EDI log |
 | `hamlib_supervisor.py` | Starts/stops rotctld based on USB device presence (inotify, no polling) |
 | `icom_net.py` | Direct Ethernet CI-V client for Icom radios (IC-9700 etc.), bypassing rigctld; instant push freq/mode updates, plus real spectrum-scope capture |

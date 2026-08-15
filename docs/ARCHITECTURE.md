@@ -75,7 +75,44 @@ uv run puskas_harvester.py
 - Output: `~/.puskas/puskas-seen-stations.json` — `{callsign: {wwls: [most_recent, ...], bands}}`
   where `wwls` is a list of all known locators in reverse-chronological order (most recently
   observed in any Puskás round appears first)
-- All API responses cached in `.puskas_cache/`; delete it to force a fresh fetch
+- All API responses cached in `.puskas_cache/` via `mrasz_api`; delete it to force a fresh fetch
+
+## mrasz_api.py – the contest server, cached
+
+`bb.mrasz.hu/nest` is read by two components, so the fetch and its cache live in one
+place and the cache is shared.
+- `cached_get(url, max_age=None, now=time.time)` — `max_age=None` never expires, which
+  is correct **only** for a round the organiser has already evaluated. Anything still
+  moving must pass a bound: the event list did not, and a clone first run in May still
+  believed May was the newest round in August.
+- The clock is an argument so a test pins it instead of touching mtimes.
+
+## puskas_standings.py – the year so far, including the un-evaluated rounds
+
+```
+uv run puskas_standings.py [--year 2026] [--callsign HA5LA] [--category SO-BP] [--refresh]
+```
+The organiser's annual table (`/preliminary` on the `*-MERGED` event) covers only the
+rounds it has finished evaluating, which in practice runs two to three months behind.
+This rebuilds that table from the per-round results and carries it forward.
+
+- **Aggregation is per category, not per callsign.** A station that changes category
+  mid-year — out of `KEZDO` on its second licence anniversary — is credited in each
+  category only with the rounds it spent there. Summing its rounds under one callsign
+  reproduces neither total. `tests/fixtures/mrasz-2026-evaluated.json` pins the six
+  evaluated 2026 rounds against the organiser's own published table: 42 totals, exact.
+- **Two totals, side by side.** `naive` takes claimed scores at face value; `adj` scales
+  each pending round by the station's historical retention. Where the two disagree about
+  the order, the order is not yet knowable — and for 2026 after August they do disagree
+  about first place.
+- **Retention is `evaluated / claimed`, meaned over every evaluated round including
+  previous years'** — the rate belongs to the operator, not the season, and one year is
+  six samples. Below `MIN_SAMPLES` the field's pooled mean stands in, so a newcomer is
+  not judged by one unlucky round. It matters: 2026-only retention and 2025+2026
+  retention rank the top two BP stations differently.
+- `--refresh` drops the hour-long cache on un-evaluated rounds; evaluated ones are
+  cached forever because they cannot change.
+- Not subject to the round-directory rule — it writes nothing and reads no round.
 
 ## hamlib_supervisor.py – rotctld USB-replug supervisor
 
