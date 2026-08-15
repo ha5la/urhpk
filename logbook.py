@@ -86,6 +86,12 @@ class LogBook:
         km = distance_between(self.my_loc, loc)
         return 0 if km is None else int(km)
 
+    def points(self, loc: str) -> int:
+        """What a QSO to `loc` scores: the kilometres rounded up, so a contact
+        inside my own square is still worth one point."""
+        km = distance_between(self.my_loc, loc)
+        return 0 if km is None else int(km) + 1
+
     def bearing(self, loc: str) -> int:
         deg = bearing_between(self.my_loc, loc)
         return 0 if deg is None else int(deg)
@@ -266,7 +272,7 @@ def load_from_edi(
                     rst_r=r.rst_r,
                     nr_r=nr_r,
                     loc=loc,
-                    points=r.points or lb.dist(loc),
+                    points=r.points or lb.points(loc),
                 )
             )
 

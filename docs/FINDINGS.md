@@ -8,6 +8,20 @@ ARCHITECTURE.md keeps the **rules** ("do not remove this error handling"); this
 file keeps the **evidence** behind them. Narrative that only explains how the code
 used to look is not here at all — git history keeps that.
 
+## Scoring: a QSO is worth its kilometres rounded up
+
+The organiser's evaluator scores `int(km) + 1`, where km is the great-circle
+distance between the two locators' centres on a 6371 km sphere — the same
+haversine `geo.py` computes. Measured against the server's own per-QSO `points`
+field over every round cached at the time: 8290 of 8290 QSOs it scored agree, and
+the 79 that disagree are ones it zeroed outright (INVALID, X-QSO), not distances
+it computed differently. A QSO inside one's own square is 0 km and pays 1 point.
+
+The logger wrote `int(km)`, which lost exactly one point per QSO: August 2026 was
+claimed as 2318 (34 QSOs) + 915 (22 QSOs) where the server said 2352 + 937.
+`tests/fixtures/mrasz-scored-qsos.json` is the evidence, 499 QSOs over 28 rounds
+with each round's total as the server published it.
+
 ## Hamlib
 
 - **Async/event-driven rig or rotator state is not available for this hardware**,

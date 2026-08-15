@@ -1,0 +1,2696 @@
+{
+ "callsign": "HA5LA",
+ "rounds": [
+  {
+   "code": "PKUV-2006-04-2M",
+   "my_locator": "JN97TF",
+   "score": 2107,
+   "qsos": [
+    {
+     "loc": "JN97WM",
+     "dupe": false,
+     "points": 38
+    },
+    {
+     "loc": "JN97WM",
+     "dupe": false,
+     "points": 38
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 63
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 46
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 63
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 46
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN87GF",
+     "dupe": false,
+     "points": 233
+    },
+    {
+     "loc": "JN87GF",
+     "dupe": false,
+     "points": 233
+    },
+    {
+     "loc": "JN87GF",
+     "dupe": false,
+     "points": 233
+    },
+    {
+     "loc": "JN86SR",
+     "dupe": false,
+     "points": 168
+    },
+    {
+     "loc": "JN96UW",
+     "dupe": false,
+     "points": 34
+    },
+    {
+     "loc": "JN96UW",
+     "dupe": false,
+     "points": 34
+    },
+    {
+     "loc": "JN96UW",
+     "dupe": false,
+     "points": 34
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "KN06GU",
+     "dupe": false,
+     "points": 82
+    },
+    {
+     "loc": "KN06GU",
+     "dupe": false,
+     "points": 82
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN87HQ",
+     "dupe": false,
+     "points": 232
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 46
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2006-04-70CM",
+   "my_locator": "JN97TF",
+   "score": 530,
+   "qsos": [
+    {
+     "loc": "JN97WM",
+     "dupe": false,
+     "points": 38
+    },
+    {
+     "loc": "JN97WM",
+     "dupe": false,
+     "points": 38
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 63
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": true,
+     "points": 0
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 63
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 46
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2025-10-2M",
+   "my_locator": "JN97TF",
+   "score": 686,
+   "qsos": [
+    {
+     "loc": "JN96UW",
+     "dupe": false,
+     "points": 34
+    },
+    {
+     "loc": "JN96UW",
+     "dupe": false,
+     "points": 34
+    },
+    {
+     "loc": "JN97MJ",
+     "dupe": false,
+     "points": 48
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 50
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 50
+    },
+    {
+     "loc": "JN97SI",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97QO",
+     "dupe": false,
+     "points": 46
+    },
+    {
+     "loc": "JN97QO",
+     "dupe": false,
+     "points": 46
+    },
+    {
+     "loc": "JN97WM",
+     "dupe": false,
+     "points": 38
+    },
+    {
+     "loc": "KN07OC",
+     "dupe": false,
+     "points": 121
+    },
+    {
+     "loc": "KN07OC",
+     "dupe": false,
+     "points": 121
+    },
+    {
+     "loc": "KN06GU",
+     "dupe": false,
+     "points": 82
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2025-11-2M",
+   "my_locator": "JN97MM",
+   "score": 38,
+   "qsos": [
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97MN",
+     "dupe": false,
+     "points": 5
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 10
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 10
+    },
+    {
+     "loc": "JN97ML",
+     "dupe": false,
+     "points": 5
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2025-11-70CM",
+   "my_locator": "JN97MM",
+   "score": 94,
+   "qsos": [
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 13
+    },
+    {
+     "loc": "JN97MN",
+     "dupe": false,
+     "points": 5
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 10
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 10
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2025-2-2M",
+   "my_locator": "JN97MM",
+   "score": 284,
+   "qsos": [
+    {
+     "loc": "JN97NO",
+     "dupe": false,
+     "points": 12
+    },
+    {
+     "loc": "JN97NM",
+     "dupe": false,
+     "points": 7
+    },
+    {
+     "loc": "JN97SG",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97MM",
+     "dupe": false,
+     "points": 1
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NO",
+     "dupe": false,
+     "points": 12
+    },
+    {
+     "loc": "JN97LO",
+     "dupe": false,
+     "points": 12
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97MJ",
+     "dupe": false,
+     "points": 14
+    },
+    {
+     "loc": "JN97KJ",
+     "dupe": false,
+     "points": 19
+    },
+    {
+     "loc": "JN97NM",
+     "dupe": false,
+     "points": 7
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97SG",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97MM",
+     "dupe": false,
+     "points": 1
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97MN",
+     "dupe": false,
+     "points": 5
+    },
+    {
+     "loc": "JN97OJ",
+     "dupe": false,
+     "points": 19
+    },
+    {
+     "loc": "JN97MM",
+     "dupe": false,
+     "points": 1
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2025-2-70CM",
+   "my_locator": "JN97MM",
+   "score": 48,
+   "qsos": [
+    {
+     "loc": "JN97QO",
+     "dupe": false,
+     "points": 27
+    },
+    {
+     "loc": "JN97MN",
+     "dupe": false,
+     "points": 5
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2025-3-2M",
+   "my_locator": "JN97MM",
+   "score": 73,
+   "qsos": [
+    {
+     "loc": "JN97QO",
+     "dupe": false,
+     "points": 27
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 10
+    },
+    {
+     "loc": "JN97MN",
+     "dupe": false,
+     "points": 5
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NM",
+     "dupe": false,
+     "points": 7
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2025-4-2M",
+   "my_locator": "JN97MM",
+   "score": 283,
+   "qsos": [
+    {
+     "loc": "JN97MN",
+     "dupe": false,
+     "points": 5
+    },
+    {
+     "loc": "JN97QO",
+     "dupe": false,
+     "points": 27
+    },
+    {
+     "loc": "JN97MM",
+     "dupe": false,
+     "points": 1
+    },
+    {
+     "loc": "JN97MJ",
+     "dupe": false,
+     "points": 14
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 13
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97QO",
+     "dupe": false,
+     "points": 27
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97OJ",
+     "dupe": false,
+     "points": 19
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 13
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97MM",
+     "dupe": false,
+     "points": 1
+    },
+    {
+     "loc": "JN97OG",
+     "dupe": false,
+     "points": 31
+    },
+    {
+     "loc": "JN97MJ",
+     "dupe": false,
+     "points": 14
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97QO",
+     "dupe": false,
+     "points": 27
+    },
+    {
+     "loc": "JN97KJ",
+     "dupe": false,
+     "points": 19
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2025-4-70CM",
+   "my_locator": "JN97MM",
+   "score": 52,
+   "qsos": [
+    {
+     "loc": "JN97QO",
+     "dupe": false,
+     "points": 27
+    },
+    {
+     "loc": "JN97NO",
+     "dupe": false,
+     "points": 12
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97MN",
+     "dupe": false,
+     "points": 5
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2025-5-2M",
+   "my_locator": "JN97TF",
+   "score": 971,
+   "qsos": [
+    {
+     "loc": "JN96UW",
+     "dupe": false,
+     "points": 34
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97WM",
+     "dupe": false,
+     "points": 38
+    },
+    {
+     "loc": "KN06HT",
+     "dupe": false,
+     "points": 89
+    },
+    {
+     "loc": "KN06HT",
+     "dupe": false,
+     "points": 89
+    },
+    {
+     "loc": "JN97MN",
+     "dupe": false,
+     "points": 58
+    },
+    {
+     "loc": "JN97MN",
+     "dupe": false,
+     "points": 58
+    },
+    {
+     "loc": "JN97KJ",
+     "dupe": false,
+     "points": 60
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "KN06GU",
+     "dupe": false,
+     "points": 82
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 46
+    },
+    {
+     "loc": "JN96UW",
+     "dupe": false,
+     "points": 34
+    },
+    {
+     "loc": "JN97KJ",
+     "dupe": false,
+     "points": 60
+    },
+    {
+     "loc": "JN97MJ",
+     "dupe": false,
+     "points": 48
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2025-6-2M",
+   "my_locator": "JN97MM",
+   "score": 329,
+   "qsos": [
+    {
+     "loc": "JN96UW",
+     "dupe": false,
+     "points": 83
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 13
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97QO",
+     "dupe": false,
+     "points": 27
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97NO",
+     "dupe": false,
+     "points": 12
+    },
+    {
+     "loc": "JN97NM",
+     "dupe": false,
+     "points": 7
+    },
+    {
+     "loc": "JN97OJ",
+     "dupe": false,
+     "points": 19
+    },
+    {
+     "loc": "JN97NO",
+     "dupe": false,
+     "points": 12
+    },
+    {
+     "loc": "JN97MM",
+     "dupe": false,
+     "points": 1
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 10
+    },
+    {
+     "loc": "JN97NM",
+     "dupe": false,
+     "points": 7
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 10
+    },
+    {
+     "loc": "JN97MM",
+     "dupe": false,
+     "points": 1
+    },
+    {
+     "loc": "JN97MN",
+     "dupe": false,
+     "points": 5
+    },
+    {
+     "loc": "JN97NO",
+     "dupe": false,
+     "points": 12
+    },
+    {
+     "loc": "JN97MJ",
+     "dupe": false,
+     "points": 14
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2025-6-70CM",
+   "my_locator": "JN97MM",
+   "score": 37,
+   "qsos": [
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 13
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2025-7-2M",
+   "my_locator": "JN97TF",
+   "score": 959,
+   "qsos": [
+    {
+     "loc": "JN97KJ",
+     "dupe": false,
+     "points": 60
+    },
+    {
+     "loc": "JN97VT",
+     "dupe": false,
+     "points": 67
+    },
+    {
+     "loc": "JN97WM",
+     "dupe": false,
+     "points": 38
+    },
+    {
+     "loc": "JN87GF",
+     "dupe": false,
+     "points": 233
+    },
+    {
+     "loc": "JN87GF",
+     "dupe": false,
+     "points": 233
+    },
+    {
+     "loc": "JN97MN",
+     "dupe": false,
+     "points": 58
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 46
+    },
+    {
+     "loc": "KN06GU",
+     "dupe": false,
+     "points": 82
+    },
+    {
+     "loc": "JN97KJ",
+     "dupe": false,
+     "points": 60
+    },
+    {
+     "loc": "KN06GU",
+     "dupe": false,
+     "points": 82
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2025-9-2M",
+   "my_locator": "JN97TF",
+   "score": 1189,
+   "qsos": [
+    {
+     "loc": "JN97MN",
+     "dupe": false,
+     "points": 58
+    },
+    {
+     "loc": "JN97QO",
+     "dupe": false,
+     "points": 46
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97MJ",
+     "dupe": false,
+     "points": 48
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 46
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 46
+    },
+    {
+     "loc": "JN86SR",
+     "dupe": false,
+     "points": 168
+    },
+    {
+     "loc": "JN97WM",
+     "dupe": false,
+     "points": 38
+    },
+    {
+     "loc": "JN87GF",
+     "dupe": false,
+     "points": 233
+    },
+    {
+     "loc": "JN87GF",
+     "dupe": false,
+     "points": 233
+    },
+    {
+     "loc": "JN97MN",
+     "dupe": false,
+     "points": 58
+    },
+    {
+     "loc": "KN07OC",
+     "dupe": false,
+     "points": 121
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2026-01-2M",
+   "my_locator": "JN97MM",
+   "score": 268,
+   "qsos": [
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97ML",
+     "dupe": false,
+     "points": 5
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 10
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 10
+    },
+    {
+     "loc": "JN97ML",
+     "dupe": false,
+     "points": 5
+    },
+    {
+     "loc": "JN97ML",
+     "dupe": false,
+     "points": 5
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97OJ",
+     "dupe": false,
+     "points": 19
+    },
+    {
+     "loc": "JN97OJ",
+     "dupe": false,
+     "points": 19
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97KR",
+     "dupe": false,
+     "points": 27
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 13
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 13
+    },
+    {
+     "loc": "JN97NM",
+     "dupe": false,
+     "points": 7
+    },
+    {
+     "loc": "JN97NM",
+     "dupe": false,
+     "points": 7
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2026-01-70CM",
+   "my_locator": "JN97MM",
+   "score": 275,
+   "qsos": [
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 13
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97ML",
+     "dupe": false,
+     "points": 5
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 13
+    },
+    {
+     "loc": "JN97ML",
+     "dupe": false,
+     "points": 5
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 10
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 10
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97ML",
+     "dupe": false,
+     "points": 5
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97OJ",
+     "dupe": false,
+     "points": 19
+    },
+    {
+     "loc": "JN97OJ",
+     "dupe": false,
+     "points": 19
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97KR",
+     "dupe": false,
+     "points": 27
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NM",
+     "dupe": false,
+     "points": 7
+    },
+    {
+     "loc": "JN97NM",
+     "dupe": false,
+     "points": 7
+    },
+    {
+     "loc": "JN97NM",
+     "dupe": false,
+     "points": 7
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2026-02-2M",
+   "my_locator": "JN97MM",
+   "score": 487,
+   "qsos": [
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97OJ",
+     "dupe": false,
+     "points": 19
+    },
+    {
+     "loc": "JN97OJ",
+     "dupe": false,
+     "points": 19
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 13
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 13
+    },
+    {
+     "loc": "JN97NM",
+     "dupe": false,
+     "points": 7
+    },
+    {
+     "loc": "JN97NM",
+     "dupe": false,
+     "points": 7
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97UM",
+     "dupe": false,
+     "points": 51
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 10
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 10
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN96UW",
+     "dupe": false,
+     "points": 83
+    },
+    {
+     "loc": "JN96UW",
+     "dupe": false,
+     "points": 83
+    },
+    {
+     "loc": "JN97MJ",
+     "dupe": false,
+     "points": 14
+    },
+    {
+     "loc": "JN97MJ",
+     "dupe": false,
+     "points": 14
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2026-02-70CM",
+   "my_locator": "JN97MM",
+   "score": 328,
+   "qsos": [
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NM",
+     "dupe": false,
+     "points": 7
+    },
+    {
+     "loc": "JN97UM",
+     "dupe": false,
+     "points": 51
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97UM",
+     "dupe": false,
+     "points": 51
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97OJ",
+     "dupe": false,
+     "points": 19
+    },
+    {
+     "loc": "JN97OJ",
+     "dupe": false,
+     "points": 19
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 13
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 13
+    },
+    {
+     "loc": "JN97NM",
+     "dupe": false,
+     "points": 7
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 10
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 10
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2026-03-2M",
+   "my_locator": "JN97MM",
+   "score": 251,
+   "qsos": [
+    {
+     "loc": "JN97MJ",
+     "dupe": false,
+     "points": 14
+    },
+    {
+     "loc": "JN97MJ",
+     "dupe": false,
+     "points": 14
+    },
+    {
+     "loc": "JN97MJ",
+     "dupe": false,
+     "points": 14
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NM",
+     "dupe": false,
+     "points": 7
+    },
+    {
+     "loc": "JN97NM",
+     "dupe": false,
+     "points": 7
+    },
+    {
+     "loc": "JN97NM",
+     "dupe": false,
+     "points": 7
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 10
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 10
+    },
+    {
+     "loc": "JN97NO",
+     "dupe": false,
+     "points": 12
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 10
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 13
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 13
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2026-03-70CM",
+   "my_locator": "JN97MM",
+   "score": 266,
+   "qsos": [
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97NM",
+     "dupe": false,
+     "points": 7
+    },
+    {
+     "loc": "JN97NM",
+     "dupe": false,
+     "points": 7
+    },
+    {
+     "loc": "JN97NM",
+     "dupe": false,
+     "points": 7
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 10
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 10
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 10
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 16
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 13
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 13
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 13
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2026-04-2M",
+   "my_locator": "JN97TF",
+   "score": 1399,
+   "qsos": [
+    {
+     "loc": "JN97MJ",
+     "dupe": false,
+     "points": 48
+    },
+    {
+     "loc": "JN97MJ",
+     "dupe": false,
+     "points": 48
+    },
+    {
+     "loc": "JN97MJ",
+     "dupe": false,
+     "points": 48
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97WM",
+     "dupe": false,
+     "points": 38
+    },
+    {
+     "loc": "JN97WM",
+     "dupe": false,
+     "points": 38
+    },
+    {
+     "loc": "JN87GF",
+     "dupe": false,
+     "points": 233
+    },
+    {
+     "loc": "JN87GF",
+     "dupe": false,
+     "points": 233
+    },
+    {
+     "loc": "JN86SR",
+     "dupe": false,
+     "points": 168
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 46
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 63
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 63
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 46
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 46
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 46
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2026-06-2M",
+   "my_locator": "JN97TF",
+   "score": 2832,
+   "qsos": [
+    {
+     "loc": "KN17WW",
+     "dupe": false,
+     "points": 329
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97WM",
+     "dupe": false,
+     "points": 38
+    },
+    {
+     "loc": "JN97WM",
+     "dupe": false,
+     "points": 38
+    },
+    {
+     "loc": "JN97RJ",
+     "dupe": false,
+     "points": 23
+    },
+    {
+     "loc": "JN97RJ",
+     "dupe": false,
+     "points": 23
+    },
+    {
+     "loc": "KN06GU",
+     "dupe": false,
+     "points": 82
+    },
+    {
+     "loc": "KN06GU",
+     "dupe": false,
+     "points": 82
+    },
+    {
+     "loc": "JN97QO",
+     "dupe": false,
+     "points": 46
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 63
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 63
+    },
+    {
+     "loc": "JN97MJ",
+     "dupe": false,
+     "points": 48
+    },
+    {
+     "loc": "JN97MJ",
+     "dupe": false,
+     "points": 48
+    },
+    {
+     "loc": "JN97MJ",
+     "dupe": false,
+     "points": 48
+    },
+    {
+     "loc": "JN86SR",
+     "dupe": false,
+     "points": 168
+    },
+    {
+     "loc": "JN86SR",
+     "dupe": false,
+     "points": 168
+    },
+    {
+     "loc": "JN87GF",
+     "dupe": false,
+     "points": 233
+    },
+    {
+     "loc": "JN87GF",
+     "dupe": false,
+     "points": 233
+    },
+    {
+     "loc": "JN87GF",
+     "dupe": false,
+     "points": 233
+    },
+    {
+     "loc": "KN17WW",
+     "dupe": false,
+     "points": 329
+    },
+    {
+     "loc": "JN96UW",
+     "dupe": false,
+     "points": 34
+    },
+    {
+     "loc": "JN96UW",
+     "dupe": false,
+     "points": 34
+    },
+    {
+     "loc": "JN96UW",
+     "dupe": false,
+     "points": 34
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2026-06-70CM",
+   "my_locator": "JN97TF",
+   "score": 436,
+   "qsos": [
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97WM",
+     "dupe": false,
+     "points": 38
+    },
+    {
+     "loc": "JN97WM",
+     "dupe": false,
+     "points": 38
+    },
+    {
+     "loc": "JN97RJ",
+     "dupe": false,
+     "points": 23
+    },
+    {
+     "loc": "JN97RJ",
+     "dupe": false,
+     "points": 23
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 63
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 63
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2026-07-2M",
+   "my_locator": "JN97TF",
+   "score": 2438,
+   "qsos": [
+    {
+     "loc": "JN86SR",
+     "dupe": false,
+     "points": 168
+    },
+    {
+     "loc": "JN86SR",
+     "dupe": false,
+     "points": 168
+    },
+    {
+     "loc": "JN86SR",
+     "dupe": false,
+     "points": 168
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97WM",
+     "dupe": false,
+     "points": 38
+    },
+    {
+     "loc": "JN97WM",
+     "dupe": false,
+     "points": 38
+    },
+    {
+     "loc": "JN97MJ",
+     "dupe": false,
+     "points": 48
+    },
+    {
+     "loc": "JN97MJ",
+     "dupe": false,
+     "points": 48
+    },
+    {
+     "loc": "JN97MJ",
+     "dupe": false,
+     "points": 48
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 63
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 63
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 46
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 46
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN87GF",
+     "dupe": false,
+     "points": 233
+    },
+    {
+     "loc": "JN87GF",
+     "dupe": false,
+     "points": 233
+    },
+    {
+     "loc": "JN87GF",
+     "dupe": false,
+     "points": 233
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 46
+    },
+    {
+     "loc": "JN96UW",
+     "dupe": false,
+     "points": 34
+    },
+    {
+     "loc": "JN96UW",
+     "dupe": false,
+     "points": 34
+    },
+    {
+     "loc": "JN96UW",
+     "dupe": false,
+     "points": 34
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2026-07-70CM",
+   "my_locator": "JN97TF",
+   "score": 909,
+   "qsos": [
+    {
+     "loc": "JN97WM",
+     "dupe": false,
+     "points": 38
+    },
+    {
+     "loc": "JN97WM",
+     "dupe": false,
+     "points": 38
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 63
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 63
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 46
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 46
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 46
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2026-08-2M",
+   "my_locator": "JN97TF",
+   "score": 2352,
+   "qsos": [
+    {
+     "loc": "JN97MN",
+     "dupe": false,
+     "points": 58
+    },
+    {
+     "loc": "JN97MN",
+     "dupe": false,
+     "points": 58
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 50
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 50
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 46
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 46
+    },
+    {
+     "loc": "JN97OM",
+     "dupe": false,
+     "points": 46
+    },
+    {
+     "loc": "JN97WM",
+     "dupe": false,
+     "points": 38
+    },
+    {
+     "loc": "JN97WM",
+     "dupe": false,
+     "points": 38
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 63
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 63
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN86SR",
+     "dupe": false,
+     "points": 168
+    },
+    {
+     "loc": "JN86SR",
+     "dupe": false,
+     "points": 168
+    },
+    {
+     "loc": "JN96UW",
+     "dupe": false,
+     "points": 34
+    },
+    {
+     "loc": "JN96UW",
+     "dupe": false,
+     "points": 34
+    },
+    {
+     "loc": "JN96UW",
+     "dupe": false,
+     "points": 34
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 50
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN87GF",
+     "dupe": false,
+     "points": 233
+    },
+    {
+     "loc": "JN87GF",
+     "dupe": false,
+     "points": 233
+    },
+    {
+     "loc": "JN87GF",
+     "dupe": false,
+     "points": 233
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    }
+   ]
+  },
+  {
+   "code": "PKUV-2026-08-70CM",
+   "my_locator": "JN97TF",
+   "score": 937,
+   "qsos": [
+    {
+     "loc": "JN97SG",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97SG",
+     "dupe": false,
+     "points": 8
+    },
+    {
+     "loc": "JN97WM",
+     "dupe": false,
+     "points": 38
+    },
+    {
+     "loc": "JN97WM",
+     "dupe": false,
+     "points": 38
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 63
+    },
+    {
+     "loc": "JN97LN",
+     "dupe": false,
+     "points": 63
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 50
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 50
+    },
+    {
+     "loc": "JN97MK",
+     "dupe": false,
+     "points": 50
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97NL",
+     "dupe": false,
+     "points": 47
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    },
+    {
+     "loc": "JN97OK",
+     "dupe": false,
+     "points": 40
+    }
+   ]
+  }
+ ]
+}

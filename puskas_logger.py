@@ -1275,7 +1275,7 @@ async def run(lb: LogBook, tname: str):
                     rst_r=parsed["rst_r"],
                     nr_r=parsed["nr_r"],
                     loc=loc,
-                    points=lb.dist(loc),
+                    points=lb.points(loc),
                 )
                 lb.worked = {(q.callsign, q.band, q.mode) for q in lb.qsos}
                 _cache_loc(parsed["callsign"], loc)
@@ -1292,7 +1292,7 @@ async def run(lb: LogBook, tname: str):
         rst_s = rst_def
         rst_r = parsed["rst_r"]
         nr_s = lb.next_nr(band)
-        points = lb.dist(loc)
+        points = lb.points(loc)
 
         now = datetime.now(timezone.utc)
         qso = QSO(

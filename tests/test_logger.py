@@ -2,10 +2,12 @@
 
 import asyncio
 import io
+import json
 import os
 import signal
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -284,6 +286,51 @@ class TestLogBook:
         assert lb.bearing("JN97WM") == 0
         lb2 = LogBook("HA5LA", "JN97TF", {})
         assert lb2.bearing("") == 0
+
+
+# ──────────────────────────────────────────────────────────────
+# Points
+# ──────────────────────────────────────────────────────────────
+
+
+class TestPoints:
+    def test_a_qso_scores_its_distance_rounded_up(self):
+        lb = LogBook("HA5LA", "JN97TF", {})
+        assert lb.dist("JN97WM") == 37
+        assert lb.points("JN97WM") == 38
+
+    def test_a_qso_inside_my_own_square_scores_one(self):
+        lb = LogBook("HA5LA", "JN97TF", {})
+        assert lb.points("JN97TF") == 1
+
+    def test_points_zero_without_locators(self):
+        assert LogBook("HA5LA", "", {}).points("JN97WM") == 0
+        assert LogBook("HA5LA", "JN97TF", {}).points("") == 0
+
+
+class TestPointsAgainstTheServer:
+    """The organiser's evaluator is the authority on what a QSO is worth, so
+    the rule is checked against what it actually paid: every QSO of this
+    station's it has ever scored, and every round total it published."""
+
+    @staticmethod
+    def _rounds():
+        path = Path(__file__).parent / "fixtures" / "mrasz-scored-qsos.json"
+        return json.loads(path.read_text(encoding="utf-8"))["rounds"]
+
+    def test_reproduces_every_scored_qso(self):
+        for rnd in self._rounds():
+            lb = LogBook("HA5LA", rnd["my_locator"], {})
+            for q in rnd["qsos"]:
+                if q["dupe"]:
+                    continue
+                assert lb.points(q["loc"]) == q["points"], (rnd["code"], q["loc"])
+
+    def test_reproduces_every_round_total(self):
+        for rnd in self._rounds():
+            lb = LogBook("HA5LA", rnd["my_locator"], {})
+            total = sum(0 if q["dupe"] else lb.points(q["loc"]) for q in rnd["qsos"])
+            assert total == rnd["score"], rnd["code"]
 
 
 # ──────────────────────────────────────────────────────────────
@@ -595,7 +642,7 @@ class TestQsoEdit:
             rst_r=parsed["rst_r"],
             nr_r=parsed["nr_r"],
             loc=loc,
-            points=lb.dist(loc),
+            points=lb.points(loc),
         )
         lb.worked = {(q.callsign, q.band, q.mode) for q in lb.qsos}
 
@@ -763,7 +810,9 @@ class TestPrintRecent:
     def test_bearing_column_always_shown(self):
         lb = LogBook("HA5LA", "JN97TF", {})
         lb.add(
-            _qso(callsign="HA7NS", nr_s=1, h=14, loc="JN97WM", points=lb.dist("JN97WM"))
+            _qso(
+                callsign="HA7NS", nr_s=1, h=14, loc="JN97WM", points=lb.points("JN97WM")
+            )
         )
         lines = self._lines(lb, n=4)
         qso_line = next(line for line in lines if "HA7NS" in line)
@@ -776,7 +825,9 @@ class TestPrintRecent:
     def test_tx_rx_arrows_in_log_line(self):
         lb = LogBook("HA5LA", "JN97TF", {})
         lb.add(
-            _qso(callsign="HA7NS", nr_s=1, h=14, loc="JN97WM", points=lb.dist("JN97WM"))
+            _qso(
+                callsign="HA7NS", nr_s=1, h=14, loc="JN97WM", points=lb.points("JN97WM")
+            )
         )
         lines = self._lines(lb, n=4)
         qso_line = next(line for line in lines if "HA7NS" in line)
