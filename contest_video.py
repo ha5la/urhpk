@@ -5,17 +5,17 @@ Given a directory of timestamped WAV segments (split on RX/TX switches, as
 recorded during the contest) and the EDI log for the same round, this builds a
 YouTube-ready MP4 with:
 
-  * a scrolling audio spectrogram (SDR-style waterfall) as background
-  * a live CW decode ticker, synced to the audio
-  * an RX/TX badge, from the WAV files' own rig metadata (the QRG/mode/rotator
-    line it used to carry is redundant with the terminal PiP's own toolbar)
+  * a scrolling audio spectrogram (SDR-style waterfall) as background, or the
+    radio's own spectrum scope where a recording of it covers (--scope)
+  * a HUD bar along the bottom carrying the score, the RX/TX lamp, the QRG and
+    band/mode readouts, the compass and a live CW decode ticker
   * optionally, a large picture-in-picture of the logger/irssi terminal
-    (--cast, an asciinema recording) and a small webcam PiP
+    (--cast, an asciinema recording) and a small webcam PiP in the HUD's own
+    face recess
 
-The ticker and badge are burned in via one ASS subtitle file in a single
-ffmpeg pass; the cast PiP is rendered separately (see
-render_cast_video) and composited alongside the webcam PiP in that same pass
--- no frame-by-frame rendering of the main video.
+Every overlay is a video: the HUD, the cast PiP and the scope background are
+each rendered to their own clip and composited with the webcam in a single
+ffmpeg pass -- no frame-by-frame rendering of the main video.
 
 Usage:
     uv run contest_video.py RECORDING_DIR EDI_FILE [-o OUT.mp4]

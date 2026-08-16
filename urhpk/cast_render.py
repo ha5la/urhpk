@@ -1,10 +1,9 @@
 """The terminal PiP: an asciinema .cast replayed into video frames.
 
-Rendered as a real video rather than as ASS text, since the cast can contain
-many more state changes per second than are worth a separate subtitle event
-(the toolbar clock alone ticks ~10x/second the whole round), and a fixed,
-modest frame rate reads perfectly well for text. pyte replays the cast into a
-virtual terminal; each frame is rasterized with PIL.
+Rendered as a real video: the cast changes far too often to draw as text events
+(the toolbar clock alone ticks ~10x/second the whole round), and a fixed, modest
+frame rate reads perfectly well for text. pyte replays the cast into a virtual
+terminal; each frame is rasterized with PIL.
 
 Sync needs no cross-correlation at all, unlike the webcam: asciinema's own
 cast v2 format embeds a Unix-epoch "timestamp" in its header, recorded by the
