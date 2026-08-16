@@ -725,8 +725,8 @@ def main() -> None:
     offset_h = derive_utc_offset(segs, qsos_all)
     print(f"{my_callsign} {mywwl}: {len(qsos_all)} QSOs, UTC+{offset_h} local")
 
-    # Before anything reads a segment's wall time -- the cast and scope sync
-    # just below, and every source aligned after them -- and after offset_h,
+    # Before anything reads a segment's wall time -- the webcam, cast and scope
+    # sync below, and every source aligned after them -- and after offset_h,
     # which is derived to the hour and cannot care about a sub-second shift.
     telemetry = load_telemetry(args.telemetry) if args.telemetry else []
     moved = apply_clock_offset(segs, telemetry, offset_h)
@@ -740,6 +740,28 @@ def main() -> None:
     elif args.telemetry:
         print("  clock: no radio/laptop offset measured this round -- uncorrected")
 
+    # read_wav_metadata runs before --duration trims segs (unlike the CW
+    # decode loop further down, which *should* skip past the cutoff) so the
+    # webcam fine-tune below can search for TX anchors across the *full*
+    # round, same reasoning as sync_webcam_start using qsos_all above --
+    # a short preview otherwise has too few candidates to find a confident
+    # match.
+    read_wav_metadata(segs)
+    known_wav = sum(1 for s in segs if s.ptt is not None)
+    print(f"  WAV metadata: {known_wav}/{len(segs)} segments have IC-9700 rig tags")
+
+    webcams: list[WebcamClip] = []
+    drift = None
+    if args.webcam:
+        webcams, drift = sync_webcams(
+            args.webcam,
+            segs,
+            qsos_all,
+            offset_h,
+            input_log=args.input_log,
+            manual_offset=args.webcam_offset,
+        )
+
     cast_start = None
     cast_rate = 0.0
     if args.cast:
@@ -750,6 +772,24 @@ def main() -> None:
             f"{cast_start:.0f}s in the output (exact -- Unix-epoch timestamp; "
             f"see below for a clock-drift correction shared with --webcam, if given)"
         )
+        # The webcam capture and the cast recording (asciinema, also on this
+        # machine) are timestamped by the *same* laptop system clock -- so the
+        # intercept/rate correction measured against the webcam's own audio
+        # (the only stream with anything to cross-correlate against the radio's
+        # WAV audio) applies to the cast PiP too. Confirmed needed from a real
+        # report: the operator saw the logger's own on-screen mode change
+        # happen visibly before the audio caught up with it, late in the same
+        # round this webcam drift was found in -- consistent with one shared
+        # laptop-clock drift, not two unrelated bugs.
+        if drift:
+            intercept, rate = drift
+            cast_start += intercept
+            cast_rate = rate
+            print(
+                f"  cast: applying the same clock-drift correction "
+                f"({intercept:+.2f}s, {rate * 3600:+.3f}s/hour) -> "
+                f"starts at {cast_start:.2f}s"
+            )
 
     scope_records: list[tuple[float, int, int, bytes]] = []
     scope_start = None
@@ -772,45 +812,6 @@ def main() -> None:
                 f"  scope: {len(scope_records)} sweeps, synced to "
                 f"{scope_start:.0f}-{scope_end:.0f}s in the output "
                 f"(exact -- Unix-epoch timestamps, same as --cast)"
-            )
-
-    # read_wav_metadata runs before --duration trims segs (unlike the CW
-    # decode loop further down, which *should* skip past the cutoff) so the
-    # webcam fine-tune below can search for TX anchors across the *full*
-    # round, same reasoning as sync_webcam_start using qsos_all above --
-    # a short preview otherwise has too few candidates to find a confident
-    # match.
-    read_wav_metadata(segs)
-    known_wav = sum(1 for s in segs if s.ptt is not None)
-    print(f"  WAV metadata: {known_wav}/{len(segs)} segments have IC-9700 rig tags")
-
-    webcams: list[WebcamClip] = []
-    if args.webcam:
-        webcams, drift = sync_webcams(
-            args.webcam,
-            segs,
-            qsos_all,
-            offset_h,
-            input_log=args.input_log,
-            manual_offset=args.webcam_offset,
-        )
-        # The webcam capture and the cast recording (asciinema, also on this
-        # machine) are timestamped by the *same* laptop system clock -- so the
-        # intercept/rate correction measured against the webcam's own audio
-        # (the only stream with anything to cross-correlate against the radio's
-        # WAV audio) applies to the cast PiP too. Confirmed needed from a real
-        # report: the operator saw the logger's own on-screen mode change
-        # happen visibly before the audio caught up with it, late in the same
-        # round this webcam drift was found in -- consistent with one shared
-        # laptop-clock drift, not two unrelated bugs.
-        if drift and args.cast and cast_start is not None:
-            intercept, rate = drift
-            cast_start += intercept
-            cast_rate = rate
-            print(
-                f"  cast: applying the same clock-drift correction "
-                f"({intercept:+.2f}s, {rate * 3600:+.3f}s/hour) -> "
-                f"starts at {cast_start:.2f}s"
             )
 
     if args.duration:
