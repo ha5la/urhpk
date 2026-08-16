@@ -14,14 +14,7 @@ from urhpk.timeline import (
 )
 
 
-class TestAss:
-    def _ticker_texts(self, ass: str) -> list[str]:
-        texts = []
-        for line in ass.splitlines():
-            if line.startswith("Dialogue:") and ",Ticker," in line:
-                texts.append(line.rsplit(",", 1)[-1])
-        return texts
-
+class TestBurstStarts:
     def test_burst_starts_marks_first_segment_and_after_long_gap_only(self):
         segs = [
             Segment(
