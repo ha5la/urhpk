@@ -740,6 +740,10 @@ def main() -> None:
     elif args.telemetry:
         print("  clock: no radio/laptop offset measured this round -- uncorrected")
 
+    # Read once, up front: the cast sync below pins its own start against these
+    # keystrokes, and qso_windows' exact QSO timing reads the same file later.
+    input_log = load_input_log(args.input_log) if args.input_log else []
+
     cast_start = None
     cast_rate = 0.0
     if args.cast:
@@ -895,12 +899,11 @@ def main() -> None:
         (seg.audio_t + t0, seg.audio_t + t1, events) for seg, t0, t1, events in cw_raw
     ]
 
-    # Only feeds qso_windows()'s exact chapter/caption timing now -- the
-    # typewriter overlay this also used to drive is gone, since the
-    # cast PIP already shows exactly what was typed, live.
+    # Feeds qso_windows()'s exact chapter/caption timing -- the typewriter
+    # overlay this also used to drive is gone, since the cast PIP already
+    # shows exactly what was typed, live.
     qso_times = None
-    if args.input_log:
-        input_log = load_input_log(args.input_log)
+    if input_log:
         qso_times = match_qso_times(qsos, input_log)
         matched = sum(1 for t in qso_times if t is not None)
         print(
