@@ -6,16 +6,19 @@ many more state changes per second than are worth a separate subtitle event
 modest frame rate reads perfectly well for text. pyte replays the cast into a
 virtual terminal; each frame is rasterized with PIL.
 
-Sync is exact and needs no cross-correlation at all, unlike the webcam:
-asciinema's own cast v2 format embeds a Unix-epoch "timestamp" in its header,
-recorded by the same machine's clock that (if the logger is also running
-there) already drives every other precise timestamp in the pipeline -- see
-recorders.py's webcam capture for the same reasoning.
+Sync needs no cross-correlation at all, unlike the webcam: asciinema's own
+cast v2 format embeds a Unix-epoch "timestamp" in its header, recorded by the
+same machine's clock that (if the logger is also running there) already drives
+every other precise timestamp in the pipeline -- see recorders.py's webcam
+capture for the same reasoning. That timestamp is a whole-second integer, so
+the last of it comes from the input log instead (cast_start_fraction).
 """
 
 from __future__ import annotations
 
+import bisect
 import json
+import statistics
 import subprocess
 from datetime import datetime, timezone
 
@@ -52,16 +55,75 @@ CAST_PALETTE = {
 
 def parse_cast_header(path: str) -> tuple[datetime, int, int]:
     """(start_utc, width, height) from an asciinema cast v2 file's header
-    line. The embedded Unix-epoch `timestamp` is exact, real-world UTC --
-    no local-timezone ambiguity the way a filename-embedded wall-clock
-    string has (see parse_webcam_wall), so no derive_utc_offset-style
-    whole-hour rounding is needed here at all."""
+    line. The embedded Unix-epoch `timestamp` is real-world UTC -- no
+    local-timezone ambiguity the way a filename-embedded wall-clock string
+    has (see parse_webcam_wall), so no derive_utc_offset-style whole-hour
+    rounding is needed here at all. It is a whole-second integer, though:
+    see cast_start_fraction for the part it drops and how to get it back."""
     with open(path) as f:
         header = json.loads(f.readline())
     start_utc = datetime.fromtimestamp(header["timestamp"], tz=timezone.utc).replace(
         tzinfo=None
     )
     return start_utc, header["width"], header["height"]
+
+
+ANCHOR_MIN_LEN = 5  # a shorter string matches too much of a busy screen
+ANCHOR_LIMIT = 40  # anchors are interchangeable; a handful settles the median
+
+
+def cast_start_fraction(
+    cast_path: str, cast_wall: datetime, input_log: list
+) -> float | None:
+    """The sub-second part of the cast's start that its header threw away, or
+    None if this round cannot say.
+
+    asciinema writes `"timestamp": int(time.time())`, so the header is a floor
+    and the PiP is placed up to a whole second early -- 0.90 s on the August
+    round, where it showed as the HUD's score ticking well after the terminal
+    had already drawn the QSO in. Nothing inside the cast records the part that
+    was dropped, but the logger echoes what is typed and its input log stamps
+    the same keystrokes on the same clock, so a string in both files pins it.
+
+    A repaint cannot precede the keystroke that caused it, and the fraction is
+    below a second by construction: together those bound the search to the one
+    second of cast before the keystroke, which is also what keeps a stale
+    repaint of the same text from elsewhere in the round out of it. What is
+    left is the paint latency, tens of milliseconds -- an order below the
+    CAST_FPS grid the PiP is drawn on, so it is not worth chasing further."""
+    anchors: list[tuple[float, str]] = []
+    previous = None
+    for ev in input_log:
+        if ev.kind != "text" or len(ev.text) < ANCHOR_MIN_LEN or ev.text == previous:
+            continue
+        previous = ev.text
+        anchors.append(((ev.t - cast_wall).total_seconds(), ev.text))
+        if len(anchors) == ANCHOR_LIMIT:
+            break
+    if not anchors:
+        return None
+
+    with open(cast_path) as f:
+        f.readline()
+        events: list[tuple[float, str]] = []
+        for line in f:
+            ts, kind, data = json.loads(line)
+            if ts > anchors[-1][0]:
+                break
+            if kind == "o":
+                events.append((ts, data))
+
+    times = [e[0] for e in events]
+    fractions = []
+    for t, text in anchors:
+        window = range(
+            bisect.bisect_left(times, t - 1.0), bisect.bisect_right(times, t)
+        )
+        for i in window:
+            if text in events[i][1] or text.upper() in events[i][1]:
+                fractions.append(t - times[i])
+                break
+    return statistics.median(fractions) if fractions else None
 
 
 def _cast_color(

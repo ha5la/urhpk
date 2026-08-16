@@ -38,7 +38,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from urhpk import wiring
-from urhpk.cast_render import parse_cast_header, render_cast_video
+from urhpk.cast_render import (
+    cast_start_fraction,
+    parse_cast_header,
+    render_cast_video,
+)
 from urhpk.chapters import build_chapters, build_srt
 from urhpk.cw_decode import (
     MAX_OVER_S,
@@ -748,12 +752,25 @@ def main() -> None:
     cast_rate = 0.0
     if args.cast:
         cast_wall, cast_cols, cast_rows = parse_cast_header(args.cast)
+        fraction = cast_start_fraction(args.cast, cast_wall, input_log)
+        if fraction is not None:
+            cast_wall += timedelta(seconds=fraction)
         cast_start = stream_start(cast_wall + timedelta(hours=offset_h), segs)
         print(
             f"  cast: {cast_cols}x{cast_rows} terminal, synced to start at "
-            f"{cast_start:.0f}s in the output (exact -- Unix-epoch timestamp; "
+            f"{cast_start:.2f}s in the output (Unix-epoch timestamp; "
             f"see below for a clock-drift correction shared with --webcam, if given)"
         )
+        if fraction is not None:
+            print(
+                f"    +{fraction:.2f}s of it from the input log's own keystrokes -- "
+                f"the header's timestamp is truncated to the whole second"
+            )
+        else:
+            print(
+                "    no input log to pin the header's dropped sub-second on -- "
+                "the PiP can be up to 1s early"
+            )
 
     scope_records: list[tuple[float, int, int, bytes]] = []
     scope_start = None

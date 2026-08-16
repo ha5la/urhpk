@@ -1,10 +1,11 @@
 """Tests for the terminal PiP: replaying a .cast into frames."""
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import numpy as np
 import pyte
+import pytest
 from PIL import Image, ImageDraw, ImageFont
 
 from urhpk import cast_render
@@ -14,8 +15,12 @@ from urhpk.cast_render import (
     _CastScreen,
     _CastStream,
     _draw_cast_row,
+    cast_start_fraction,
     parse_cast_header,
 )
+from urhpk.rig_state import InputLogEvent
+
+EPOCH = datetime(1970, 1, 1)
 
 
 def _write_cast(path, width, height, ts, events):
@@ -32,14 +37,75 @@ def _write_cast(path, width, height, ts, events):
             f.write(json.dumps([t, "o", text]) + "\n")
 
 
+class TestCastStartFraction:
+    """asciinema writes its header timestamp as a whole-second integer, so a
+    cast is placed up to a second early -- measured at 0.90 s on the August
+    round, where it read as the HUD's score ticking after the terminal PiP had
+    already shown the QSO logged. The logger echoes what is typed and the input
+    log stamps the same keystrokes on the same clock, so text found in both
+    pins the second back."""
+
+    HEADER_TS = 1000
+
+    def _typed(self, *entries):
+        """Input-log keystroke events, given as (absolute unix time, text)."""
+        return [
+            InputLogEvent(EPOCH + timedelta(seconds=t), "text", s) for t, s in entries
+        ]
+
+    def _cast(self, tmp_path, events):
+        path = tmp_path / "r.cast"
+        _write_cast(path, 80, 24, self.HEADER_TS, events)
+        return str(path)
+
+    def test_recovers_the_second_the_header_truncated(self, tmp_path):
+        # The cast really began at 1000.40; its header says 1000. A repaint at
+        # clip time 2.30 is therefore at 1002.70 in real time, and the
+        # keystroke that caused it was stamped a hair earlier, at 1002.68.
+        cast = self._cast(
+            tmp_path, [(0.5, "booting"), (2.30, "> ha5tam"), (4.30, "> ha5tam 59")]
+        )
+        log = self._typed((1002.68, "ha5tam"), (1004.68, "ha5tam 59"))
+        assert cast_start_fraction(cast, EPOCH + timedelta(seconds=self.HEADER_TS), log)
+
+    def test_the_fraction_is_the_lag_between_keystroke_and_repaint(self, tmp_path):
+        cast = self._cast(
+            tmp_path, [(0.5, "booting"), (2.30, "> ha5tam"), (4.30, "> ha5tam 59")]
+        )
+        log = self._typed((1002.68, "ha5tam"), (1004.68, "ha5tam 59"))
+        frac = cast_start_fraction(cast, EPOCH + timedelta(seconds=self.HEADER_TS), log)
+        assert frac == pytest.approx(0.38, abs=0.001)
+
+    def test_a_stale_repaint_of_the_same_text_is_not_the_anchor(self, tmp_path):
+        # The same string can be on screen again much later in a round. Only
+        # the second before the keystroke can hold the repaint it caused, which
+        # is exactly the window a sub-second fraction allows.
+        cast = self._cast(tmp_path, [(1.0, "> ha5tam"), (30.0, "> ha5tam")])
+        frac = cast_start_fraction(
+            cast,
+            EPOCH + timedelta(seconds=self.HEADER_TS),
+            self._typed((1030.60, "ha5tam")),
+        )
+        assert frac == pytest.approx(0.60, abs=0.001)
+
+    def test_nothing_to_match_leaves_the_header_alone(self, tmp_path):
+        cast = self._cast(tmp_path, [(1.0, "booting"), (2.0, "no typing here")])
+        frac = cast_start_fraction(
+            cast,
+            EPOCH + timedelta(seconds=self.HEADER_TS),
+            self._typed((1002.68, "ha5tam")),
+        )
+        assert frac is None
+
+
 class TestTerminalCast:
     """Rendering an asciinema .cast (e.g. an irssi+logger tmux session) as
     a video PIP -- see render_cast_video's docstring for why this is text
     rasterized via pyte+PIL rather than a GIF/agg conversion, and why sync
-    needs no cross-correlation at all (the cast's own header embeds an
-    exact Unix-epoch start time, from the same machine's clock)."""
+    needs no cross-correlation at all (the cast's own header embeds a
+    Unix-epoch start time, from the same machine's clock)."""
 
-    def test_parse_cast_header_reads_exact_utc_start(self, tmp_path):
+    def test_parse_cast_header_reads_the_utc_start(self, tmp_path):
         p = tmp_path / "session.cast"
         # 1783890785 is 2026-07-12 21:13:05 UTC (real value from a real
         # asciinema recording, cross-checked against `date -d @1783890785`)
