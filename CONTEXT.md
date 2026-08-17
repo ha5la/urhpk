@@ -171,6 +171,13 @@ One WAV file from the radio's own Voice Recorder, split at every RX/TX
 transition. The unit the audio timeline is assembled from.
 _Avoid_: clip, chunk
 
+**Split excess**:
+The time by which a **segment** measures longer than the wall clock it
+occupies — 5.57 ms, the same at every split. Concatenating a round's segments
+overshoots by it once per boundary unless it is taken back out, and the
+overshoot accumulates.
+_Avoid_: gap, overlap, drift
+
 **Mark**:
 A timestamped value on the video timeline, e.g. the rotator azimuth at a given
 moment. A mark may carry `None` — that is a real reading, not a gap.
