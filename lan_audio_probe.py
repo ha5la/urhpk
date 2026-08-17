@@ -117,8 +117,8 @@ def spectrum(path: Path) -> int:
     ppm = (rate / nominal - 1) * 1e6
     print(f"{len(recs)} datagrams, {len(x)} samples over {span:.2f}s")
     print(
-        f"  rate {rate:.2f} Hz vs {nominal} nominal -> {ppm:+.0f} ppm "
-        f"+-{se / nominal * 1e6:.0f}"
+        f"  rate {rate:.5f} Hz vs {nominal} nominal -> {ppm:+.3f} ppm "
+        f"+-{se / nominal * 1e6:.3f}"
     )
     print(f"  arrival jitter {jitter_ms:.2f} ms rms")
     rate = round(rate)

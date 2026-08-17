@@ -348,13 +348,35 @@ the same table to within ~1 dB — −17.9 at 2 kHz, −33.4 at 3 kHz, −46.4 a
 right rate for a LAN capture** and 48 kHz is six times the disk for the
 quantisation floor.
 
-Two by-products of that capture: **2,998 datagrams arrived with no gap in the
-sequence**, which is what "retransmit-request compliance is skippable on a clean
-LAN" looks like measured rather than assumed; and the sample count against
-`CLOCK_BOOTTIME` implies ~48,015 Hz rather than 48,000, about +300 ppm. Over two
-hours that would be ~2 s, but 30 s is far too short to separate it from a few ms
-of arrival jitter at either endpoint. Unresolved, and it needs a long capture,
-not a better argument.
+### The LAN audio clock does not drift against the laptop
+
+Ten minutes at 16 kHz, 30,000 datagrams, **not one gap in the sequence** — which
+is what "retransmit-request compliance is skippable on a clean LAN" looks like
+measured rather than assumed.
+
+Fitting cumulative sample count against `CLOCK_BOOTTIME` arrival over all 30,000
+gives **15999.99911 Hz, −0.056 ±0.035 ppm** — 0.4 ms over a two-hour round.
+Arrival jitter is 1.04 ms rms, 8.5 ms worst case. For scale, the webcam drift
+this file documents elsewhere is ~3.2 s over 2 h, several hundred ppm: the
+radio's audio stream is four orders of magnitude steadier, so a LAN capture does
+*not* inherit the two-crystals problem that `refine_webcam_start` exists to fit.
+
+Wall clock and `CLOCK_BOOTTIME` diverged by at most 0.05 ms across the same run,
+so nothing stepped and chrony's slewing is below the noise. Recording both is
+still what makes that statement possible rather than assumed.
+
+**The bound is on packet pacing, not on sample continuity.** What is measured is
+datagrams per second times samples per datagram; a radio that paced packets off
+a network timer while slipping the odd sample would read exactly this clean, and
+the sequence numbers would not show it. Settling that needs the content
+correlated against the SD card's recording of the same audio, not a longer
+capture.
+
+**The estimator matters more than the capture length here.** The first,
+30-second capture appeared to show +300 ppm, from `len(samples)/span`: it counts
+the last datagram's samples against a span that ends when that datagram
+*arrived*, and rests the entire answer on two jittery endpoints. The least
+squares fit reads −11 ±15 ppm on that same file.
 
 ### The B file as a ruler for the A timeline
 
