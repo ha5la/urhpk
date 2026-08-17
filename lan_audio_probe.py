@@ -165,14 +165,42 @@ def _normalised_correlation(hay, ref, win: int):
     return num / (np.sqrt(var * np.square(ref, dtype=np.float64).sum()) + 1e-12)
 
 
+def coarse_lag(lan, sd, rate: int, win_s: float = 2.0) -> tuple[int, float]:
+    """Where sd's midpoint window sits in lan, searching the whole capture.
+
+    The two recordings are started by hand seconds apart, and the SD card
+    stamps its filename on the radio's clock rather than the laptop's, so
+    nothing about their start times can be assumed. One full-length
+    correlation settles it; the per-probe search then only has to cover the
+    slips it is looking for."""
+    import numpy as np
+
+    win = int(rate * win_s)
+    s = max(0, (len(sd) - win) // 2)
+    ref = sd[s : s + win]
+    ref = ref - ref.mean()
+    if len(lan) < win + 1 or not ref.any():
+        return 0, 0.0
+    c = _normalised_correlation(lan, ref, win)
+    k = int(np.argmax(c))
+    return k - s, float(c[k])
+
+
 def lag_profile(
-    lan, sd, rate: int, win_s: float = 1.0, search_s: float = 3.0, probes: int = 40
+    lan,
+    sd,
+    rate: int,
+    win_s: float = 1.0,
+    search_s: float = 3.0,
+    probes: int = 40,
+    base_lag: int = 0,
 ) -> list[tuple[float, int, float]]:
     """(time, lag in samples, correlation) at evenly spaced points through sd.
 
-    The lag is where each window of sd is found in lan. Constant lag means the
-    two streams agree sample for sample; a step means one of them gained or
-    lost samples at that moment, which is the whole point of measuring it.
+    The lag is where each window of sd is found in lan, reported relative to
+    base_lag. Constant lag means the two streams agree sample for sample; a
+    step means one of them gained or lost samples at that moment, which is the
+    whole point of measuring it.
     """
     import numpy as np
 
@@ -182,13 +210,19 @@ def lag_profile(
     for s in np.linspace(0, len(sd) - win, probes).astype(int):
         ref = sd[s : s + win]
         ref = ref - ref.mean()
-        lo = max(0, s - search)
-        hay = lan[lo : min(len(lan), s + win + search)]
+        centre = s + base_lag
+        # Clamped explicitly, never by slicing: a probe whose window falls
+        # before lan starts -- which every probe does for as long as the SD
+        # card was recording before the capture began -- makes the stop index
+        # negative, and the slice then wraps and matches noise at the far end.
+        lo = max(0, centre - search)
+        hi = min(len(lan), centre + win + search)
+        hay = lan[lo:hi] if hi > lo else lan[:0]
         if len(hay) < win + 1 or not ref.any():
             continue
         c = _normalised_correlation(hay, ref, win)
         k = int(np.argmax(c))
-        rows.append((s / rate, lo + k - s, float(c[k])))
+        rows.append((s / rate, lo + k - centre, float(c[k])))
     return rows
 
 
@@ -221,7 +255,12 @@ def continuity(path: Path, wav_path: Path) -> int:
         sys.exit("expected a mono WAV")
 
     print(f"LAN {len(lan) / rate:.1f}s vs WAV {len(sd) / rate:.1f}s at {rate} Hz")
-    rows = lag_profile(lan, sd, rate)
+    base, base_c = coarse_lag(lan, sd, rate)
+    print(f"coarse alignment: {base / rate:+.3f}s, correlation {base_c:.3f}")
+    if base_c < 0.5:
+        print("the two recordings do not appear to contain the same audio")
+        return 1
+    rows = lag_profile(lan, sd, rate, search_s=0.5, base_lag=base)
     good = [r for r in rows if r[2] > 0.5]
     print(f"{len(good)} of {len(rows)} windows matched above 0.5")
     if len(good) < 2:

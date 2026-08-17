@@ -365,12 +365,30 @@ Wall clock and `CLOCK_BOOTTIME` diverged by at most 0.05 ms across the same run,
 so nothing stepped and chrony's slewing is below the noise. Recording both is
 still what makes that statement possible rather than assumed.
 
-**The bound is on packet pacing, not on sample continuity.** What is measured is
-datagrams per second times samples per datagram; a radio that paced packets off
-a network timer while slipping the odd sample would read exactly this clean, and
-the sequence numbers would not show it. Settling that needs the content
-correlated against the SD card's recording of the same audio, not a longer
-capture.
+**And the samples are continuous too.** The rate above measures packet *pacing*:
+datagrams per second times samples per datagram, which a radio slipping the odd
+sample while pacing off a network timer would satisfy exactly, with no gap in
+the sequence numbers either. Settled by correlating the content rather than by
+capturing longer — five minutes of LAN capture against the SD card's own
+recording of the same minutes (`--continuity`), both 16 kHz LPCM off the same AF
+stage:
+
+    coarse alignment: -10.073s, correlation 0.996
+    34 of 34 windows matched above 0.5
+      lag 0..0 samples, spread 0
+      correlation 0.977..0.997
+
+Constant lag over 4.8 million samples — **not one gained or lost**. The detector
+is shown finding a single planted 62.5 µs slip in `tests/test_lan_audio_probe.py`,
+because a run of "CONTINUOUS" from a detector never seen to fire says nothing.
+
+**This correlation is itself the offset measurement** the LAN capture was wanted
+for: it places the SD card's radio-clock timeline against a laptop-clocked
+capture to the sample, where filenames quantise to a whole second. What it does
+not remove is the radio's own send buffer (100-200 ms, wfview's figure), which
+sits inside that -10.073 s as an unknown constant — so it measures *rate* and
+*relative* alignment outright, and absolute offset only once that buffer is
+calibrated.
 
 **The estimator matters more than the capture length here.** The first,
 30-second capture appeared to show +300 ppm, from `len(samples)/span`: it counts

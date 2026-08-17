@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from lan_audio_probe import lag_profile
+from lan_audio_probe import coarse_lag, lag_profile
 
 RATE = 16000
 
@@ -74,3 +74,45 @@ def test_recovers_any_offset_within_the_search_window(offset):
     lan = np.concatenate([_noise(offset, 3), source]) if offset else source
     rows = lag_profile(lan, source, RATE, probes=4)
     assert [r[1] for r in rows] == [offset] * len(rows)
+
+
+def test_coarse_lag_finds_a_start_offset_far_beyond_the_probe_search():
+    # The real captures were started by hand ~9 s apart, well outside any
+    # per-probe search window worth using for slip detection.
+    source = _noise(RATE * 60)
+    lan = source[RATE * 9 :]  # LAN begins 9 s into the SD recording
+    lag, corr = coarse_lag(lan, source, RATE)
+    assert lag == -RATE * 9
+    assert corr > 0.99
+
+
+def test_lag_profile_reports_relative_to_the_base_lag():
+    source = _noise(RATE * 30)
+    lan = source[RATE * 5 :]
+    rows = lag_profile(
+        lan, source[: RATE * 20], RATE, search_s=0.5, base_lag=-RATE * 5, probes=6
+    )
+    assert [r[1] for r in rows] == [0] * len(rows)
+
+
+def test_a_slip_is_still_found_once_a_base_lag_is_applied():
+    source = _noise(RATE * 40)
+    half = RATE * 20
+    slipped = np.concatenate([source[:half], source[half + 1 :]])
+    lan = slipped[RATE * 5 :]
+    rows = lag_profile(
+        lan, source[: RATE * 30], RATE, search_s=0.5, base_lag=-RATE * 5, probes=8
+    )
+    assert set(r[1] for r in rows) == {0, -1}
+
+
+def test_skips_probes_that_fall_before_the_capture_started():
+    # The SD card is running before the LAN capture connects, so the first
+    # probes have no counterpart at all. Slicing them out with a negative stop
+    # index silently matched the far end of the capture instead.
+    source = _noise(RATE * 30)
+    lan = source[RATE * 9 :]
+    rows = lag_profile(lan, source, RATE, search_s=0.5, base_lag=-RATE * 9, probes=10)
+    assert rows, "later probes should still match"
+    assert all(r[1] == 0 for r in rows)
+    assert all(r[2] > 0.99 for r in rows)
