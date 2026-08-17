@@ -97,11 +97,31 @@ def spectrum(path: Path) -> int:
     recs = [json.loads(line) for line in path.read_text().splitlines() if line]
     if not recs:
         sys.exit(f"{path} is empty")
-    pcm = b"".join(base64.b64decode(r["pcm"]) for r in recs)
-    x = np.frombuffer(pcm, "<i2").astype(float) / 32768.0
+    payloads = [base64.b64decode(r["pcm"]) for r in recs]
+    x = np.frombuffer(b"".join(payloads), "<i2").astype(float) / 32768.0
     span = recs[-1]["boot"] - recs[0]["boot"]
-    rate = round(len(x) / span) if span else 0
-    print(f"{len(recs)} datagrams, {len(x)} samples over {span:.2f}s -> {rate} Hz")
+
+    # Rate by least squares over every datagram, not len(x)/span: the naive
+    # form counts the last packet's samples against a span that ends when it
+    # *arrived*, and pins the whole answer on two jittery endpoints. The fit
+    # uses all of them, and its residual is the arrival jitter itself -- which
+    # is what says whether any ppm figure here is signal.
+    counts = np.cumsum([0] + [len(p) // 2 for p in payloads[:-1]], dtype=float)
+    t = np.array([r["boot"] for r in recs]) - recs[0]["boot"]
+    coef = np.polyfit(t, counts, 1)
+    rate = coef[0]
+    resid = counts - np.polyval(coef, t)
+    jitter_ms = resid.std() / rate * 1000
+    se = resid.std() / (t.std() * len(t) ** 0.5)  # standard error of the slope
+    nominal = min((8000, 16000, 32000, 48000, 96000), key=lambda n: abs(n - rate))
+    ppm = (rate / nominal - 1) * 1e6
+    print(f"{len(recs)} datagrams, {len(x)} samples over {span:.2f}s")
+    print(
+        f"  rate {rate:.2f} Hz vs {nominal} nominal -> {ppm:+.0f} ppm "
+        f"+-{se / nominal * 1e6:.0f}"
+    )
+    print(f"  arrival jitter {jitter_ms:.2f} ms rms")
+    rate = round(rate)
 
     n = 4096
     if len(x) < n * 2:
@@ -125,7 +145,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("target", help="radio IP to capture from, or a .jsonl to analyse")
     ap.add_argument("--seconds", type=float, default=60.0)
-    ap.add_argument("--rate", type=int, default=48000)
+    # 16 kHz matches the SD card and is twice the radio's own 4 kHz passband;
+    # 48 kHz was measured to add only the quantisation floor (FINDINGS.md).
+    ap.add_argument("--rate", type=int, default=16000)
     ap.add_argument("--stereo", action="store_true", help="main and sub as L/R")
     ap.add_argument(
         "--spectrum",
