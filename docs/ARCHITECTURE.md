@@ -337,6 +337,13 @@ unit-testable, and `hud_draw.py` knows nothing about where its numbers came from
   the sum of segment durations**; filename wall-clock is used only to line QSOs up
   against the audio. All segments must share one sample rate/format (they are
   concatenated with `ffmpeg -f concat -c copy`).
+- **Each file measures ~5.6 ms longer than the wall time it occupies**, so that
+  sum runs long by 4 s over a round's 759 segments unless
+  `compensate_split_excess` trims it first — which every run does, before
+  anything reads `audio_t`. It sets `eff_dur`, not `dur`, because `concat_audio`
+  only emits an outpoint for a segment that has one; trimming one without the
+  other desynchronises the audio from the timeline describing it. See
+  FINDINGS.md for the three measurements behind the constant.
 - **Multiple EDI files merge into one timeline** — a round worked across bands
   writes one EDI per band but is still one physical recording. `merge_edi`
   concatenates and sorts by `dt`. `Qso` carries no band field; band only ever

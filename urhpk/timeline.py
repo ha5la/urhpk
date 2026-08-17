@@ -42,6 +42,32 @@ def _eff(s: Segment) -> float:
     return s.dur if s.eff_dur is None else s.eff_dur
 
 
+# Each recorded file measures this much longer than the wall-clock time it
+# actually occupies, so concatenating a round overshoots its own span. Measured
+# three ways at 5.55-5.75 ms (FINDINGS.md); the value here is the two real
+# rounds pooled. It accumulates -- +4.36 s over the August round's 759
+# segments -- which anything played continuously against the assembled audio
+# drifts by.
+SPLIT_EXCESS_S = 0.00557
+
+
+def compensate_split_excess(segs: list[Segment]) -> None:
+    """Trim the excess off every segment but the last, which has nothing after
+    it to run long into, and slide the timeline up to match.
+
+    Sets eff_dur rather than dur because concat_audio only emits an outpoint for
+    a segment that has one -- without that the audio would keep its full length
+    while the timeline assumed the shortened one. audio_t is recomputed here
+    rather than by remap_audio_t, which only runs under --skip-gaps and would
+    collapse every long listening segment as a side effect."""
+    t = 0.0
+    for i, s in enumerate(segs):
+        s.audio_t = t
+        if i < len(segs) - 1:
+            s.eff_dur = max(0.0, _eff(s) - SPLIT_EXCESS_S)
+        t += _eff(s)
+
+
 @dataclass
 class Qso:
     dt: datetime  # UTC (from EDI)

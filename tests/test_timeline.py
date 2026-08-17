@@ -1,6 +1,8 @@
 """Tests for the round's timeline: segments, EDI, and wall clock to audio time."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
+
+import pytest
 
 import contest_video as cv
 from urhpk import timeline as tl
@@ -9,9 +11,11 @@ from urhpk.cw_decode import (
 )
 from urhpk.timeline import (
     GAP_KEEP_S,
+    SPLIT_EXCESS_S,
     Segment,
     _eff,
     audio_time_for,
+    compensate_split_excess,
     derive_utc_offset,
     merge_edi,
     parse_edi,
@@ -241,3 +245,52 @@ class TestStreamPrecedesAudio:
 # ---------------------------------------------------------------------------
 # HUD
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Recorder split excess
+# ---------------------------------------------------------------------------
+
+
+class TestSplitExcess:
+    def _segs(self):
+        # Three contiguous segments as the recorder really writes them: each
+        # file measures SPLIT_EXCESS_S longer than the wall time it occupies,
+        # so the next one starts that much before its predecessor's end.
+        t0 = datetime(2026, 7, 4, 11, 0, 0)
+        t1 = t0 + timedelta(seconds=10.0 - SPLIT_EXCESS_S)
+        t2 = t1 + timedelta(seconds=20.0 - SPLIT_EXCESS_S)
+        return [
+            Segment("a", t0, 10.0, 0.0),
+            Segment("b", t1, 20.0, 10.0),
+            Segment("c", t2, 5.0, 30.0),
+        ]
+
+    def test_trims_every_segment_but_the_last(self):
+        segs = self._segs()
+        compensate_split_excess(segs)
+        assert segs[0].eff_dur == 10.0 - SPLIT_EXCESS_S
+        assert segs[1].eff_dur == 20.0 - SPLIT_EXCESS_S
+        assert segs[2].eff_dur is None  # nothing follows it to run long into
+
+    def test_assembled_timeline_matches_the_wall_span(self):
+        segs = self._segs()
+        wall_span = (segs[-1].wall - segs[0].wall).total_seconds() + segs[-1].dur
+        uncorrected = sum(s.dur for s in segs)
+        assert uncorrected == pytest.approx(wall_span + 2 * SPLIT_EXCESS_S)
+        compensate_split_excess(segs)
+        total = segs[-1].audio_t + _eff(segs[-1])
+        assert total == pytest.approx(wall_span, abs=1e-9)
+
+    def test_leaves_a_long_listening_segment_at_full_length(self):
+        # remap_audio_t collapses these to GAP_KEEP_S, but only under
+        # --skip-gaps; compensating the split excess must not do it too.
+        segs = self._segs()
+        segs[1].dur = 500.0
+        compensate_split_excess(segs)
+        assert _eff(segs[1]) == pytest.approx(500.0 - SPLIT_EXCESS_S)
+
+    def test_does_not_trim_a_lone_segment(self):
+        segs = self._segs()[:1]
+        compensate_split_excess(segs)
+        assert segs[0].eff_dur is None

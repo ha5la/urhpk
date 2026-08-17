@@ -273,6 +273,196 @@ the recording and neither is visible until render time, days later:
 A wrong `RX REC Condition` is therefore one factory reset away at any time, and
 costs a round's audio structure without any symptom during the round.
 
+## The recorded audio
+
+The question that opened this: the radio can stream audio over the LAN
+(`conninfo`'s `rxenable` at 0x70, which `icom_net.py` sets to 0), so the laptop
+could capture the round itself. That would put the audio on the laptop's clock
+and survive a forgotten REC press — at the cost of holes wherever the logger
+isn't running. Measuring what the SD card actually does answered most of it.
+
+### Dead end: the audio stream carries no PTT
+
+The audio packet is a 24-byte header — `len`/`type`/`seq`/`sentid`/`rcvdid` at
+0x00–0x0f, then `ident`/`sendseq`/`unused`/`datalen` at 0x10–0x17 — followed by
+raw PCM (wfview `packettypes.h`, `audio_packet`). No rig state of any kind. The
+only PTT inference a LAN capture allows is *level*: the receiver is muted during
+one's own over, which is indistinguishable from a quiet band. So the RX/TX
+structure the pipeline is built on can only come from the SD card's file splits,
+whatever else the audio is captured for.
+
+The same header does carry a per-packet `seq`, so a dropped datagram is provable
+and exactly sized rather than inferred from arrival times. `conninfo` also has
+`rxcodec`/`rxsample` at 0x72/0x74: the codec is the client's choice, not the
+radio's.
+
+### Dual watch: the sub band is a second set of WAVs
+
+Verified 2026-08-17 with a deliberate test recording (`dualwatchtest/`), dual
+watch on, several TX periods, main band swapped mid-recording:
+
+- **The sub band records to its own files**, `…B.wav` beside `…A.wav`, both
+  starting at the instant REC was pressed. Every WAV of every round before this
+  one is an `A` file (1,793 of them across four rounds).
+- **The B file never splits on its own.** The sub band never transmits, so File
+  Split has no RX/TX transition to cut on: 9 A files against 1 continuous B file
+  over the same 57 s. It ends only when the sub band is switched off, and a
+  fresh B file begins when it is switched back on — confirmed deliberately in
+  the harmonic recording below, where the toggle left one 783.7 s B file, an
+  8.3 s hole, and a second B file. So B covers the sub band's *on* periods and
+  nothing else, and anything using it as a reference has to handle a partial
+  round.
+- Both sets are **16 kHz mono, 16-bit**.
+
+So `contest_video.py` globbing all `*.wav` would interleave two incompatible
+series and break the strict RX/TX alternation `qso_windows.py` assumes.
+
+### Dead end: the title tag's second slot is not the sub band
+
+Every IC-9700 title tag carries a second, dashed-out frequency/mode slot:
+
+    IC-9700 Voice Recorder Data   144.489.10 CW     ----.---.-- ------ -- RX 2026-08-03 15:59:13
+
+It stays empty on a B file recorded mid-dual-watch, so it is not the sub band
+(satellite/duplex or the other VFO, unidentified). Band identity comes from the
+`A`/`B` filename suffix; `_WAV_TITLE_RE` skipping the slot loses nothing.
+
+### The recorded passband stops at 4 kHz
+
+Measured on the test recording's two FM files — squelch noise is broadband, which
+makes it the right probe for a passband edge. Welch spectrum, 4096-point, dB
+relative to peak:
+
+| | 2 kHz | 3 kHz | 3.5 kHz | 4 kHz | 6 kHz | 7.9 kHz |
+|---|---|---|---|---|---|---|
+| B (438.525 FM) | −20.8 | −41.1 | −56.7 | −84.0 | −99.8 | −100.5 |
+| A (144.800 FM) | −18.4 | −33.2 | −47.3 | −82.4 | −99.1 | −98.7 |
+
+A brick wall at 3.5–4 kHz, flat at the 16-bit quantisation floor above it. The
+SD card's 16 kHz already oversamples the content 2×, so a LAN capture at 48 kHz
+would carry six times the samples and no more information — assuming both paths
+tap the same AF stage, which one 48 kHz capture would confirm by reproducing
+this table.
+
+### The B file as a ruler for the A timeline
+
+A's segment boundaries are quantised to a whole second by the filename, and
+FINDINGS' clock section calls that the pipeline's floor. A continuous B file
+spans the same interval with no gaps at all, so it can in principle measure the
+dead time between A segments that no filename resolves.
+
+The total is not the statistic. `len(B) − Σdur(A)` came out at **−0.067 s** on
+the test recording — negative, i.e. physically impossible for a sum of gaps,
+because B's start and end are themselves pinned only to ±1 s and that slop
+swamps the signal. The slop is constant across a recording while per-gap jitter
+accumulates, which is what separates them:
+
+1. Fit one constant gap `g = (len(B) − Σdur(A)) / n_gaps`.
+2. Predict each A file's start, `p_i = Σ_{j<i}(dur_j + g)`.
+3. Residual against the filename, `r_i = p_i − (filename_i − filename_0)`.
+4. **`max(r) − min(r) < 1.0 s` ⇒ consistent** — one `g` plus one unknown offset
+   explains every filename and the entire disagreement is quantisation. Wider,
+   and no single `g` fits: the split timing is genuinely variable and the ruler
+   bounds the error rather than removing it.
+
+The 57 s test gives `g = −0.008 s` and residuals spanning **1.017 s** over 8
+gaps — fractionally over the line, inconclusive. All of which was superseded
+before it was needed: the filenames turned out not to be the only way to place an
+A segment inside B.
+
+### The sub band hears the main band's harmonic, and that is the ruler
+
+Recorded 2026-08-17 (`dualwatch-harmonic/`): main 144.900 FM, sub 434.700 FM —
+an exact 3× harmonic — 53 A files with 26 TX periods over 13 minutes.
+
+The harmonic is received plainly, and the signature is **not** a level dip. It is
+**FM capture**: the transmitter takes over the sub receiver, the squelch hiss
+disappears and what remains is the operator's own modulation. B's 50 ms envelope
+across one 16.75 s over:
+
+    35.25  -13.5 dB   hiss, the steady ~-15 dB baseline
+    35.50  -42.9 dB   carrier captures, hiss gone
+    36.00   -7.8 dB   speech
+    39.00  -50.5 dB   pause between words
+    52.00  -53.3 dB   still keyed
+    52.25  -16.6 dB   hiss returns
+
+So a level threshold fragments on every syllable. The detector that works keys on
+the hiss itself — energy in 2800–3900 Hz, 1 ms hop, thresholded 8 dB below its
+own median, majority-smoothed over 201 ms, runs merged across gaps under 1 s.
+Transitions land inside a single 50 ms frame.
+
+**The measurement.** 22 of 26 TX periods matched, 19 clean after dropping
+mismatches. Regressing B's exact onsets against A's concatenated durations, with
+one unknown constant offset:
+
+| model | residual rms | spread |
+|---|---|---|
+| per segment boundary | **5.4 ms** | **19.6 ms** |
+| per elapsed second | 37.5 ms | 113.9 ms |
+
+- **Concatenating A's durations runs ahead of real time by 5.77 ms per segment
+  boundary** — a fixed cost per split, not a clock-rate difference, which is what
+  the 7× gap between the two models says. A round with a few hundred splits
+  accumulates seconds of it.
+- **Corrected, the scatter is 5.4 ms rms and 19.6 ms spread** — roughly two
+  orders of magnitude below the ±0.5 s the section above calls the floor. That
+  floor applies to *filenames*; it is not a property of the recording.
+- Detected durations sit a steady −33 to −42 ms against A's own. That is the
+  detector's edge bias, constant, and does not enter the result above.
+
+The recording also answers what a mid-round sub-band toggle does, since one was
+done deliberately near the end: B closes on switch-off and a new B file opens on
+switch-on, leaving an explicit hole rather than a stretched or padded file.
+
+### Every recorded file measures ~5.6 ms long, and it accumulates
+
+The per-boundary figure above needs no harmonic to confirm. Comparing a round's
+summed segment durations against the span its own filenames cover measures the
+same thing directly, and on the two full rounds — where ±1 s of endpoint
+quantisation spread over 700+ boundaries is worth ~1.3 ms — it agrees:
+
+| | segments | excess | per boundary |
+|---|---|---|---|
+| 2026-aug | 759 | +4.36 s | +5.75 ms |
+| 2026-jul | 707 | +3.79 s | +5.37 ms |
+| harmonic cross-correlation | 20 TX | — | +5.55 ms |
+| harmonic hiss-edge detector | 19 TX | — | +5.77 ms |
+
+Pooled over the two rounds' 1,464 boundaries: **5.57 ms**. The short recordings
+scatter (16.5 ms at n=56) purely because the endpoint quantisation divides by a
+small number — not evidence of a different value.
+
+**It is not duplicated audio.** Cross-correlating the head of each file against
+the tail of its predecessor finds no match at any of 52 boundaries, so the file
+does not re-record the moment before it. Each file simply reports more time than
+it occupied; the mechanism is unidentified. `1A 05 0247` PRE-REC is the obvious
+suspect from the settings table but the missing overlap argues against it.
+
+**Left uncorrected it accumulates**, since it is per file rather than per second.
+`audio_time_for` re-anchors on each segment's own filename, so point events —
+QSOs, telemetry — never feel it. Anything *continuous* laid against the assembled
+audio does: the cast, the scope and the webcam all play at real rate over a
+timeline running 4 s long by the end of a round. That is larger than the ~3.2 s
+this file attributes to two crystals in the webcam drift section, and was inside
+every measurement that produced that figure.
+
+`compensate_split_excess` (`urhpk/timeline.py`) trims `SPLIT_EXCESS_S` from every
+segment but the last, via `eff_dur` so `concat_audio` emits a matching outpoint.
+Applied to the two rounds it leaves a residual of ±0.14 s — at the floor of what
+the filenames can resolve.
+
+Caveats: one session, 19 points, and an unknown share of the 5.4 ms is the
+detector rather than the radio. The technique also needs the sub band parked on
+an exact harmonic of the main band with squelch open and `RX REC Condition` on
+`Always` — a calibration setup, not something a round would be operated in.
+
+**Unrelated to any of this**: an earlier observation of the same station's speech
+on 144.860 and 435.650 at once has no harmonic relation (3 × 144.860 = 434.580)
+and the higher frequency was the cleaner of the two. Identical audio, different
+quality, unrelated frequencies is a cross-band linked repeater pair, not anything
+happening inside the radio.
+
 ## The radio's clock
 
 Every timestamp in the pipeline is joined on the assumption that the radio's

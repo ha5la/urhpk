@@ -73,10 +73,12 @@ from urhpk.rig_state import (
 from urhpk.scope_render import render_scope_video
 from urhpk.timeline import (
     GAP_KEEP_S,
+    SPLIT_EXCESS_S,
     Qso,
     Segment,
     _eff,
     audio_time_for,
+    compensate_split_excess,
     derive_utc_offset,
     merge_edi,
     read_wav_metadata,
@@ -723,7 +725,12 @@ def main() -> None:
     segs = scan_segments(args.recdir)
     if not segs:
         sys.exit(f"no timestamped WAVs found in {args.recdir}")
-    print(f"{len(segs)} segments, {segs[-1].audio_t + segs[-1].dur:.0f}s audio")
+    compensate_split_excess(segs)
+    print(f"{len(segs)} segments, {segs[-1].audio_t + _eff(segs[-1]):.0f}s audio")
+    print(
+        f"  split excess: {len(segs) - 1} boundaries x {SPLIT_EXCESS_S * 1000:.2f} ms "
+        f"= {(len(segs) - 1) * SPLIT_EXCESS_S:.2f}s removed"
+    )
 
     my_callsign, mywwl, qsos_all = merge_edi(args.edi)
     offset_h = derive_utc_offset(segs, qsos_all)
