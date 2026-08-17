@@ -340,9 +340,21 @@ relative to peak:
 
 A brick wall at 3.5–4 kHz, flat at the 16-bit quantisation floor above it. The
 SD card's 16 kHz already oversamples the content 2×, so a LAN capture at 48 kHz
-would carry six times the samples and no more information — assuming both paths
-tap the same AF stage, which one 48 kHz capture would confirm by reproducing
-this table.
+carries six times the samples and no more information. Confirmed rather than
+argued: a 30 s LPCM 48 kHz capture off the LAN (`lan_audio_probe.py`) reproduces
+the same table to within ~1 dB — −17.9 at 2 kHz, −33.4 at 3 kHz, −46.4 at
+3.5 kHz, −81.8 at 4 kHz — and sits flat at −104 dB from 6 kHz all the way to
+20 kHz. Both paths tap the same bandlimited AF stage, so **16 kHz mono is the
+right rate for a LAN capture** and 48 kHz is six times the disk for the
+quantisation floor.
+
+Two by-products of that capture: **2,998 datagrams arrived with no gap in the
+sequence**, which is what "retransmit-request compliance is skippable on a clean
+LAN" looks like measured rather than assumed; and the sample count against
+`CLOCK_BOOTTIME` implies ~48,015 Hz rather than 48,000, about +300 ppm. Over two
+hours that would be ~2 s, but 30 s is far too short to separate it from a few ms
+of arrival jitter at either endpoint. Unresolved, and it needs a long capture,
+not a better argument.
 
 ### The B file as a ruler for the A timeline
 
