@@ -30,6 +30,7 @@ import base64
 import json
 import sys
 import time
+import wave
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -141,6 +142,111 @@ def spectrum(path: Path) -> int:
     return 0
 
 
+def _normalised_correlation(hay, ref, win: int):
+    """Correlation of a mean-subtracted `ref` against every window of `hay`.
+
+    Via FFT, not a sliding window: at 16 kHz a one-second reference against a
+    seven-second haystack is ~10^9 multiply-adds done directly, per probe. The
+    numerator needs no mean subtraction on the haystack side because `ref`
+    already sums to zero, so the window's own mean cancels out of the product;
+    the denominator gets each window's variance from running sums."""
+    import numpy as np
+
+    n = len(hay)
+    size = 1 << (n + win).bit_length()
+    conv = np.fft.irfft(np.fft.rfft(hay, size) * np.fft.rfft(ref[::-1], size), size)
+    num = conv[win - 1 : n]
+
+    c1 = np.concatenate([[0.0], np.cumsum(hay, dtype=np.float64)])
+    c2 = np.concatenate([[0.0], np.cumsum(np.square(hay, dtype=np.float64))])
+    s1 = c1[win:] - c1[:-win]
+    s2 = c2[win:] - c2[:-win]
+    var = np.maximum(s2 - s1 * s1 / win, 0.0)
+    return num / (np.sqrt(var * np.square(ref, dtype=np.float64).sum()) + 1e-12)
+
+
+def lag_profile(
+    lan, sd, rate: int, win_s: float = 1.0, search_s: float = 3.0, probes: int = 40
+) -> list[tuple[float, int, float]]:
+    """(time, lag in samples, correlation) at evenly spaced points through sd.
+
+    The lag is where each window of sd is found in lan. Constant lag means the
+    two streams agree sample for sample; a step means one of them gained or
+    lost samples at that moment, which is the whole point of measuring it.
+    """
+    import numpy as np
+
+    win = int(rate * win_s)
+    search = int(rate * search_s)
+    rows = []
+    for s in np.linspace(0, len(sd) - win, probes).astype(int):
+        ref = sd[s : s + win]
+        ref = ref - ref.mean()
+        lo = max(0, s - search)
+        hay = lan[lo : min(len(lan), s + win + search)]
+        if len(hay) < win + 1 or not ref.any():
+            continue
+        c = _normalised_correlation(hay, ref, win)
+        k = int(np.argmax(c))
+        rows.append((s / rate, lo + k - s, float(c[k])))
+    return rows
+
+
+def continuity(path: Path, wav_path: Path) -> int:
+    """Does the LAN stream's sample timeline actually hold?
+
+    The rate fit in --spectrum measures packet *pacing*: a radio slipping the
+    odd sample while pacing off a network timer would read perfectly clean.
+    This measures the samples instead, against the SD card recording the same
+    AF stage over the same minutes. Both are 16-bit LPCM of one source, so a
+    window of one lines up with the other to the sample -- and a lag that walks
+    is exactly the slip the pacing figure cannot see.
+
+    Wants one continuous WAV, i.e. a recording made without transmitting: on TX
+    the SD card records the microphone while the LAN stream carries the muted
+    receiver, and the two have nothing in common to correlate.
+    """
+    import numpy as np
+
+    recs = [json.loads(line) for line in path.read_text().splitlines() if line]
+    lan = np.frombuffer(
+        b"".join(base64.b64decode(r["pcm"]) for r in recs), "<i2"
+    ).astype(np.float32)
+
+    with wave.open(str(wav_path)) as w:
+        rate = w.getframerate()
+        channels = w.getnchannels()
+        sd = np.frombuffer(w.readframes(w.getnframes()), "<i2").astype(np.float32)
+    if channels != 1:
+        sys.exit("expected a mono WAV")
+
+    print(f"LAN {len(lan) / rate:.1f}s vs WAV {len(sd) / rate:.1f}s at {rate} Hz")
+    rows = lag_profile(lan, sd, rate)
+    good = [r for r in rows if r[2] > 0.5]
+    print(f"{len(good)} of {len(rows)} windows matched above 0.5")
+    if len(good) < 2:
+        print("not enough correlation -- is this the same audio, same minutes?")
+        return 1
+    lags = np.array([r[1] for r in good], float)
+    ts = np.array([r[0] for r in good])
+    drift = np.polyfit(ts, lags, 1)[0]
+    print(
+        f"  lag {lags.min():.0f}..{lags.max():.0f} samples, spread {np.ptp(lags):.0f}"
+    )
+    print(f"  correlation {min(r[2] for r in good):.3f}..{max(r[2] for r in good):.3f}")
+    print(f"  drift {drift * 1e6 / rate:+.3f} ppm over the overlap")
+    if np.ptp(lags) == 0:
+        print("  CONTINUOUS: not one sample gained or lost")
+    else:
+        print(f"  {np.ptp(lags):.0f} samples of movement -- listing every change:")
+        prev = lags[0]
+        for t, lag in zip(ts, lags):
+            if lag != prev:
+                print(f"    {t:8.1f}s  lag {prev:+.0f} -> {lag:+.0f}")
+                prev = lag
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("target", help="radio IP to capture from, or a .jsonl to analyse")
@@ -154,8 +260,16 @@ def main() -> int:
         action="store_true",
         help="analyse an existing capture instead of making one",
     )
+    ap.add_argument(
+        "--continuity",
+        metavar="WAV",
+        help="check an existing capture's samples against the SD card's own "
+        "recording of the same minutes (one continuous, no-TX WAV)",
+    )
     args = ap.parse_args()
 
+    if args.continuity:
+        return continuity(Path(args.target), Path(args.continuity))
     if args.spectrum:
         return spectrum(Path(args.target))
 
