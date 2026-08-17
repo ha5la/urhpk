@@ -17,6 +17,7 @@ Amateur radio contest toolset for the Puskás URH Kupa, plus a general-purpose
 | `contest_video.py` | Annotated CW contest video from a timestamped recording + EDI log |
 | `hamlib_supervisor.py` | Starts/stops rotctld based on USB device presence (inotify, no polling) |
 | `urhpk/icom_net.py` | Direct Ethernet CI-V client for Icom radios (IC-9700 etc.), bypassing rigctld; instant push freq/mode updates, plus real spectrum-scope capture |
+| `lan_audio_probe.py` | Captures the radio's LAN audio stream to a timestamped log and measures its passband — a probe, not part of a round; never run it while the logger is up |
 | `run-recorded-round.sh` | The round entrypoint — recorded irssi + logger, plus rig/rotator supervision and the bridge in a background window |
 | `sync-clock.sh` | Forces an immediate chrony resync (offset + drift rate) right before a round starts |
 

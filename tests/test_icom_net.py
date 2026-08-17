@@ -4,6 +4,7 @@ credential scrambling, BCD frequency codec, and CI-V frame parsing.
 
 from __future__ import annotations
 
+import struct
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -13,11 +14,14 @@ from urhpk.icom_net import (
     CIV_IC9700_ADDR,
     CIV_PARAM_FILE_SPLIT,
     CIV_PARAM_RX_REC_CONDITION,
+    RX_CODEC_LPCM16_MONO,
     bcd_decode_freq,
     bcd_encode_freq,
     civ_cw_payload,
     civ_frame,
     clock_offset_s,
+    conninfo_packet,
+    parse_audio_packet,
     parse_civ_update,
     parse_clock_reply,
     parse_ntp_server_reply,
@@ -361,3 +365,67 @@ def test_parse_param_reply_ignores_unrelated_and_short_frames():
         is None
     )
     assert parse_param_reply(b"", CIV_PARAM_FILE_SPLIT) is None
+
+
+# ---------------------------------------------------------------------------
+# LAN audio stream
+# ---------------------------------------------------------------------------
+
+
+def _conninfo(**kw) -> bytes:
+    return conninfo_packet(
+        1,
+        b"\x01\x02\x03\x04",
+        b"\x05\x06\x07\x08",
+        0,
+        b"\x00" * 6,
+        b"\x00" * 16,
+        "IC-9700",
+        "user",
+        50100,
+        **kw,
+    )
+
+
+def test_conninfo_leaves_audio_disabled_by_default():
+    pkt = _conninfo()
+    assert pkt[0x70] == 0  # rxenable
+    assert pkt[0x71] == 0  # txenable
+    assert struct.unpack_from(">I", pkt, 0x80)[0] == 0  # audioport
+
+
+def test_conninfo_enables_rx_audio_when_given_a_port():
+    pkt = _conninfo(audio_port=50200, rx_codec=RX_CODEC_LPCM16_MONO, rx_sample=48000)
+    assert pkt[0x70] == 1  # rxenable
+    assert pkt[0x71] == 0  # still never transmit
+    assert pkt[0x72] == RX_CODEC_LPCM16_MONO
+    assert struct.unpack_from(">I", pkt, 0x74)[0] == 48000
+    assert struct.unpack_from(">I", pkt, 0x80)[0] == 50200
+
+
+def _audio_packet(seq: int, payload: bytes) -> bytes:
+    buf = bytearray(0x18 + len(payload))
+    struct.pack_into("<I", buf, 0x00, len(buf))
+    struct.pack_into("<H", buf, 0x04, 0x0000)
+    struct.pack_into("<H", buf, 0x06, seq)
+    struct.pack_into(">H", buf, 0x16, len(payload))
+    buf[0x18:] = payload
+    return bytes(buf)
+
+
+def test_parse_audio_packet_returns_sequence_and_samples():
+    pkt = _audio_packet(7, b"\x01\x02\x03\x04")
+    assert parse_audio_packet(pkt) == (7, b"\x01\x02\x03\x04")
+
+
+def test_parse_audio_packet_ignores_the_control_traffic_on_the_same_socket():
+    # the audio socket carries its own are-you-there/ready handshake, which is
+    # 0x10 bytes and must not be mistaken for a very short audio frame
+    assert parse_audio_packet(b"\x10\x00\x00\x00" + b"\x00" * 12) is None
+    assert parse_audio_packet(b"") is None
+
+
+def test_parse_audio_packet_rejects_a_truncated_payload():
+    pkt = bytearray(_audio_packet(3, b"\x01\x02\x03\x04"))
+    struct.pack_into(">H", pkt, 0x16, 99)  # claims more than it carries
+    assert parse_audio_packet(bytes(pkt)) is None

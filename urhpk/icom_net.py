@@ -404,6 +404,13 @@ def parse_meter_frame(frame: bytes) -> tuple[str, int] | None:
 
 CONTROL_PORT = 50001
 CIV_PORT = 50002
+AUDIO_PORT = 50003
+
+# conninfo's rxcodec byte, transcribed from wfview's own codec menu
+# (src/settingswidget.cpp): 4 = LPCM 1ch 16bit, 16 = LPCM 2ch 16bit,
+# 1 = uLaw 1ch 8bit. 4 is wfview's default and the only one used here.
+RX_CODEC_LPCM16_MONO = 4
+RX_CODEC_LPCM16_STEREO = 16
 
 PT_RETRANSMIT = 0x01
 PT_ARE_YOU_THERE = 0x03
@@ -505,11 +512,16 @@ def conninfo_packet(
     radio_name: str,
     username: str,
     civ_port: int,
+    audio_port: int = 0,
+    rx_codec: int = RX_CODEC_LPCM16_MONO,
+    rx_sample: int = 0,
 ) -> bytes:
     """Stream-open request: registers our local civ_port with the radio so
-    it starts sending CI-V-over-UDP traffic there. Audio is intentionally
-    disabled (rxenable=txenable=0) -- this client only wants CI-V; audio
-    streaming is a separate future step."""
+    it starts sending CI-V-over-UDP traffic there.
+
+    Audio stays off unless audio_port is given -- the logger wants CI-V only,
+    and rxenable is the single field that decides whether the radio starts a
+    second stream. txenable is never set: nothing here transmits."""
     buf = bytearray(0x90)
     _envelope(buf, 0x90, 0x00, seq, sentid, rcvdid)
     struct.pack_into(">I", buf, 0x10, 0x80)
@@ -521,12 +533,34 @@ def conninfo_packet(
     name = radio_name.encode("ascii", "replace")[:32]
     buf[0x40 : 0x40 + len(name)] = name
     buf[0x60:0x70] = passcode(username)
-    buf[0x70] = 0  # rxenable
+    buf[0x70] = 1 if audio_port else 0  # rxenable
     buf[0x71] = 0  # txenable
+    if audio_port:
+        buf[0x72] = rx_codec
+        struct.pack_into(">I", buf, 0x74, rx_sample)
     struct.pack_into(">I", buf, 0x7C, civ_port)
-    struct.pack_into(">I", buf, 0x80, 0)  # audioport: unused, audio disabled
+    struct.pack_into(">I", buf, 0x80, audio_port)
     buf[0x88] = 1  # convert
     return bytes(buf)
+
+
+def parse_audio_packet(data: bytes) -> tuple[int, bytes] | None:
+    """Sequence number and PCM payload of one inbound audio datagram.
+
+    The 0x18-byte header is len/type/seq/sentid/rcvdid then
+    ident/sendseq/unused/datalen -- no rig state of any kind (FINDINGS.md), so
+    seq is the only thing here worth keeping besides the samples: it is what
+    makes a dropped datagram provable rather than inferred from arrival times.
+    The audio socket also carries its own are-you-there/ready handshake, which
+    is why anything too short to be an audio frame is rejected rather than
+    treated as a very small one."""
+    if len(data) < 0x18:
+        return None
+    seq = struct.unpack_from("<H", data, 0x06)[0]
+    datalen = struct.unpack_from(">H", data, 0x16)[0]
+    if datalen == 0 or len(data) - 0x18 != datalen:
+        return None
+    return seq, data[0x18:]
 
 
 def openclose_packet(
@@ -708,6 +742,9 @@ class IcomNetRig:
         civ_addr: int = CIV_IC9700_ADDR,
         control_port: int = CONTROL_PORT,
         civ_port: int = CIV_PORT,
+        audio_port: int = AUDIO_PORT,
+        rx_sample: int = 0,
+        rx_codec: int = RX_CODEC_LPCM16_MONO,
     ):
         self.host = host
         self._username = username
@@ -715,6 +752,12 @@ class IcomNetRig:
         self._civ_addr = civ_addr
         self._radio_control_port = control_port
         self._radio_civ_port = civ_port
+        # rx_sample is the switch: 0 leaves conninfo's rxenable clear and the
+        # radio never opens a second stream, which is what the logger wants.
+        self._radio_audio_port = audio_port
+        self._rx_sample = rx_sample
+        self._rx_codec = rx_codec
+        self._audio_cbs: list = []
 
         self.freq_hz: int | None = None
         self.mode: str | None = None
@@ -734,6 +777,9 @@ class IcomNetRig:
 
         self._ctrl: _UdpChannel | None = None
         self._civ: _UdpChannel | None = None
+        self._audio: _UdpChannel | None = None
+        self._audio_local_id: bytes | None = None
+        self._audio_remote_id: bytes | None = None
         # Session identity, filled in by connect(); None until each socket's
         # rendezvous succeeds, so close() can tell what there is to say goodbye to.
         self._tok: bytes | None = None
@@ -1034,6 +1080,8 @@ class IcomNetRig:
         # Opened before conninfo, which has to name the port the radio will
         # send CI-V traffic to.
         self._civ = await _open_channel((self.host, self._radio_civ_port))
+        if self._rx_sample:
+            self._audio = await _open_channel((self.host, self._radio_audio_port))
         pkt = conninfo_packet(
             ctrl_seq,
             ctrl_local_id,
@@ -1044,6 +1092,9 @@ class IcomNetRig:
             radio["name"] or "radio",
             self._username,
             self._civ.port,
+            audio_port=self._audio.port if self._audio else 0,
+            rx_codec=self._rx_codec,
+            rx_sample=self._rx_sample,
         )
         ctrl_seq += 1
         auth_seq += 1
@@ -1080,6 +1131,16 @@ class IcomNetRig:
             raise IcomNetError(
                 "radio never sent CI-V data after opening the stream"
             ) from None
+
+        # Audio last, and only if asked for: it is the one stream nothing else
+        # depends on, so a failure here must not have cost the CI-V session
+        # that was already up before it started.
+        if self._audio is not None:
+            self._audio_local_id = os.urandom(4)
+            self._audio_remote_id = await _rendezvous(
+                self._audio, self._audio_local_id, timeout
+            )
+            self._tasks.append(asyncio.create_task(self._audio_loop()))
 
         # Prime current state rather than waiting for the next front-panel change.
         self._send_civ_command(0x03)
@@ -1152,6 +1213,45 @@ class IcomNetRig:
             update = parse_civ_update(frame)
             if update is not None:
                 self._apply_update(*update)
+
+    def on_audio(self, callback) -> None:
+        """callback(seq, pcm, received_at) per inbound audio datagram."""
+        self._audio_cbs.append(callback)
+
+    async def _audio_loop(self) -> None:
+        """Keep the audio socket alive and hand every datagram straight on.
+
+        No open request and no query: unlike CI-V, the radio starts sending the
+        moment conninfo's rxenable is set, so this socket only has to answer
+        pings and keep its idle packets going."""
+        last_idle = 0.0
+        while True:
+            now = time.monotonic()
+            if now - last_idle >= IDLE_PERIOD_S:
+                self._audio.send(
+                    control_packet(0x00, 0, self._audio_local_id, self._audio_remote_id)
+                )
+                last_idle = now
+            try:
+                data = await asyncio.wait_for(self._audio.queue.get(), IDLE_PERIOD_S)
+            except TimeoutError:
+                continue
+            if is_ping_request(data):
+                self._audio.send(
+                    ping_reply(
+                        struct.unpack_from("<H", data, 0x06)[0],
+                        self._audio_local_id,
+                        self._audio_remote_id,
+                        data[0x11:0x15],
+                    )
+                )
+                continue
+            parsed = parse_audio_packet(data)
+            if parsed is None:
+                continue
+            received_at = time.time()
+            for cb in tuple(self._audio_cbs):
+                cb(*parsed, received_at)
 
     async def _civ_loop(self) -> None:
         last_idle = 0.0
@@ -1239,6 +1339,16 @@ class IcomNetRig:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks = []
         self._meter_task = None
+        # Audio first, mirroring connect()'s order in reverse: the invariant is
+        # that every socket opened gets its own disconnect, or the radio keeps
+        # the session and refuses the next one for over a minute.
+        if self._audio is not None:
+            if self._audio_local_id is not None:
+                self._send_disconnect(
+                    self._audio, self._audio_local_id, self._audio_remote_id
+                )
+            self._audio.close()
+            self._audio = None
         if self._civ is not None:
             if self._civ_local_id is not None:
                 self._civ.send(
