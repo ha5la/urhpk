@@ -35,11 +35,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from urhpk.icom_net import (
+    CIV_CONTROLLER_ADDR,
     RX_CODEC_LPCM16_MONO,
     RX_CODEC_LPCM16_STEREO,
     IcomNetError,
     IcomNetRig,
     _load_netrc_credentials,
+    bcd_encode_freq,
+    civ_mode_name,
 )
 
 
@@ -88,6 +91,148 @@ async def capture(host: str, out: Path, seconds: float, rate: int, stereo: bool)
     if not count:
         print("no audio arrived -- rxenable was set but the radio sent nothing")
         return 1
+    return 0
+
+
+async def calibrate(
+    host: str, rate: int, steps: int, dwell: float, quiet_hz: int = 0
+) -> int:
+    """How long a sample takes to reach the laptop after it was digitised.
+
+    The rate figures measure pacing and the continuity check measures the
+    stream's internal consistency; neither sees a constant pipeline delay,
+    because a fixed queue delays every packet equally. Measuring it needs an
+    event whose instant the laptop already knows.
+
+    A CI-V mode change is one, and it transmits nothing. The radio echoes our
+    own frames back, so the echo says when it processed the command, to within
+    the return leg of a sub-millisecond LAN. The demodulator's noise character
+    changes at that same instant, and shows up in the audio however long the
+    pipeline is. The difference is the delay. The radio's mode is read first
+    and restored at the end.
+    """
+    import numpy as np
+
+    user, password = _load_netrc_credentials(host)
+    rig = IcomNetRig(host, user, password, rx_sample=rate)
+
+    packets: list[tuple[float, bytes]] = []
+    rig.on_audio(lambda seq, pcm, at: packets.append((at, pcm)))
+
+    echoes: list[tuple[int, float]] = []
+
+    def on_frame(frame: bytes) -> None:
+        # Our own frames come back with the addresses the other way round;
+        # the radio's replies are the ones we must not time against.
+        if len(frame) >= 3 and frame[0] != CIV_CONTROLLER_ADDR:
+            if frame[2] == CIV_CMD_SET_MODE:
+                echoes.append((frame[3] if len(frame) > 3 else -1, time.time()))
+
+    rig.on_civ_frame(on_frame)
+    await rig.connect()
+    # connect() only *sends* the priming mode query; the reply lands later, so
+    # reading rig.mode straight away gets None and the restore below silently
+    # leaves the radio in whatever this run last set.
+    await asyncio.sleep(1.0)
+    original = rig.mode
+    original_hz = rig.freq_hz
+    print(
+        f"connected to {host}; rig is {original} on "
+        f"{(original_hz or 0) / 1e6:.4f} MHz, restoring both at the end"
+    )
+    if quiet_hz:
+        # 144.800 is APRS: random stations key up at random times, and a burst
+        # is a far bigger step in the hiss band than any mode change. Measure
+        # somewhere nobody is transmitting. Receive only -- nothing here keys
+        # the radio.
+        print(f"listening on {quiet_hz / 1e6:.4f} MHz for the measurement")
+        rig._send_civ_command(CIV_CMD_SET_FREQ, bcd_encode_freq(quiet_hz))
+        await asyncio.sleep(1.0)
+
+    marks: list[tuple[float, int]] = []  # (command processed at, mode)
+    rtts: list[float] = []
+    try:
+        for i in range(steps):
+            mode = CIV_MODE_USB if i % 2 == 0 else CIV_MODE_FM
+            before = len(echoes)
+            sent = time.time()
+            rig._send_civ_command(CIV_CMD_SET_MODE, bytes([mode, 0x01]))
+            for _ in range(50):
+                await asyncio.sleep(0.01)
+                if len(echoes) > before:
+                    break
+            if len(echoes) > before:
+                marks.append((echoes[before][1], mode))
+                rtts.append(echoes[before][1] - sent)
+            else:
+                print(f"  step {i}: no echo, skipped")
+                marks.append((sent, mode))
+            await asyncio.sleep(dwell)
+    finally:
+        if quiet_hz and original_hz:
+            rig._send_civ_command(CIV_CMD_SET_FREQ, bcd_encode_freq(original_hz))
+            await asyncio.sleep(0.3)
+        if original:
+            code = next((c for c in range(0x18) if civ_mode_name(c) == original), None)
+            if code is not None:
+                rig._send_civ_command(CIV_CMD_SET_MODE, bytes([code, 0x01]))
+                await asyncio.sleep(0.5)
+        await rig.close()
+
+    if not packets:
+        print("no audio arrived")
+        return 1
+
+    # Sample index of each packet's first sample, and when that packet landed.
+    arrivals = np.array([p[0] for p in packets])
+    counts = np.cumsum([0] + [len(p[1]) // 2 for p in packets[:-1]])
+    audio = np.frombuffer(b"".join(p[1] for p in packets), "<i2").astype(np.float32)
+
+    delays = []
+    for at, mode in marks:
+        # The change cannot precede the command, and cannot lag it by anything
+        # like the gap to the next one -- a window wide enough to hold a
+        # neighbouring transition is a window that will sometimes pick it.
+        j = int(np.searchsorted(arrivals, at))
+        if j < 5 or j >= len(packets) - 20:
+            continue
+        lo = counts[j - 5]  # 100 ms before, to catch a negative delay
+        hi = counts[j + 20]  # 400 ms after
+        level, hop = hiss_band(audio[lo:hi], rate)
+        # Sign-agnostic on purpose: switching to USB narrows the noise and
+        # drops this band, but switching to FM can *also* drop it, whenever
+        # the squelch closes on the way. Assuming the direction lost half the
+        # transitions rather than protecting the measurement.
+        off = step_index(level, hop)
+        if off is None:
+            continue
+        onset = lo + off  # sample index of the change
+        # Which packet carries it, and when its own last sample was digitised
+        k = int(np.searchsorted(counts, onset, side="right")) - 1
+        after = counts[k] + len(packets[k][1]) // 2 - onset  # samples still to come
+        delays.append((arrivals[k] - after / rate - at, mode))
+
+    if len(delays) < 3:
+        print(f"only {len(delays)} usable transitions -- is the squelch open?")
+        return 1
+    d = np.array([x[0] for x in delays]) * 1000
+    modes = np.array([x[1] for x in delays])
+    print(f"{len(d)} transitions of {len(marks)}")
+    if rtts:
+        r = np.array(rtts) * 1000
+        print(
+            f"  CI-V echo round trip: median {np.median(r):.1f} ms, min {r.min():.1f}"
+        )
+    for name, code in (("-> USB", CIV_MODE_USB), ("-> FM ", CIV_MODE_FM)):
+        v = np.sort(d[modes == code])
+        if len(v):
+            print(
+                f"  {name}: median {np.median(v):+7.1f} ms  "
+                + " ".join(f"{x:.1f}" for x in v)
+            )
+    print(
+        f"  overall median {np.median(d):.1f} ms, IQR {np.percentile(d, 75) - np.percentile(d, 25):.1f} ms"
+    )
     return 0
 
 
@@ -140,6 +285,75 @@ def spectrum(path: Path) -> int:
         if hz < rate / 2:
             print(f"  {hz:6d} Hz  {p[np.argmin(abs(freqs - hz))]:7.1f} dB")
     return 0
+
+
+CIV_CMD_SET_MODE = 0x06
+CIV_CMD_SET_FREQ = 0x05
+CIV_MODE_FM = 0x05
+CIV_MODE_USB = 0x01
+
+
+def hiss_band(x, rate: int, hop_ms: float = 1.0):
+    """Energy in 2.8-3.9 kHz per hop -- the top of the passband, where FM's
+    wider noise sits and SSB's does not. A mode change moves it by tens of dB
+    within one hop, which is what makes it a usable instant rather than a
+    fade."""
+    import numpy as np
+
+    n = 256
+    hop = max(1, int(rate * hop_ms / 1000))
+    frames = (len(x) - n) // hop
+    if frames < 2:
+        return np.zeros(0), hop
+    # Windows start at i*hop rather than being centred on it, which measures
+    # unbiased against a real step -- verified, because the arithmetic argues
+    # the other way and is wrong: centring the window puts the answer 8 ms
+    # late, half a window, which is the size of the delay being measured.
+    view = np.lib.stride_tricks.sliding_window_view(x, n)[::hop][:frames]
+    spec = np.abs(np.fft.rfft(view * np.hanning(n), axis=1)) ** 2
+    freqs = np.fft.rfftfreq(n, 1 / rate)
+    band = spec[:, (freqs > 2800) & (freqs < 3900)].sum(1)
+    return 10 * np.log10(band + 1e-20), hop
+
+
+def step_index(level, hop: int, expect_sign: int = 0) -> int | None:
+    """Where a level series steps, as a sample offset from its own start.
+
+    Located by the largest single-hop change rather than a threshold: the two
+    sides differ by tens of dB and their absolute values vary between runs, so
+    a fixed threshold would need retuning and a maximum does not.
+
+    `expect_sign` restricts it to changes in the known direction -- switching
+    to USB narrows the noise and must drop this band, switching to FM must
+    raise it. Without that, a large enough fluctuation anywhere in the window
+    outranks the real edge, which on real audio put outliers of several
+    hundred ms either side of a 4 ms answer."""
+    import numpy as np
+
+    w = 50  # hops either side: a real mode change is sustained, a spike is not
+    if len(level) < 3 * w:
+        return None
+    # Mean either side of each candidate, not a single-hop difference: where
+    # the band sits near the noise floor a change of nothing in absolute terms
+    # is tens of dB, and single-hop differencing chases those spikes.
+    c = np.concatenate([[0.0], np.cumsum(level)])
+    means = (c[w:] - c[:-w]) / w
+    score = means[w:] - means[:-w]  # after minus before, at each boundary
+    scored = score * expect_sign if expect_sign else np.abs(score)
+    k = int(np.argmax(scored))
+    if scored[k] < 6.0:  # nothing that looks like a mode change
+        return None
+
+    # The averaging that makes the edge findable also blurs where it is, by
+    # about its own width -- useless for timing a delay of the same order. So
+    # refine: the sharpest single hop, of the direction the coarse pass found,
+    # within one averaging width of it.
+    sign = 1 if score[k] > 0 else -1
+    centre = k + w
+    d = np.diff(level) * sign
+    lo = max(0, centre - w)
+    hi = min(len(d), centre + w)
+    return (lo + int(np.argmax(d[lo:hi])) + 1) * hop
 
 
 def _normalised_correlation(hay, ref, win: int):
@@ -300,6 +514,19 @@ def main() -> int:
         help="analyse an existing capture instead of making one",
     )
     ap.add_argument(
+        "--quiet-hz",
+        type=int,
+        default=0,
+        dest="quiet_hz",
+        help="retune here for --calibrate and restore afterwards (receive only)",
+    )
+    ap.add_argument(
+        "--calibrate",
+        action="store_true",
+        help="measure the radio's send buffer by timing CI-V mode changes "
+        "against the audio (changes RX mode briefly, restores it, no TX)",
+    )
+    ap.add_argument(
         "--continuity",
         metavar="WAV",
         help="check an existing capture's samples against the SD card's own "
@@ -307,6 +534,14 @@ def main() -> int:
     )
     args = ap.parse_args()
 
+    if args.calibrate:
+        try:
+            return asyncio.run(
+                calibrate(args.target, args.rate, 24, 1.2, args.quiet_hz)
+            )
+        except IcomNetError as exc:
+            print(f"radio: {exc}", file=sys.stderr)
+            return 1
     if args.continuity:
         return continuity(Path(args.target), Path(args.continuity))
     if args.spectrum:

@@ -384,11 +384,49 @@ because a run of "CONTINUOUS" from a detector never seen to fire says nothing.
 
 **This correlation is itself the offset measurement** the LAN capture was wanted
 for: it places the SD card's radio-clock timeline against a laptop-clocked
-capture to the sample, where filenames quantise to a whole second. What it does
-not remove is the radio's own send buffer (100-200 ms, wfview's figure), which
-sits inside that -10.073 s as an unknown constant — so it measures *rate* and
-*relative* alignment outright, and absolute offset only once that buffer is
-calibrated.
+capture to the sample, where filenames quantise to a whole second.
+
+### The send buffer is ~10 ms, not the 100-200 ms wfview reports
+
+That 100-200 ms is wfview's own client-side playout buffer (`rxSetup.latency`),
+not the radio's. This client has none. Two measurements:
+
+**Packet cadence, from any capture.** Every datagram carries 320 samples — 20.0
+ms of audio at 16 kHz — and they arrive every 20.0000 ms, with 99.1% landing
+within 5 ms of the earliest and a worst case of 10.7 ms. The radio streams in
+real time and queues nothing; only a *constant* delay could hide here, since it
+would move every packet equally.
+
+**Timing a CI-V mode change against the audio** (`--calibrate`, which transmits
+nothing). The radio echoes our own frames back, so the echo dates the command to
+within the return leg — measured round trip 2.8 ms median, 1.0 ms best, so ~1.4
+ms each way. The demodulator's noise character changes at that instant and
+appears in the audio however long the pipeline is:
+
+| | median | range |
+|---|---|---|
+| → USB | −12.8 ms | −14.8 … −11.5 |
+| → FM | +5.4 ms | +4.3 … +7.1 |
+
+Each cluster is tight to ±1.5 ms, and the two differ by **18.2 ms** — the FM and
+SSB chains have different group delay. **The absolute delay is not resolved by
+this**, though: a pure delay cannot be negative, and the echo is only ~1.4 ms
+behind the radio receiving the frame. Switching demodulator evidently changes
+audio the radio had computed but not yet sent, so the edge does not mark a fixed
+point in the pipeline. It bounds the delay at order 10 ms and no better. An
+absolute figure needs an event arriving through the *antenna* at an instant the
+laptop already knows, which this station cannot produce without transmitting.
+
+**For joining the SD card to the laptop's clock, most of it cancels anyway**: the
+SD card records the same demodulated AF that the LAN stream carries, so the
+demodulator's share is common to both and only packetisation plus network
+separates them — tens of ms against a filename quantised to the whole second.
+
+**Do not measure audio on 144.800.** It is APRS: stations key up at random, and a
+burst is a far larger step in any level detector than the thing being measured.
+The first calibration runs there produced one 300 ms outlier per direction and
+nothing else went wrong; on a quiet frequency all 24 transitions came back
+clean.
 
 **The estimator matters more than the capture length here.** The first,
 30-second capture appeared to show +300 ppm, from `len(samples)/span`: it counts

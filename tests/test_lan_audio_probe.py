@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from lan_audio_probe import coarse_lag, lag_profile
+from lan_audio_probe import coarse_lag, hiss_band, lag_profile, step_index
 
 RATE = 16000
 
@@ -116,3 +116,67 @@ def test_skips_probes_that_fall_before_the_capture_started():
     assert rows, "later probes should still match"
     assert all(r[1] == 0 for r in rows)
     assert all(r[2] > 0.99 for r in rows)
+
+
+def _lowpassed(x, rate, cutoff):
+    """Crude brick-wall filter -- stands in for SSB's narrower noise."""
+    spec = np.fft.rfft(x)
+    spec[np.fft.rfftfreq(len(x), 1 / rate) > cutoff] = 0
+    return np.fft.irfft(spec, len(x)).astype(np.float32)
+
+
+def test_step_index_finds_a_mode_change_to_within_a_few_ms():
+    wide = _noise(RATE * 4) * 0.1
+    narrow = _lowpassed(_noise(RATE * 4, 11) * 0.1, RATE, 2400)
+    at = RATE * 2
+    signal = np.concatenate([wide[:at], narrow[at:]])
+    level, hop = hiss_band(signal, RATE)
+    off = step_index(level, hop)
+    assert off is not None
+    assert abs(off - at) < RATE * 0.02  # within 20 ms
+
+
+def test_step_index_finds_the_change_in_either_direction():
+    wide = _noise(RATE * 4) * 0.1
+    narrow = _lowpassed(_noise(RATE * 4, 11) * 0.1, RATE, 2400)
+    at = RATE * 2
+    signal = np.concatenate([narrow[:at], wide[at:]])
+    off = step_index(*hiss_band(signal, RATE))
+    assert off is not None and abs(off - at) < RATE * 0.02
+
+
+def test_step_index_reports_nothing_for_unchanging_noise():
+    assert step_index(*hiss_band(_noise(RATE * 4) * 0.1, RATE)) is None
+
+
+def test_step_index_ignores_a_change_in_the_wrong_direction():
+    wide = _noise(RATE * 4) * 0.1
+    narrow = _lowpassed(_noise(RATE * 4, 11) * 0.1, RATE, 2400)
+    at = RATE * 2
+    to_narrow = np.concatenate([wide[:at], narrow[at:]])  # a drop
+    level, hop = hiss_band(to_narrow, RATE)
+    assert step_index(level, hop, -1) is not None  # expected direction
+    assert step_index(level, hop, +1) is None  # wrong direction, not reported
+
+
+def test_step_index_picks_the_expected_edge_when_both_are_present():
+    wide = _noise(RATE * 6) * 0.1
+    narrow = _lowpassed(_noise(RATE * 6, 11) * 0.1, RATE, 2400)
+    down, up = RATE * 2, RATE * 4
+    signal = np.concatenate([wide[:down], narrow[down:up], wide[up:]])
+    level, hop = hiss_band(signal, RATE)
+    assert abs(step_index(level, hop, -1) - down) < RATE * 0.02
+    assert abs(step_index(level, hop, +1) - up) < RATE * 0.02
+
+
+def test_step_index_locates_the_edge_far_more_precisely_than_its_averaging():
+    # The coarse pass averages over 50 ms; a delay measurement of the same
+    # order needs the edge itself, so the refinement has to beat that width.
+    wide = _noise(RATE * 4) * 0.1
+    narrow = _lowpassed(_noise(RATE * 4, 11) * 0.1, RATE, 2400)
+    for at in (RATE * 2, RATE * 2 + 137, int(RATE * 2.5)):
+        signal = np.concatenate([wide[:at], narrow[at:]])
+        off = step_index(*hiss_band(signal, RATE))
+        # 2 ms, because the delay this feeds is itself ~10 ms: a detector
+        # biased by half its own window would be measuring its own shape.
+        assert abs(off - at) < RATE * 0.002, f"{off} vs {at}"
