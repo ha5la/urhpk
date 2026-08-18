@@ -5,13 +5,17 @@ tests -- each branch can be right while the graph that joins them is wrong."""
 
 import json
 import re
+import wave
+from datetime import datetime
 
 import contest_video as cv
 from urhpk import cast_render, hud_draw, video_format
+from urhpk.timeline import SPLIT_EXCESS_S, Segment, _eff
 from urhpk.webcam_face import FaceScan
 from urhpk.webcam_sync import WebcamClip
 
 WEBCAM = WebcamClip("w.mp4", 0.0)
+SR = 16000  # the recorder's sample rate
 
 
 def _render_cmd(**kw):
@@ -256,3 +260,31 @@ class TestHudLayering:
         H = 1080
         expect = H - hud_draw.hud_height(H) - 2 * round(H * cv.CAST_PIP_MARGIN_FRAC)
         assert f"scale=-2:{expect}" in self._graph(cast="c.mp4", hud="h.mp4")
+
+
+class TestConcatAudio:
+    """The assembled WAV is the timeline everything else is drawn against, so
+    its length has to be exactly what the Segments say it is -- see
+    FINDINGS.md on the split excess."""
+
+    def _seg(self, tmp_path, name, dur, eff_dur=None):
+        path = str(tmp_path / name)
+        with wave.open(path, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(SR)
+            w.writeframes(b"\0\0" * round(dur * SR))
+        return Segment(path, datetime(2026, 8, 3, 16, 0), dur, 0.0, eff_dur=eff_dur)
+
+    def test_honours_eff_dur_to_the_sample(self, tmp_path):
+        # 5.57 ms is far shorter than one demuxed PCM packet, which is what
+        # the concat demuxer's `outpoint` can actually cut on.
+        segs = [
+            self._seg(tmp_path, "a.wav", 3.0, eff_dur=3.0 - SPLIT_EXCESS_S),
+            self._seg(tmp_path, "b.wav", 2.0, eff_dur=2.0 - SPLIT_EXCESS_S),
+            self._seg(tmp_path, "c.wav", 1.5),
+        ]
+        out = str(tmp_path / "out.wav")
+        cv.concat_audio(segs, out)
+        with wave.open(out) as w:
+            assert w.getnframes() == sum(round(_eff(s) * SR) for s in segs)

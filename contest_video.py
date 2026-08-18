@@ -34,6 +34,7 @@ import argparse
 import os
 import subprocess
 import sys
+import wave
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -104,32 +105,23 @@ from urhpk.webcam_sync import (
 
 
 def concat_audio(segs: list[Segment], out_wav: str) -> None:
-    listfile = out_wav + ".txt"
-    with open(listfile, "w") as fh:
+    """Assemble the round's audio, each segment cut to its own eff_dur.
+
+    Sample-accurate by construction, which the cut has to be: the split excess
+    is 5.57 ms and ffmpeg's concat demuxer trims on whole demuxed packets, 64 ms
+    at the recorder's rate. An audio timeline that doesn't match the one every
+    other stream is drawn against is a drift with nothing to bound it --
+    FINDINGS.md has what that looked like."""
+    with wave.open(segs[0].path) as first:
+        params = first.getparams()
+    with wave.open(out_wav, "wb") as out:
+        out.setnchannels(params.nchannels)
+        out.setsampwidth(params.sampwidth)
+        out.setframerate(params.framerate)
         for s in segs:
-            fh.write(f"file '{os.path.abspath(s.path)}'\n")
-            if s.eff_dur is not None:
-                fh.write(f"outpoint {s.eff_dur:.6f}\n")
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            listfile,
-            "-c",
-            "copy",
-            out_wav,
-        ],
-        check=True,
-    )
-    os.remove(listfile)
+            with wave.open(s.path) as w:
+                keep = round(_eff(s) * w.getframerate())
+                out.writeframes(w.readframes(keep))
 
 
 def _ffprobe_duration(path: str) -> float:

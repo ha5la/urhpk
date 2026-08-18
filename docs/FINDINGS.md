@@ -538,9 +538,19 @@ this file attributes to two crystals in the webcam drift section, and was inside
 every measurement that produced that figure.
 
 `compensate_split_excess` (`urhpk/timeline.py`) trims `SPLIT_EXCESS_S` from every
-segment but the last, via `eff_dur` so `concat_audio` emits a matching outpoint.
-Applied to the two rounds it leaves a residual of ±0.14 s — at the floor of what
-the filenames can resolve.
+segment but the last, via `eff_dur`. Applied to the two rounds it leaves a
+residual of ±0.14 s — at the floor of what the filenames can resolve.
+
+**The cut has to be made sample by sample.** Handing it to ffmpeg's concat
+demuxer as an `outpoint` per file does not work: that trims on whole demuxed
+packets — 1024 samples, 64 ms at the recorder's 16 kHz. Asking it for
+5.57 ms removed 0.21 s of the intended 4.22 s across the August round, and 4 ms
+of 111 ms across a 20-segment slice, unchanged by re-encoding instead of
+`-c copy`. The timeline meanwhile assumed the full 4.22 s had gone, so
+everything drawn on it — the RX/TX badge most visibly — ran early by a margin
+growing to 4 s. `concat_audio` writes the WAV itself now: 759 segments in 1.1 s,
+and the assembled round lands 5.7 ms from its timeline, that being one sample of
+rounding per boundary.
 
 Caveats: one session, 19 points, and an unknown share of the 5.4 ms is the
 detector rather than the radio. The technique also needs the sub band parked on
