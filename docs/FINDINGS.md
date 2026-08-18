@@ -535,7 +535,11 @@ QSOs, telemetry — never feel it. Anything *continuous* laid against the assemb
 audio does: the cast, the scope and the webcam all play at real rate over a
 timeline running 4 s long by the end of a round. That is larger than the ~3.2 s
 this file attributes to two crystals in the webcam drift section, and was inside
-every measurement that produced that figure.
+every measurement that produced that figure — `refine_webcam_start` was fitting
+the recorder and calling it a crystal. Rendering the August round with the excess
+actually taken out of the audio drops the fitted rate from **+2.487 s/h to
++0.272 s/h**, and 4.22 s over 7295 s is 2.083 s/h of the 2.215 s/h that
+disappeared. What is left is the crystals: ~0.55 s over a round, not ~3.2 s.
 
 `compensate_split_excess` (`urhpk/timeline.py`) trims `SPLIT_EXCESS_S` from every
 segment but the last, via `eff_dur`. Applied to the two rounds it leaves a
@@ -680,7 +684,9 @@ Alt+V capture too, since sharing the machine's clock fixes where a capture
    round measured the same way grew to ~+5 s — but that was before the radio's
    clock went on NTP (see "The radio's clock"), so an unknown part of it was
    time-of-day drift rather than crystal rate, and the figure is an upper bound
-   until a long post-NTP round re-measures it.
+   until a long post-NTP round re-measures it. Most of the 3.2 s turned out to be
+   neither crystal nor clock but the recorder's split excess — see that section
+   for the separation.
 
 `refine_webcam_start` fits both: anchors sampled evenly across the *whole* round
 (an earlier version took the first few, clustered them in the opening minutes and
