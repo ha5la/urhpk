@@ -541,6 +541,15 @@ actually taken out of the audio drops the fitted rate from **+2.487 s/h to
 +0.272 s/h**, and 4.22 s over 7295 s is 2.083 s/h of the 2.215 s/h that
 disappeared. What is left is the crystals: ~0.55 s over a round, not ~3.2 s.
 
+**The residual flips sign between rounds, which is how you know it is the
+crystals.** July, whose cam is a phone rather than the laptop's own capture,
+fits **−0.296 s/h** against August's +0.272. The recorder is common to both, so
+while its excess was still in the audio both rounds had to read positive and
+large (July's 3.93 s over 7382 s is +1.917 s/h of shared bias); only with it
+removed does the per-device term show, at ±0.3 s/h. Take off the ±0.07 s/h each
+round owes to `SPLIT_EXCESS_S` being pooled rather than its own measurement and
+the two land at ±0.2 s/h, ~57 ppm — an ordinary pair of consumer crystals.
+
 `compensate_split_excess` (`urhpk/timeline.py`) trims `SPLIT_EXCESS_S` from every
 segment but the last, via `eff_dur`. Applied to the two rounds it leaves a
 residual of ±0.14 s — at the floor of what the filenames can resolve.
@@ -683,10 +692,10 @@ Alt+V capture too, since sharing the machine's clock fixes where a capture
    end. A linear drift, which no single offset can correct. A same-machine Alt+V
    round measured the same way grew to ~+5 s — but that was before the radio's
    clock went on NTP (see "The radio's clock"), so an unknown part of it was
-   time-of-day drift rather than crystal rate, and the figure is an upper bound
-   until a long post-NTP round re-measures it. Most of the 3.2 s turned out to be
-   neither crystal nor clock but the recorder's split excess — see that section
-   for the separation.
+   time-of-day drift rather than crystal rate. Most of the 3.2 s turned out to be
+   neither crystal nor clock but the recorder's split excess; the rate is real but
+   ~8x smaller than this, and reverses sign with the capture device — see that
+   section for the separation.
 
 `refine_webcam_start` fits both: anchors sampled evenly across the *whole* round
 (an earlier version took the first few, clustered them in the opening minutes and
