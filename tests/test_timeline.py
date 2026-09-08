@@ -6,6 +6,7 @@ import pytest
 
 import contest_video as cv
 from urhpk import timeline as tl
+from urhpk.cast_render import CastClip
 from urhpk.cw_decode import (
     CharEvent,
 )
@@ -212,8 +213,7 @@ class TestStreamPrecedesAudio:
             str(tmp_path / "out.mp4"),
             1280,
             720,
-            cast=str(tmp_path / "cast.mp4"),
-            cast_start=-25.0,
+            casts=[CastClip(str(tmp_path / "cast.mp4"), -25.0)],
         )
         cmd = captured["cmd"]
         i = cmd.index("-ss")

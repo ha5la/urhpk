@@ -282,9 +282,9 @@ uv run contest_video.py [-o OUT.mp4]      # inputs taken from the round director
 The second form is all-or-nothing on the positionals: give neither and
 `wiring.discover_round_inputs` fills every slot from the directory, give one and
 nothing is discovered. Flags always win over what was found. The discovery
-refuses ambiguity rather than resolving it — two `.cast` files is an error, not
-the newer one — and it never globs plain `*.mp4`, because the renders live in
-the round directory beside the webcam clips.
+refuses ambiguity rather than resolving it — two `*-telemetry.jsonl` files is an
+error, not the newer one — and it never globs plain `*.mp4`, because the renders
+live in the round directory beside the webcam clips.
 
 Dependencies: `numpy`, `pyte`, `pillow`, `tqdm` (`pyproject.toml`) +
 `ffmpeg`/`ffprobe`.
@@ -506,6 +506,9 @@ cannot show — layout, PiP, waterfall.
 - **A round's webcam clips share that one recess, stacked in time order**
   (`sync_webcams` sorts them; each overlay is enabled from its own start). Between
   two clips the earlier one's `tpad`-cloned last frame is what stays on screen.
+- **A round's casts share the one PiP slot the same way.** A round the logger had
+  to be restarted in has one cast per session; they stack in time order and each
+  takes the slot from its own start, with the same `tpad` freeze filling the gap.
 - **Each clip's crop is its own, and is a constant.** `webcam_face` scans the clip
   and the crop is centred on the median face; a clip with no scan (no detector
   installed) keeps the size-agnostic centred expression. The crop must not vary
@@ -525,7 +528,10 @@ cannot show — layout, PiP, waterfall.
     (see FINDINGS.md). The logger's own Alt+V capture shares this machine's clock:
     `parse_webcam_precise_filename` reads the exact start off the filename.
   - the same laptop-clock drift measured from the webcam is applied to the cast,
-    since asciinema stamped its header from that same clock.
+    since asciinema stamped its header from that same clock — and each cast takes
+    the fit measured over *its own* stretch of the round (`drift_at`), not the
+    round's best one. A rate is a line, so a fit only describes the clock where it
+    was measured: September's two sessions were 4.7 s and 5 s/hour apart.
 - **A stream that began before the audio must be *entered partway in*, not clamped
   to t=0.** `stream_start` differs from `audio_time_for` for exactly this case, and
   `_stream_input_args` turns a negative start into an `-ss` seek into that input

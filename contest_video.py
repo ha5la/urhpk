@@ -40,6 +40,7 @@ from pathlib import Path
 
 from urhpk import wiring
 from urhpk.cast_render import (
+    CastClip,
     cast_start_fraction,
     parse_cast_header,
     render_cast_video,
@@ -91,7 +92,9 @@ from urhpk.timeline import (
 from urhpk.video_format import RENDER_FPS, RESOLUTIONS
 from urhpk.webcam_face import face_crop, scan_faces
 from urhpk.webcam_sync import (
+    Drift,
     WebcamClip,
+    drift_at,
     parse_webcam_precise_filename,
     parse_webcam_wall,
     refine_webcam_start,
@@ -171,9 +174,7 @@ def render(
     W: int,
     H: int,
     webcams: list[WebcamClip] | None = None,
-    cast: str | None = None,
-    cast_start: float = 0.0,
-    cast_rate: float = 0.0,
+    casts: list[CastClip] | None = None,
     scope: str | None = None,
     scope_start: float = 0.0,
     scope_end: float = 0.0,
@@ -237,37 +238,45 @@ def render(
         )
         bg = "bg2"
     cur = bg
-    if cast:
-        # cast is our own render_cast_video output -- a synthetic, constant-
-        # framerate file we just encoded, so no drift *of its own* -- but
-        # its internal timestamps came from asciinema's real-time capture
+    if casts:
+        # Each cast is our own render_cast_video output -- a synthetic,
+        # constant-framerate file we just encoded, so no drift *of its own* --
+        # but its internal timestamps came from asciinema's real-time capture
         # on the same laptop as the webcam, so the same laptop-clock-vs-
-        # audio-clock drift measured via the webcam (see main(), cast_rate)
+        # audio-clock drift measured via the webcam (see main(), clip.rate)
         # applies here too: setpts stretches its timeline the same way the
         # webcam branch's does, before the fps=RENDER_FPS resample. itsoffset
         # positions its own t=0 (the moment the logger started) at
-        # cast_start in the output timeline. tpad clones its last frame so a
+        # clip.start in the output timeline. tpad clones its last frame so a
         # cast shorter than the round can't truncate the shared filtergraph,
         # same reasoning as the webcam branch below.
         # Height-constrained, not width-constrained: with a bar along the bottom
         # the terminal's limit is the room above it, and a width fraction
         # picked before the HUD existed simply overran it -- the logger's own
         # toolbar was drawn across the SCORE and QSOS panels.
+        #
+        # A round has one cast per run of the logger -- more than one when it
+        # had to be restarted mid-round -- and they share the single slot, the
+        # same way the webcam clips share the face recess: each is overlaid on
+        # the one before it in chronological order and takes the slot from its
+        # own start, with the earlier one's tpad-cloned last frame filling the
+        # gap between them.
         cast_x = round(W * CAST_PIP_X_FRAC)
         cast_y = round(H * CAST_PIP_MARGIN_FRAC)
         cast_scale = f"-2:{H - hud_h - 2 * cast_y}"
-        cast_idx = add_input(_stream_input_args(cast_start, cast))
-        # format=yuva420p + colorchannelmixer=aa lowers the PiP's alpha so the
-        # overlay blends it over the waterfall (a little transparency, not a
-        # wash) -- overlay honours the top input's own alpha channel.
-        fchain += (
-            f";[{cast_idx}:v]setpts=PTS/{1 - cast_rate:.8f},scale={cast_scale},fps={RENDER_FPS},"
-            f"format=yuva420p,colorchannelmixer=aa={CAST_PIP_ALPHA},"
-            f"tpad=stop_mode=clone:stop_duration=99999[castpip]"
-            f";[{cur}][castpip]overlay=x={cast_x}:y={cast_y}:"
-            f"enable='gte(t,{max(cast_start, 0.0):.3f})'[v1]"
-        )
-        cur = "v1"
+        for i, clip in enumerate(casts):
+            idx = add_input(_stream_input_args(clip.start, clip.path))
+            # format=yuva420p + colorchannelmixer=aa lowers the PiP's alpha so
+            # the overlay blends it over the waterfall (a little transparency,
+            # not a wash) -- overlay honours the top input's own alpha channel.
+            fchain += (
+                f";[{idx}:v]setpts=PTS/{1 - clip.rate:.8f},scale={cast_scale},fps={RENDER_FPS},"
+                f"format=yuva420p,colorchannelmixer=aa={CAST_PIP_ALPHA},"
+                f"tpad=stop_mode=clone:stop_duration=99999[castpip{i}]"
+                f";[{cur}][castpip{i}]overlay=x={cast_x}:y={cast_y}:"
+                f"enable='gte(t,{max(clip.start, 0.0):.3f})'[castv{i}]"
+            )
+            cur = f"castv{i}"
     if hud:
         # No -itsoffset: unlike every other side stream here, the HUD clip is
         # generated *from* the output timeline rather than captured against an
@@ -425,10 +434,10 @@ def sync_webcams(
     offset_h: int,
     input_log: str | None = None,
     manual_offset: float | None = None,
-) -> tuple[list[WebcamClip], tuple[float, float] | None]:
+) -> tuple[list[WebcamClip], list[Drift]]:
     """Place every capture of the round on the output timeline, in
-    chronological order, and return the clock-drift correction the cast PiP
-    shares with them -- (intercept, rate), or None if none could be fitted.
+    chronological order, and return every clock-drift fit that came out of it,
+    for the cast PiPs on that same clock to share (see drift_at).
 
     The drift is this laptop's clock against the radio's, so the round has one
     rate, fitted from the *longest* clip -- the widest lever arm and the most
@@ -468,7 +477,7 @@ def sync_webcams(
             WebcamClip(p, start + manual_offset)
             for p, (start, _, _) in zip(paths, placed)
         ]
-        return sorted(clips, key=lambda c: c.start), None
+        return sorted(clips, key=lambda c: c.start), []
 
     # Even an exact filename/log-derived start only fixes the constant offset
     # -- the webcam capture (this machine's system clock, via gettimeofday) and
@@ -504,21 +513,24 @@ def sync_webcams(
                 "pass --webcam-offset to fine-tune manually"
             )
 
-    drift = None
+    borrowed = 0.0
     if fits:
         best = max(fits, key=lambda i: _ffprobe_duration(paths[i]))
-        drift = (fits[best][0] - placed[best][0], fits[best][1])
+        borrowed = fits[best][1]
         if len(fits) > 1:
             print(
-                f"  webcam: clock drift taken from {tag(best)}, the longest clip "
-                f"({drift[1] * 3600:+.3f}s/hour)"
+                f"  webcam: a clip that fitted no drift of its own would borrow "
+                f"{tag(best)}'s, the longest clip's ({borrowed * 3600:+.3f}s/hour)"
             )
-    borrowed = drift[1] if drift else 0.0
     clips = [
         WebcamClip(path, *fits.get(i, (placed[i][0], borrowed)))
         for i, path in enumerate(paths)
     ]
-    return sorted(clips, key=lambda c: c.start), drift
+    drifts = [
+        Drift(refined, refined - placed[i][0], rate)
+        for i, (refined, rate) in sorted(fits.items())
+    ]
+    return sorted(clips, key=lambda c: c.start), drifts
 
 
 def main() -> None:
@@ -582,10 +594,14 @@ def main() -> None:
     )
     ap.add_argument(
         "--cast",
+        action="append",
+        metavar="FILE",
         help="asciinema cast (v2) recording of the logger/irssi terminal, "
         "shown as a large picture-in-picture -- synced from "
         "the cast header's own Unix-epoch timestamp, exact real-world "
-        "UTC with no whole-hour rounding needed",
+        "UTC with no whole-hour rounding needed. Repeat the flag for a round "
+        "the logger was restarted in: each is placed by its own timestamp and "
+        "they share the one PiP slot, in time order",
     )
     ap.add_argument(
         "--scope",
@@ -690,7 +706,7 @@ def main() -> None:
         args.edi = found.edi
         args.telemetry = args.telemetry or found.telemetry
         args.input_log = args.input_log or found.input_log
-        args.cast = args.cast or found.cast
+        args.cast = args.cast or found.casts
         args.scope = args.scope or found.scope
         args.webcam = args.webcam or found.webcams
         print("found in this round directory:")
@@ -699,7 +715,7 @@ def main() -> None:
             ("edi", ", ".join(args.edi)),
             ("telemetry", args.telemetry),
             ("input-log", args.input_log),
-            ("cast", args.cast),
+            ("cast", ", ".join(args.cast or [])),
             ("scope", args.scope),
             ("webcam", ", ".join(args.webcam or [])),
         ):
@@ -747,17 +763,18 @@ def main() -> None:
     # keystrokes, and qso_windows' exact QSO timing reads the same file later.
     input_log = load_input_log(args.input_log) if args.input_log else []
 
-    cast_start = None
-    cast_rate = 0.0
-    if args.cast:
-        cast_wall, cast_cols, cast_rows = parse_cast_header(args.cast)
-        fraction = cast_start_fraction(args.cast, cast_wall, input_log)
+    casts: list[CastClip] = []
+    for path in args.cast or []:
+        cast_wall, cast_cols, cast_rows = parse_cast_header(path)
+        fraction = cast_start_fraction(path, cast_wall, input_log)
         if fraction is not None:
             cast_wall += timedelta(seconds=fraction)
-        cast_start = stream_start(cast_wall + timedelta(hours=offset_h), segs)
+        start = stream_start(cast_wall + timedelta(hours=offset_h), segs)
+        casts.append(CastClip(path, start))
+        tag = f"cast {len(casts)}/{len(args.cast)}" if len(args.cast) > 1 else "cast"
         print(
-            f"  cast: {cast_cols}x{cast_rows} terminal, synced to start at "
-            f"{cast_start:.2f}s in the output (Unix-epoch timestamp; "
+            f"  {tag}: {cast_cols}x{cast_rows} terminal, synced to start at "
+            f"{start:.2f}s in the output (Unix-epoch timestamp; "
             f"see below for a clock-drift correction shared with --webcam, if given)"
         )
         if fraction is not None:
@@ -806,7 +823,7 @@ def main() -> None:
 
     webcams: list[WebcamClip] = []
     if args.webcam:
-        webcams, drift = sync_webcams(
+        webcams, drifts = sync_webcams(
             args.webcam,
             segs,
             qsos_all,
@@ -823,14 +840,21 @@ def main() -> None:
         # happen visibly before the audio caught up with it, late in the same
         # round this webcam drift was found in -- consistent with one shared
         # laptop-clock drift, not two unrelated bugs.
-        if drift and args.cast and cast_start is not None:
-            intercept, rate = drift
-            cast_start += intercept
-            cast_rate = rate
+        # A round the logger was restarted in has a cast and a webcam clip per
+        # session, and each cast takes the fit measured over its own stretch of
+        # the round rather than the round's best one: September's two sessions
+        # were 4.7s and 5s/hour apart, enough to put the second session's
+        # terminal PiP visibly out of step with its own audio.
+        for i, clip in enumerate(casts):
+            d = drift_at(drifts, clip.start)
+            if d is None:
+                continue
+            casts[i] = clip._replace(start=clip.start + d.intercept, rate=d.rate)
+            tag = f"cast {i + 1}/{len(casts)}" if len(casts) > 1 else "cast"
             print(
-                f"  cast: applying the same clock-drift correction "
-                f"({intercept:+.2f}s, {rate * 3600:+.3f}s/hour) -> "
-                f"starts at {cast_start:.2f}s"
+                f"  {tag}: applying the clock-drift correction measured at "
+                f"{d.at:.0f}s ({d.intercept:+.2f}s, {d.rate * 3600:+.3f}s/hour) -> "
+                f"starts at {casts[i].start:.2f}s"
             )
 
     if args.duration:
@@ -899,9 +923,13 @@ def main() -> None:
             )
         webcams[i] = clip._replace(face=scan)
 
-    if cast_start is not None and cast_start >= total:
-        print("  cast starts after the cut ends -- dropping the PiP overlay")
-        cast_start = None
+    dropped = [c for c in casts if c.start >= total]
+    if dropped:
+        print(
+            f"  {len(dropped)} cast(s) start after the cut ends -- "
+            f"dropping their PiP overlay"
+        )
+        casts = [c for c in casts if c.start < total]
 
     if scope_start is not None and scope_start >= total:
         print("  scope starts after the cut ends -- dropping the background")
@@ -960,16 +988,17 @@ def main() -> None:
     print("concatenating audio ...")
     concat_audio(segs, wav)
 
-    cast_video = None
-    if args.cast and cast_start is not None:
-        cast_video = stem + ".cast.mp4"
+    cast_videos = []
+    for i, clip in enumerate(casts):
+        out_path = stem + f".cast{i}.mp4"
         # How much of the cast's own timeline the cut can ever display.
-        # render() positions it with -itsoffset cast_start and stretches it by
-        # cast_rate, so clip time tau shows at cast_start + tau/(1-cast_rate);
+        # render() positions it with -itsoffset clip.start and stretches it by
+        # clip.rate, so clip time tau shows at clip.start + tau/(1-clip.rate);
         # invert that at tau = total. The margin keeps tpad's frame-cloning
         # from being visible at the very end of a preview.
-        cast_span = (total - cast_start) * (1 - cast_rate) + STREAM_TRIM_MARGIN_S
-        render_cast_video(args.cast, cast_video, max_duration=cast_span)
+        cast_span = (total - clip.start) * (1 - clip.rate) + STREAM_TRIM_MARGIN_S
+        render_cast_video(clip.path, out_path, max_duration=cast_span)
+        cast_videos.append(clip._replace(path=out_path))
 
     hud_video = stem + ".hud.mp4"
     hud_art_ = hud_art(load_hud_theme(args.hud_theme), W, hud_height(H))
@@ -1012,9 +1041,7 @@ def main() -> None:
         W,
         H,
         webcams=webcams,
-        cast=cast_video,
-        cast_start=cast_start or 0.0,
-        cast_rate=cast_rate,
+        casts=cast_videos,
         scope=scope_video,
         scope_start=scope_start or 0.0,
         scope_end=scope_end or 0.0,
@@ -1024,8 +1051,8 @@ def main() -> None:
 
     if not args.keep_intermediates:
         os.remove(wav)
-        if cast_video:
-            os.remove(cast_video)
+        for clip in cast_videos:
+            os.remove(clip.path)
         if scope_video:
             os.remove(scope_video)
         os.remove(hud_video)

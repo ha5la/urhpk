@@ -101,7 +101,8 @@ fall back on when a directory holds something unusual:
 ```
 uv run contest_video.py recording *.edi \
   --telemetry *-telemetry.jsonl --input-log *-input.jsonl \
-  --cast *.cast --scope *.scope -o out.mp4 \
+  --scope *.scope -o out.mp4 \
+  --cast <stamp>.cast \                # repeat the flag per logger session
   --webcam CALL-webcam-<stamp>.mp4     # repeat the flag per Alt+V capture
 ```
 

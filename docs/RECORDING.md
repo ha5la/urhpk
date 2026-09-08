@@ -48,9 +48,11 @@ argument and it takes every input from the directory itself: `recording/`, every
 before it starts. Any flag you do give wins over what it found, so
 `--res 720p --duration 1200` on its own is the whole preview invocation.
 
-It refuses to guess: two `.cast` files in one directory is an error naming both,
-not a coin toss paid for three hours later. An input the round simply does not
-have is skipped, exactly as leaving its flag off would.
+It refuses to guess: two `*-telemetry.jsonl` files in one directory is an error
+naming both, not a coin toss paid for three hours later. An input the round simply
+does not have is skipped, exactly as leaving its flag off would. The inputs a
+round can legitimately have several of — the EDI logs, the webcam clips and the
+casts — are all taken, in time order.
 
 Pass more than one EDI file to merge multiple bands worked in one recording
 (e.g. a 2M + 70CM round) into a single timeline — a WAV segment carries no
@@ -65,7 +67,7 @@ band field, so this only matters for merging QSO lists, not for rendering.
 | `--duration SECONDS` | Chronological preview: trim to the first `SECONDS` of real round time, skip CW-decoding past the cutoff (a 10-minute preview of a 2-hour round decodes ~12× less audio) |
 | `--telemetry FILE` | `*-telemetry.jsonl` — optional; adds the compass needle and the meter panel, mode-gates the CW ticker, recovers CW from long segments, and catches freq/mode changes inside one. The WAV files themselves already give RX/TX and the starting QRG/mode |
 | `--input-log FILE` | `*-input.jsonl` — optional; gives exact (not audio-structure-heuristic) QSO start/end times for chapters/captions where the operator logged the QSO during this recording |
-| `--cast FILE` | asciinema `.cast` recording of the logger/irssi tmux session, shown as a large picture-in-picture |
+| `--cast FILE` | asciinema `.cast` recording of the logger/irssi tmux session, shown as a large picture-in-picture; repeat for a round the logger was restarted in |
 | `--webcam FILE` | Webcam/selfie clip, shown as a small picture-in-picture bottom-right; repeat for a round captured in several Alt+V clips |
 | `--webcam-offset SECONDS` | Manual fallback sync correction for `--webcam`, bypassing automatic sync entirely |
 | `--scope FILE` | `.scope` recording (from `puskas_logger.py`) — replaces the audio-derived waterfall with the radio's own spectrum wherever it covers |
@@ -74,7 +76,7 @@ band field, so this only matters for merging QSO lists, not for rendering.
 | `--hud-preview OUT.png` | Write one HUD bar built from this recording at `--hud-preview-t SECONDS`, and exit |
 | `--hud-theme DIR` | HUD theme directory (`artwork.png` + `theme.json`), default the `hud-theme/` beside the script |
 | `--hud-theme-check [OUT.png]` | Draw every rect in the theme back onto its artwork and exit — the way to check a hand-edited theme |
-| `--keep-intermediates` | Keep the intermediate `.wav`/`.cast.mp4`/`.scope.mp4`/`.hud.mp4` files for inspection |
+| `--keep-intermediates` | Keep the intermediate `.wav`/`.castN.mp4`/`.scope.mp4`/`.hud.mp4` files for inspection |
 
 Render speed, measured with everything on (HUD + cast + webcam) at 720p: a
 20-minute cut of the August round took ~30 minutes, i.e. ~0.67× realtime. The
@@ -381,6 +383,15 @@ device (below). Rendering the cast is its own pipeline stage
 (`render_cast_video`, using `pyte` to replay the terminal escape codes and
 Pillow to draw them), producing a standalone intermediate mp4 that the main
 pass then composites — the same pattern the scope and HUD stages use.
+
+Repeat the flag for a round the logger had to be restarted in — the September
+round's CW keyer gave up a little after half time. Each cast is placed by its
+own header timestamp and they share the one PiP slot in time order, exactly as
+several `--webcam` clips share the face recess; between them the earlier one's
+last frame stays frozen on screen. Each also takes the clock-drift correction
+measured over its own stretch of the round, since a rate fitted across the first
+session says nothing useful about the second: September's two were 4.7 s and
+5 s/hour apart.
 
 See PIPELINE.md for how the recording is actually made
 (`run-recorded-round.sh` does it automatically) and

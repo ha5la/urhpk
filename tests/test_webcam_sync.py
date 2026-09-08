@@ -6,15 +6,18 @@ import numpy as np
 
 import contest_video as cv
 from urhpk import video_format, webcam_sync
+from urhpk.cast_render import CastClip
 from urhpk.timeline import (
     Qso,
     Segment,
     derive_utc_offset,
 )
 from urhpk.webcam_sync import (
+    Drift,
     WebcamClip,
     _find_offset_correction,
     _rms_envelope,
+    drift_at,
     parse_webcam_precise_filename,
     parse_webcam_wall,
     refine_webcam_start,
@@ -111,11 +114,10 @@ class TestRenderWebcamSync:
             str(tmp_path / "out.mp4"),
             1280,
             720,
-            cast=str(tmp_path / "cast.mp4"),
-            cast_start=5.0,
+            casts=[CastClip(str(tmp_path / "cast.mp4"), 5.0)],
         )
         fchain = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
-        cast_chain = fchain.split("[1:v]")[1].split("[castpip]")[0]
+        cast_chain = fchain.split("[1:v]")[1].split("[castpip0]")[0]
         assert f"colorchannelmixer=aa={cv.CAST_PIP_ALPHA}" in cast_chain
 
     def test_cast_pip_stretches_timeline_by_cast_rate(self, monkeypatch, tmp_path):
@@ -133,12 +135,10 @@ class TestRenderWebcamSync:
             str(tmp_path / "out.mp4"),
             1280,
             720,
-            cast=str(tmp_path / "cast.mp4"),
-            cast_start=5.0,
-            cast_rate=0.0005,
+            casts=[CastClip(str(tmp_path / "cast.mp4"), 5.0, 0.0005)],
         )
         fchain = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
-        cast_chain = fchain.split("[1:v]")[1].split("[castpip]")[0]
+        cast_chain = fchain.split("[1:v]")[1].split("[castpip0]")[0]
         assert cast_chain.startswith("setpts=PTS/0.9995")
         assert cast_chain.index("setpts=") < cast_chain.index(
             f"fps={video_format.RENDER_FPS}"
@@ -453,17 +453,22 @@ class TestSyncWebcams:
         assert [c.path for c in clips] == [self.CAM1, self.CAM2]
         assert [round(c.start, 3) for c in clips] == [22.497, 106.520]
 
-    def test_drift_is_taken_from_the_longest_clip(self, monkeypatch):
-        # The rate is one laptop clock against the radio's, fitted per clip
-        # over its own span: the longest clip has the widest lever arm and the
-        # most anchors, so its fit is the round's -- and the cast PiP, on that
-        # same clock, is corrected with it.
+    def test_every_fitted_clip_reports_its_drift_and_where_it_was_measured(
+        self, monkeypatch
+    ):
+        # A cast PiP is on the same laptop clock, so it is corrected with one
+        # of these -- but only the fit measured over the stretch of round the
+        # cast actually covers says anything about the clock there, which is
+        # why each carries the output time it was taken at.
         self._fake_refine(
             monkeypatch, {self.CAM1: (-0.5, 0.001, 3), self.CAM2: (+0.25, 0.002, 9)}
         )
         self._fake_durations(monkeypatch, {self.CAM1: 80.8, self.CAM2: 300.0})
-        clips, drift = cv.sync_webcams([self.CAM1, self.CAM2], self._segs(), [], 2)
-        assert drift == (0.25, 0.002)
+        clips, drifts = cv.sync_webcams([self.CAM1, self.CAM2], self._segs(), [], 2)
+        assert [(round(d.at, 3), d.intercept, d.rate) for d in drifts] == [
+            (21.997, -0.5, 0.001),
+            (106.770, 0.25, 0.002),
+        ]
         assert [c.rate for c in clips] == [0.001, 0.002]  # each keeps its own fit
 
     def test_a_clip_that_cannot_fit_its_own_drift_borrows_the_rounds(self, monkeypatch):
@@ -474,8 +479,8 @@ class TestSyncWebcams:
             monkeypatch, {self.CAM1: (-0.5, 0.002, 7), self.CAM2: (0.0, 0.0, 0)}
         )
         self._fake_durations(monkeypatch, {self.CAM1: 300.0, self.CAM2: 20.0})
-        clips, drift = cv.sync_webcams([self.CAM1, self.CAM2], self._segs(), [], 2)
-        assert drift == (-0.5, 0.002)
+        clips, drifts = cv.sync_webcams([self.CAM1, self.CAM2], self._segs(), [], 2)
+        assert [(d.intercept, d.rate) for d in drifts] == [(-0.5, 0.002)]
         assert clips[0].start == 21.997368 and clips[0].rate == 0.002
         assert clips[1].start == 106.519807 and clips[1].rate == 0.002
 
@@ -487,9 +492,33 @@ class TestSyncWebcams:
             raise AssertionError("cross-correlation must not run")
 
         monkeypatch.setattr(cv, "refine_webcam_start", boom)
-        clips, drift = cv.sync_webcams(
+        clips, drifts = cv.sync_webcams(
             [self.CAM1, self.CAM2], self._segs(), [], 2, manual_offset=-1.5
         )
-        assert drift is None
+        assert drifts == []
         assert [round(c.start, 3) for c in clips] == [20.997, 105.020]
         assert [c.rate for c in clips] == [0.0, 0.0]
+
+
+class TestDriftAt:
+    """Which of the round's clock-drift fits corrects a stream starting here.
+
+    A round the logger was restarted in has a webcam clip and a cast per
+    session, and the September round measured them 4.7s and 5s/hour apart --
+    the fit from the first session, extrapolated across the 75-minute gap,
+    puts the second session's terminal PiP visibly out of step with its own
+    audio. The fit measured over the stretch the stream actually covers is the
+    one that says anything about the laptop clock there."""
+
+    FIRST = Drift(at=0.0, intercept=4.09, rate=-0.00136)
+    SECOND = Drift(at=4506.9, intercept=-0.65, rate=0.00005)
+
+    def test_takes_the_fit_measured_nearest_the_stream(self):
+        assert drift_at([self.FIRST, self.SECOND], 4493.9) is self.SECOND
+        assert drift_at([self.FIRST, self.SECOND], -25.6) is self.FIRST
+
+    def test_one_fit_corrects_the_whole_round(self):
+        assert drift_at([self.FIRST], 4493.9) is self.FIRST
+
+    def test_no_fit_leaves_the_stream_where_its_own_timestamp_put_it(self):
+        assert drift_at([], 12.5) is None

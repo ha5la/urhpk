@@ -68,7 +68,7 @@ class RoundInputs:
     edi: list[str]
     telemetry: str | None
     input_log: str | None
-    cast: str | None
+    casts: list[str]
     scope: str | None
     webcams: list[str]
 
@@ -95,7 +95,10 @@ def discover_round_inputs(directory: Path) -> RoundInputs:
         edi=[str(p) for p in edi],
         telemetry=_one(directory, "*-telemetry.jsonl"),
         input_log=_one(directory, "*-input.jsonl"),
-        cast=_one(directory, "*.cast"),
+        # One cast per logger session: a round the logger was restarted in
+        # has several, named by their own UTC start, so sorted by name is
+        # sorted by time -- as for the webcams below.
+        casts=[str(p) for p in sorted(directory.glob("*.cast"))],
         scope=_one(directory, "*.scope"),
         # Never plain *.mp4: the renders live in the round directory too. Sorted
         # by name is sorted by capture time -- the prefix is one round's own, and

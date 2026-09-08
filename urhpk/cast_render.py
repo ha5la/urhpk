@@ -20,6 +20,7 @@ import json
 import statistics
 import subprocess
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 import pyte
 from PIL import Image, ImageDraw, ImageFont
@@ -67,6 +68,17 @@ def parse_cast_header(path: str) -> tuple[datetime, int, int]:
     return start_utc, header["width"], header["height"]
 
 
+class CastClip(NamedTuple):
+    """One logger session on the output timeline: where its own frame 0 lands
+    (seconds into the video) and the clock-drift rate its timeline is scaled
+    by. A round has one per run of the logger -- more than one when it had to
+    be restarted mid-round."""
+
+    path: str
+    start: float
+    rate: float = 0.0
+
+
 ANCHOR_MIN_LEN = 5  # a shorter string matches too much of a busy screen
 ANCHOR_LIMIT = 40  # anchors are interchangeable; a handful settles the median
 
@@ -96,7 +108,13 @@ def cast_start_fraction(
         if ev.kind != "text" or len(ev.text) < ANCHOR_MIN_LEN or ev.text == previous:
             continue
         previous = ev.text
-        anchors.append(((ev.t - cast_wall).total_seconds(), ev.text))
+        offset = (ev.t - cast_wall).total_seconds()
+        # A restarted round has one input log across every session but one cast
+        # per session, so the log opens with keystrokes from before this cast
+        # began: negative clip times, where no repaint of them can be.
+        if offset < 0:
+            continue
+        anchors.append((offset, ev.text))
         if len(anchors) == ANCHOR_LIMIT:
             break
     if not anchors:

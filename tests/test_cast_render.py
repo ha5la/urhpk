@@ -88,6 +88,18 @@ class TestCastStartFraction:
         )
         assert frac == pytest.approx(0.60, abs=0.001)
 
+    def test_keystrokes_from_before_this_cast_began_are_not_anchors(self, tmp_path):
+        # A round the logger was restarted in has one input log covering every
+        # session but one cast per session, so the log opens with keystrokes
+        # from before this cast existed. They sit at negative clip times, where
+        # no repaint can be, and taking them as anchors fills the limit with
+        # entries that can never match -- leaving the header uncorrected.
+        cast = self._cast(tmp_path, [(2.30, "> ha5tam")])
+        log = self._typed(*[(900.0 + i, f"earlier{i:03d}") for i in range(40)])
+        log += self._typed((1002.68, "ha5tam"))
+        frac = cast_start_fraction(cast, EPOCH + timedelta(seconds=self.HEADER_TS), log)
+        assert frac == pytest.approx(0.38, abs=0.001)
+
     def test_nothing_to_match_leaves_the_header_alone(self, tmp_path):
         cast = self._cast(tmp_path, [(1.0, "booting"), (2.0, "no typing here")])
         frac = cast_start_fraction(

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import numpy as np
 
 import contest_video as cv
+from urhpk.cast_render import CastClip
 from urhpk.icom_net import write_scope_record
 from urhpk.scope_render import (
     SCOPE_AMP_MAX,
@@ -190,8 +191,7 @@ class TestRenderScopeBackground:
             scope=str(tmp_path / "scope.mp4"),
             scope_start=0.0,
             scope_end=10.0,
-            cast=str(tmp_path / "cast.mp4"),
-            cast_start=1.0,
+            casts=[CastClip(str(tmp_path / "cast.mp4"), 1.0)],
             webcams=[WebcamClip(str(tmp_path / "cam.mp4"), 2.0)],
         )
         fchain = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]

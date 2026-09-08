@@ -54,17 +54,13 @@ class TestRoundInputDiscovery:
         found = wiring.discover_round_inputs(round_dir)
         assert found.telemetry == str(round_dir / "260811-HA5LA-telemetry.jsonl")
         assert found.input_log == str(round_dir / "260811-HA5LA-input.jsonl")
-        assert found.cast == str(round_dir / "2026-08-11T19:16:06+00:00.cast")
+        assert found.casts == [str(round_dir / "2026-08-11T19:16:06+00:00.cast")]
         assert found.scope == str(round_dir / "260811-HA5LA.scope")
 
     def test_leaves_absent_side_channels_unset(self, round_dir):
         found = wiring.discover_round_inputs(round_dir)
-        assert (found.telemetry, found.input_log, found.cast, found.scope) == (
-            None,
-            None,
-            None,
-            None,
-        )
+        assert (found.telemetry, found.input_log, found.scope) == (None, None, None)
+        assert found.casts == []
 
     def test_takes_every_webcam_clip_in_timestamp_order(self, round_dir):
         for stamp in ("20260811T191746.519807Z", "20260811T191622.497368Z"):
@@ -80,13 +76,17 @@ class TestRoundInputDiscovery:
             (round_dir / name).touch()
         assert wiring.discover_round_inputs(round_dir).webcams == []
 
-    def test_refuses_to_choose_between_two_casts_and_names_both(self, round_dir):
-        (round_dir / "first.cast").touch()
-        (round_dir / "second.cast").touch()
-        with pytest.raises(ValueError) as exc:
-            wiring.discover_round_inputs(round_dir)
-        assert "first.cast" in str(exc.value)
-        assert "second.cast" in str(exc.value)
+    def test_takes_every_cast_in_time_order(self, round_dir):
+        # A round restarted mid-way leaves one cast per logger session, named
+        # by their own UTC start -- so sorted by name is sorted by time, the
+        # same as the webcam clips above.
+        for stamp in ("2026-09-07T17:13:10+00:00", "2026-09-07T15:58:08+00:00"):
+            (round_dir / f"{stamp}.cast").touch()
+        found = wiring.discover_round_inputs(round_dir)
+        assert [Path(p).name for p in found.casts] == [
+            "2026-09-07T15:58:08+00:00.cast",
+            "2026-09-07T17:13:10+00:00.cast",
+        ]
 
     def test_refuses_a_directory_with_no_recording_in_it(self, tmp_path):
         (tmp_path / "260811-HA5LA-2M.edi").touch()

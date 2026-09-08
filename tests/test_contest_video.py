@@ -10,11 +10,13 @@ from datetime import datetime
 
 import contest_video as cv
 from urhpk import cast_render, hud_draw, video_format
+from urhpk.cast_render import CastClip
 from urhpk.timeline import SPLIT_EXCESS_S, Segment, _eff
 from urhpk.webcam_face import FaceScan
 from urhpk.webcam_sync import WebcamClip
 
 WEBCAM = WebcamClip("w.mp4", 0.0)
+CAST = CastClip("c.mp4", 0.0)
 SR = 16000  # the recorder's sample rate
 
 
@@ -176,7 +178,7 @@ class TestRenderInputIndices:
         files = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-i"]
         graph = cmd[cmd.index("-filter_complex") + 1]
         out = {}
-        for label in ("scopebg", "hudbar", "castpip", "pip0"):
+        for label in ("scopebg", "hudbar", "castpip0", "pip0"):
             m = re.search(r"\[(\d+):v\]((?!\[\d+:v\]).)*?\[" + label + r"\]", graph)
             if m:
                 out[label] = files[int(m.group(1))]
@@ -192,17 +194,17 @@ class TestRenderInputIndices:
         # which file each chain reads, not merely that all four are used.
         assert self._sources(
             scope="s.mp4", scope_start=1.0, scope_end=9.0,
-            cast="c.mp4", webcams=[WEBCAM], hud="h.mp4",
+            casts=[CAST], webcams=[WEBCAM], hud="h.mp4",
         ) == {
             "scopebg": "s.mp4",
             "hudbar": "h.mp4",
-            "castpip": "c.mp4",
+            "castpip0": "c.mp4",
             "pip0": "w.mp4",
         }  # fmt: skip
 
     def test_indices_stay_correct_with_only_some_streams(self):
-        assert self._sources(cast="c.mp4", hud="h.mp4") == {
-            "castpip": "c.mp4",
+        assert self._sources(casts=[CAST], hud="h.mp4") == {
+            "castpip0": "c.mp4",
             "hudbar": "h.mp4",
         }
         assert self._sources(webcams=[WEBCAM], hud="h.mp4") == {
@@ -220,8 +222,8 @@ class TestHudLayering:
     def test_the_bar_is_composited_after_the_cast_so_nothing_covers_it(self):
         # Regression from a rendered frame: the terminal PiP was drawn over
         # the bar, putting the logger's own toolbar across SCORE and QSOS.
-        graph = self._graph(cast="c.mp4", hud="h.mp4")
-        assert graph.index("[castpip]overlay") < graph.index("[hudbar]overlay")
+        graph = self._graph(casts=[CAST], hud="h.mp4")
+        assert graph.index("[castpip0]overlay") < graph.index("[hudbar]overlay")
 
     def test_the_webcam_is_composited_after_the_bar_to_sit_in_the_recess(self):
         graph = self._graph(webcams=[WEBCAM], hud="h.mp4")
@@ -254,12 +256,35 @@ class TestHudLayering:
         assert "enable='gte(t,22.497)'" in graph
         assert "enable='gte(t,106.520)'" in graph
 
+    def test_several_logger_sessions_share_the_pip_slot_in_time_order(self):
+        # A round the logger was restarted in is several casts in one slot,
+        # the same shape as the webcam recess above: each is overlaid on the
+        # composite so far, reads its own file and takes the slot from its own
+        # start, with the one before it frozen by tpad to fill the gap.
+        cmd = _render_cmd(
+            casts=[CastClip("a.mp4", 12.5), CastClip("b.mp4", 4501.25)],
+            hud="h.mp4",
+        )
+        files = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-i"]
+        graph = cmd[cmd.index("-filter_complex") + 1]
+        reads = {
+            label: files[
+                int(re.search(rf"\[(\d+):v\][^;]*\[{label}\]", graph).group(1))
+            ]
+            for label in ("castpip0", "castpip1")
+        }
+        assert reads == {"castpip0": "a.mp4", "castpip1": "b.mp4"}
+        assert graph.index("[castpip0]overlay") < graph.index("[castpip1]overlay")
+        assert graph.index("[castpip1]overlay") < graph.index("[hudbar]overlay")
+        assert "enable='gte(t,12.500)'" in graph
+        assert "enable='gte(t,4501.250)'" in graph
+
     def test_the_cast_is_sized_to_the_room_above_the_bar(self):
         # Height-constrained with a HUD: a width fraction picked before the
         # bar existed overran the space and had to be clipped by the bar.
         H = 1080
         expect = H - hud_draw.hud_height(H) - 2 * round(H * cv.CAST_PIP_MARGIN_FRAC)
-        assert f"scale=-2:{expect}" in self._graph(cast="c.mp4", hud="h.mp4")
+        assert f"scale=-2:{expect}" in self._graph(casts=[CAST], hud="h.mp4")
 
 
 class TestConcatAudio:

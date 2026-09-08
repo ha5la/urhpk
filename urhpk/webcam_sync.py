@@ -51,6 +51,25 @@ class WebcamClip(NamedTuple):
     face: FaceScan | None = None
 
 
+class Drift(NamedTuple):
+    """One fit of this laptop's clock against the radio's: the correction
+    (seconds) and rate (seconds per second) measured over one webcam clip, and
+    `at`, the output time it was measured at. A rate is a line, so a fit only
+    describes the clock over the stretch of round its clip covers."""
+
+    at: float
+    intercept: float
+    rate: float
+
+
+def drift_at(drifts: list[Drift], start: float) -> Drift | None:
+    """The fit that corrects a stream starting at `start`, or None if the round
+    fitted nothing."""
+    if not drifts:
+        return None
+    return min(drifts, key=lambda d: abs(d.at - start))
+
+
 def parse_webcam_wall(path: str) -> datetime:
     """Parse a phone/webcam filename's embedded timestamp (e.g.
     VID_20260706_180003.mp4) the same way scan_segments reads WAV filenames."""
