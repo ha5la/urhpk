@@ -1,5 +1,7 @@
 """Tests for the round's timeline: segments, EDI, and wall clock to audio time."""
 
+import os
+import wave
 from datetime import datetime, timedelta
 
 import pytest
@@ -294,3 +296,54 @@ class TestSplitExcess:
         segs = self._segs()[:1]
         compensate_split_excess(segs)
         assert segs[0].eff_dur is None
+
+
+# ---------------------------------------------------------------------------
+# Dual watch
+# ---------------------------------------------------------------------------
+
+
+class TestSubBandWavs:
+    """Dual watch records the sub band to its own `…B.wav` beside the main
+    band's `…A.wav`, covering the same wall-clock time (FINDINGS.md). Taking
+    both makes the assembled audio longer than the round it spans, and every
+    stream placed by a constant offset then runs ahead of the HUD by the
+    difference -- 17.6 s for 103 minutes of the September round."""
+
+    def _recording(self, tmp_path, names):
+        for name, dur in names:
+            path = tmp_path / name
+            with wave.open(str(path), "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(16000)
+                w.writeframes(b"\0\0" * int(16000 * dur))
+        return str(tmp_path)
+
+    def test_the_sub_bands_own_file_is_not_a_segment(self, tmp_path):
+        recdir = self._recording(
+            tmp_path,
+            [
+                ("20260907_163436A.wav", 172.0),
+                ("20260907_163459B.wav", 17.0),  # dual watch, inside the above
+                ("20260907_163729A.wav", 4.0),
+            ],
+        )
+        segs = tl.scan_segments(recdir)
+        assert [os.path.basename(s.path) for s in segs] == [
+            "20260907_163436A.wav",
+            "20260907_163729A.wav",
+        ]
+
+    def test_the_assembled_audio_still_matches_the_wall_span(self, tmp_path):
+        recdir = self._recording(
+            tmp_path,
+            [
+                ("20260907_163436A.wav", 173.0),
+                ("20260907_163459B.wav", 17.0),
+                ("20260907_163729A.wav", 4.0),
+            ],
+        )
+        segs = tl.scan_segments(recdir)
+        wall_span = (segs[-1].wall - segs[0].wall).total_seconds() + segs[-1].dur
+        assert sum(s.dur for s in segs) == pytest.approx(wall_span)

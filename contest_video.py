@@ -87,6 +87,7 @@ from urhpk.timeline import (
     remap_audio_t,
     scan_segments,
     stream_start,
+    sub_band_wavs,
     trim_to_duration,
 )
 from urhpk.video_format import RENDER_FPS, RESOLUTIONS
@@ -735,6 +736,13 @@ def main() -> None:
         sys.exit(f"no timestamped WAVs found in {args.recdir}")
     compensate_split_excess(segs)
     print(f"{len(segs)} segments, {segs[-1].audio_t + _eff(segs[-1]):.0f}s audio")
+    sub_band = sub_band_wavs(args.recdir)
+    if sub_band:
+        print(
+            f"  dual watch: {len(sub_band)} sub-band file(s) skipped "
+            f"({', '.join(sub_band)}) -- a second band over the same wall-clock "
+            f"time, not the next segment"
+        )
     print(
         f"  split excess: {len(segs) - 1} boundaries x {SPLIT_EXCESS_S * 1000:.2f} ms "
         f"= {(len(segs) - 1) * SPLIT_EXCESS_S:.2f}s removed"

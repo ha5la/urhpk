@@ -83,6 +83,29 @@ class Qso:
     mode: str = ""  # SSB/CW/FM, from the EDI per-QSO mode code; '' if unknown
 
 
+def _is_main_band(name: str) -> bool:
+    """Whether a recorded WAV belongs to the band the video is of.
+
+    The letter right after the `YYYYMMDD_HHMMSS` stamp is the recorder's band:
+    with dual watch on, the sub band records to its own `…B.wav` covering the
+    same wall-clock time as the main band's `…A.wav` (FINDINGS.md). They are
+    two parallel streams, not two consecutive segments, and concatenating both
+    makes the assembled audio longer than the round it spans -- 17.6 s longer
+    in September, which every stream placed by a constant offset then ran
+    ahead of the HUD by."""
+    return name[15:16] == "A"
+
+
+def sub_band_wavs(recdir: str) -> list[str]:
+    """The files scan_segments left out, so a round that had dual watch on can
+    say so in its own render log rather than just coming out shorter."""
+    return sorted(
+        f
+        for f in os.listdir(recdir)
+        if f.lower().endswith(".wav") and not _is_main_band(f)
+    )
+
+
 def scan_segments(recdir: str) -> list[Segment]:
     segs: list[Segment] = []
     audio_t = 0.0
@@ -91,6 +114,8 @@ def scan_segments(recdir: str) -> list[Segment]:
         try:
             wall = datetime.strptime(f[:15], "%Y%m%d_%H%M%S")
         except ValueError:
+            continue
+        if not _is_main_band(f):
             continue
         p = os.path.join(recdir, f)
         w = wave.open(p)
