@@ -25,6 +25,7 @@ from urhpk.timeline import (
     remap_audio_t,
     trim_to_duration,
 )
+from urhpk.webcam_sync import WebcamClip
 
 
 class TestEdi:
@@ -222,6 +223,36 @@ class TestStreamPrecedesAudio:
         assert cmd[i + 1] == "25.000"
         assert cmd[i + 2] == "-i"  # the seek applies to the cast input
         assert "-25.000" not in cmd  # never a negative itsoffset
+
+    def test_webcam_start_is_negative_before_first_segment(self):
+        # Alt+V is pressed before the radio's recorder is switched on, so this
+        # is the ordinary case for a webcam too -- and clamping it to 0 put
+        # September's PiP 18.1 s behind the round it was filming.
+        start, exact, _ = cv._webcam_start(
+            "r-webcam-20260806T191535.000000Z.mp4", self._segs(), [], 0, None
+        )
+        assert (start, exact) == (-25.0, True)
+
+    def test_render_enters_webcam_partway_on_negative_start(
+        self, monkeypatch, tmp_path
+    ):
+        captured = {}
+        monkeypatch.setattr(
+            cv.subprocess, "run", lambda cmd, check=True: captured.update(cmd=cmd)
+        )
+        cv.render(
+            str(tmp_path / "a.wav"),
+            str(tmp_path / "out.mp4"),
+            1280,
+            720,
+            webcams=[WebcamClip(str(tmp_path / "cam.mp4"), -25.0)],
+            hud_face=(10, 10, 100, 100),
+        )
+        cmd = captured["cmd"]
+        i = cmd.index("-ss")
+        assert cmd[i + 1] == "25.000"
+        assert cmd[i + 2] == "-i"
+        assert "-25.000" not in cmd
 
     def test_render_enters_scope_partway_on_negative_start(self, monkeypatch, tmp_path):
         captured = {}

@@ -295,7 +295,9 @@ def render(
         # itsoffset delays the whole cam stream's presentation timestamps so
         # its own frame 0 lands at its start in the output timeline --
         # exactly right, since that's the real moment the phone started
-        # recording. tpad clones the cam's last frame indefinitely so a clip
+        # recording. A capture that began before the audio gets an -ss seek
+        # into it instead, the same as the cast and scope branches
+        # (_stream_input_args). tpad clones the cam's last frame indefinitely so a clip
         # a little shorter than the round (as here) can never end the
         # shared filtergraph early and truncate the main waterfall/audio.
         # The cam is *not* mirrored: the logger's own Alt+V capture records
@@ -352,7 +354,7 @@ def render(
         centred = f"crop=min(iw\\,ih*{fw}/{fh}):min(ih\\,iw*{fh}/{fw})"
         for i, clip in enumerate(webcams):
             last = i == len(webcams) - 1
-            idx = add_input(["-itsoffset", f"{clip.start:.3f}", "-i", clip.path])
+            idx = add_input(_stream_input_args(clip.start, clip.path))
             # Each clip is cropped onto its own face: the operator cannot see
             # the Alt+V capture while it records, and a centred crop left them
             # off-centre for a third of a real round. Without a scan (no
@@ -369,7 +371,7 @@ def render(
                 f"{crop},scale={fw}:{fh},"
                 f"tpad=stop_mode=clone:stop_duration=99999[pip{i}]"
                 f";[{cur}][pip{i}]overlay=x={pip_x}:y={pip_y}:"
-                f"enable='gte(t,{clip.start:.3f})'[{'v' if last else f'v{i}'}]"
+                f"enable='gte(t,{max(clip.start, 0.0):.3f})'[{'v' if last else f'v{i}'}]"
             )
             cur = "v" if last else f"v{i}"
     if cur != "v":
@@ -414,14 +416,19 @@ def _webcam_start(
     (parse_webcam_precise_filename -- self-contained, no sidecar file needed),
     then the logger's webcam_start event (~1s early, stamped before ffmpeg
     spawned). Both are same-machine, so placement is exact either way, no
-    cross-correlation needed."""
+    cross-correlation needed.
+
+    Placed with stream_start, not audio_time_for, for the reason stream_start
+    exists: Alt+V is pressed before the radio's recorder is switched on, so a
+    capture normally begins ahead of the audio, and audio_time_for clamps that
+    to video t=0 -- which put September's PiP 18.1 s behind the round."""
     cam_wall = parse_webcam_precise_filename(path)
     src = "exact timestamp in filename"
     if cam_wall is None and input_log:
         cam_wall = webcam_start_wall(input_log)
         src = "logged webcam_start event"
     if cam_wall is not None:
-        return audio_time_for(cam_wall + timedelta(hours=offset_h), segs), True, src
+        return stream_start(cam_wall + timedelta(hours=offset_h), segs), True, src
     cam_wall = parse_webcam_wall(path)
     cam_dur = _ffprobe_duration(path)
     start = sync_webcam_start(cam_wall, cam_dur, qsos_all, segs, offset_h)
