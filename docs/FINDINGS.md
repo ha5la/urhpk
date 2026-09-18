@@ -317,6 +317,17 @@ watch on, several TX periods, main band swapped mid-recording:
 So `contest_video.py` globbing all `*.wav` would interleave two incompatible
 series and break the strict RX/TX alternation `qso_windows.py` assumes.
 
+**It then did, on the next round.** September had dual watch on for eighteen
+seconds; the one `…B.wav` it produced went into the timeline as if it followed
+the 172 s `…A.wav` it actually sits inside, and the assembled audio came out
+17.692 s longer than the wall-clock span its own filenames cover (681 A files
+alone: −3.734 s, which is `compensate_split_excess` doing its job). Everything
+placed by a single constant offset — the cast PiP, the scope background, the
+webcam — then ran that far ahead of the HUD, which follows the audio, for the
+remaining 103 minutes of the render. Measured off the rendered frames: the two
+clocks read the same to ±1 s up to video t=2320 and 17 s apart from t=2400.
+`scan_segments` takes the A series now.
+
 ### Dead end: the title tag's second slot is not the sub band
 
 Every IC-9700 title tag carries a second, dashed-out frequency/mode slot:
@@ -549,6 +560,24 @@ large (July's 3.93 s over 7382 s is +1.917 s/h of shared bias); only with it
 removed does the per-device term show, at ±0.3 s/h. Take off the ±0.07 s/h each
 round owes to `SPLIT_EXCESS_S` being pooled rather than its own measurement and
 the two land at ±0.2 s/h, ~57 ppm — an ordinary pair of consumer crystals.
+
+**September fits it twice on one round and agrees with itself.** The logger was
+restarted mid-round, so there are two Alt+V captures on the same laptop against
+the same radio, 15 minutes apart: **+0.233 s/h** over 9 anchors and
+**+0.181 s/h** over 9. Same sign, same order, 0.05 s/h between them — the first
+repeatability measurement the technique has, and it sits inside the ±0.3 s/h the
+two rounds above put the crystals at. Both fits also wanted to move their clip's
+start by about the same amount (−0.68 s and −0.65 s against a µs-precise stamp
+that needs no moving), which puts a figure on the correlation's own bias: it is
+the same for both clips, so it is the method, not the clocks.
+
+The first of those two fits read **−4.894 s/h** until the round's sub-band WAV
+was taken out of the timeline (see "Dual watch" above). A 17.6 s step in the
+middle of the anchor range tilts a least-squares line through it by far more
+than the effect being measured, and nothing in the fit says so — the residual
+outlier rejection cannot see a step that half the points share. Two fits of one
+clock pair disagreeing by 5 s/h is the symptom worth watching for; one fit alone
+has nothing to disagree with.
 
 `compensate_split_excess` (`urhpk/timeline.py`) trims `SPLIT_EXCESS_S` from every
 segment but the last, via `eff_dur`. Applied to the two rounds it leaves a

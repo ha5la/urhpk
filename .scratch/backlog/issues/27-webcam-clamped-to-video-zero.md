@@ -1,6 +1,6 @@
 # 27 — A webcam that started before the audio is pinned to t=0
 
-Status: ready-for-agent
+Status: resolved
 
 `_webcam_start` places a clip with `audio_time_for`, which clamps anything
 earlier than the first WAV segment to `segs[0].audio_t` — i.e. to video t=0.
@@ -50,3 +50,9 @@ or a negative start becomes a negative `-itsoffset`.
 
 A clip whose wall-clock start is before `segs[0].wall` gets a negative start.
 Red against the current code, which returns 0.0.
+
+## Resolved
+
+`_webcam_start` uses `stream_start`, and `render()` takes the webcam input
+through `_stream_input_args` like the cast and scope branches. September's first
+capture is placed at −18.10 s now, not 0.

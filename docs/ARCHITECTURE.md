@@ -345,6 +345,14 @@ unit-testable, and `hud_draw.py` knows nothing about where its numbers came from
   the audio from the timeline describing it. A cut this small is why the
   assembly is hand-written rather than an ffmpeg concat — see FINDINGS.md, which
   also has the three measurements behind the constant.
+- **Only the `…A.wav` series is the recording.** With dual watch on, the sub band
+  records to its own `…B.wav` over the *same* wall-clock time (FINDINGS.md), so it
+  is a parallel stream, not the next segment — and summing both makes the audio
+  longer than the round it spans. September's eighteen seconds of dual watch put
+  17.6 s into the timeline that no wall clock claims, which the cast, scope and
+  webcam then ran ahead of the HUD by for the rest of the video. `scan_segments`
+  takes the A series; `sub_band_wavs` names what it skipped, in the render's own
+  output.
 - **Multiple EDI files merge into one timeline** — a round worked across bands
   writes one EDI per band but is still one physical recording. `merge_edi`
   concatenates and sorts by `dt`. `Qso` carries no band field; band only ever
@@ -531,14 +539,23 @@ cannot show — layout, PiP, waterfall.
     since asciinema stamped its header from that same clock — and each cast takes
     the fit measured over *its own* stretch of the round (`drift_at`), not the
     round's best one. A rate is a line, so a fit only describes the clock where it
-    was measured: September's two sessions were 4.7 s and 5 s/hour apart.
+    was measured.
+  - **the correlation supplies the rate, never the start, for a clip placed
+    exactly.** A µs-precise stamp off this machine's own clock at frame 0 is not
+    improvable by an RMS-envelope correlation in 50 ms windows, and September's
+    fit moved one +4.09 s. `Drift.intercept` is 0 for those, so the cast PiPs —
+    placed from their own exact asciinema headers — stop inheriting a correction
+    for something that was not wrong.
 - **A stream that began before the audio must be *entered partway in*, not clamped
   to t=0.** `stream_start` differs from `audio_time_for` for exactly this case, and
   `_stream_input_args` turns a negative start into an `-ss` seek into that input
-  (ffmpeg has no meaning for a negative `-itsoffset`). This is the **normal** case:
-  `run-recorded-round.sh` starts asciinema before the radio recorder, and
-  the `.scope` recorder starts when the radio connects. Clamping instead showed up
-  as the cast PiP's clock lagging the round by 25 s.
+  (ffmpeg has no meaning for a negative `-itsoffset`). This is the **normal** case
+  for all three: `run-recorded-round.sh` starts asciinema before the radio
+  recorder, the `.scope` recorder starts when the radio connects, and Alt+V is
+  pressed before the recorder is switched on. Clamping instead showed up as the
+  cast PiP's clock lagging the round by 25 s, and — because `_webcam_start` went
+  on using `audio_time_for` after the cast stopped — as September's webcam running
+  18.1 s behind the round it was filming.
 - **Filter-graph string assertions cannot catch how branches combine.** Three real
   bugs got through them. Verify a change by rendering an actual clip and decoding a
   frame back out.

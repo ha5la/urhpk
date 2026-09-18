@@ -1,6 +1,6 @@
 # 28 — Cross-correlation moves a start that is already exact
 
-Status: ready-for-agent
+Status: resolved
 
 `sync_webcams` places an Alt+V capture from the µs-precise UTC stamp in its own
 filename — same machine, same clock as everything else in the round — prints
@@ -57,3 +57,17 @@ laptop that was slewing at the time.
 A clip flagged exact keeps its start through `sync_webcams` and reports the
 fitted rate; a clip not flagged exact still takes the intercept. Red against the
 current code, which moves both.
+
+## Resolved
+
+`sync_webcams` keeps an exact start and takes only the rate; the fit's
+disagreement with it is printed beside the rate. `Drift.intercept` is 0 for an
+exact clip, so the cast PiPs stop inheriting it.
+
+The note above came good. With ticket 26 fixed, September's two captures fit
+**+0.233 s/h** and **+0.181 s/h** — same sign, 0.05 s/h apart, on the same laptop
+and radio fifteen minutes apart, where the first previously read −4.894 s/h. Both
+also wanted to move their own exact start by about the same amount (−0.68 s and
+−0.65 s), which is the correlation's own bias rather than anything about the
+clocks. In FINDINGS.md under the split-excess section, beside July's −0.296 s/h
+and August's +0.272 s/h.

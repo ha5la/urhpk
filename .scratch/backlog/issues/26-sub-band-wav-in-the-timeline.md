@@ -1,6 +1,6 @@
 # 26 — The sub band's WAV is concatenated into the main timeline
 
-Status: ready-for-agent
+Status: resolved
 
 Dual watch was on for about eighteen seconds in the September round. The sub
 band recorded those eighteen seconds to its own file, `scan_segments` picked it
@@ -72,3 +72,10 @@ for a second band and the video has one. Skipping it is the whole fix.
 A directory with two A files and a B file overlapping them: `scan_segments`
 returns the two A files, and the summed duration equals the wall-clock span.
 Red against the current code, which returns three.
+
+## Resolved
+
+`_is_main_band` in `urhpk/timeline.py`: `scan_segments` takes the `A` series,
+`sub_band_wavs` names what it skipped and `contest_video.py` prints it. September
+re-renders with 681 segments and `audio − wall = −3.734 s`, which is the split
+excess and nothing else.
