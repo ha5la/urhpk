@@ -502,10 +502,28 @@ def sync_webcams(
     # was still free-running, so some of the rate was time-of-day drift that NTP
     # now removes -- but not the sample-clock part, which no NTP can reach. The
     # rate printed below re-measures what is actually left on the next long round.
+    #
+    # Only the *rate* is taken from an exact clip's fit. The intercept is not:
+    # an envelope correlation in 50 ms windows cannot better a mus-precise stamp
+    # off this machine's own clock at the capture's frame 0, and when the two
+    # disagree it is the correlation that is wrong. September's fit moved an
+    # exact start +4.09s and reported -4.894s/hour where the same round's second
+    # clip, fifteen minutes later on the same two clocks, fitted +0.181s/hour --
+    # its anchors straddled a discontinuity in the audio timeline and the line
+    # came out tilted. The disagreement between the two numbers is now printed,
+    # which is what would have said so at render time.
     fits: dict[int, tuple[float, float]] = {}
     for i, (path, (start, exact, _)) in enumerate(zip(paths, placed)):
         refined, rate, n = refine_webcam_start(path, segs, start)
-        if n:
+        if n and exact:
+            fits[i] = (start, rate)
+            print(
+                f"  {tag(i)}: audio cross-correlation found a "
+                f"{rate * 3600:+.3f}s/hour clock-drift rate using {n} anchor(s); "
+                f"the start stays exact at {start:.2f}s (the fit wanted "
+                f"{refined - start:+.2f}s)"
+            )
+        elif n:
             fits[i] = (refined, rate)
             print(
                 f"  {tag(i)}: audio cross-correlation refined start by "

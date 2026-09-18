@@ -459,15 +459,16 @@ class TestSyncWebcams:
         # A cast PiP is on the same laptop clock, so it is corrected with one
         # of these -- but only the fit measured over the stretch of round the
         # cast actually covers says anything about the clock there, which is
-        # why each carries the output time it was taken at.
+        # why each carries the output time it was taken at. Both clips here
+        # are exact, so both intercepts are 0 and the rate is all that is left.
         self._fake_refine(
             monkeypatch, {self.CAM1: (-0.5, 0.001, 3), self.CAM2: (+0.25, 0.002, 9)}
         )
         self._fake_durations(monkeypatch, {self.CAM1: 80.8, self.CAM2: 300.0})
         clips, drifts = cv.sync_webcams([self.CAM1, self.CAM2], self._segs(), [], 2)
         assert [(round(d.at, 3), d.intercept, d.rate) for d in drifts] == [
-            (21.997, -0.5, 0.001),
-            (106.770, 0.25, 0.002),
+            (22.497, 0.0, 0.001),
+            (106.520, 0.0, 0.002),
         ]
         assert [c.rate for c in clips] == [0.001, 0.002]  # each keeps its own fit
 
@@ -480,9 +481,35 @@ class TestSyncWebcams:
         )
         self._fake_durations(monkeypatch, {self.CAM1: 300.0, self.CAM2: 20.0})
         clips, drifts = cv.sync_webcams([self.CAM1, self.CAM2], self._segs(), [], 2)
-        assert [(d.intercept, d.rate) for d in drifts] == [(-0.5, 0.002)]
-        assert clips[0].start == 21.997368 and clips[0].rate == 0.002
+        assert [(d.intercept, d.rate) for d in drifts] == [(0.0, 0.002)]
+        assert clips[0].start == 22.497368 and clips[0].rate == 0.002
         assert clips[1].start == 106.519807 and clips[1].rate == 0.002
+
+    def test_an_exact_start_is_not_moved_by_the_correlation(self, monkeypatch):
+        # The filename's stamp is this machine's own clock at the capture's
+        # frame 0; an envelope correlation in 50 ms windows cannot better it,
+        # and when the two disagree it is the correlation that is wrong --
+        # September's fit moved an exact start +4.09 s because its anchors
+        # straddled a discontinuity in the audio timeline. The rate is still
+        # the fit's to give: no timestamp can measure a rate.
+        self._fake_refine(monkeypatch, {self.CAM1: (+4.09, -0.00136, 7)})
+        self._fake_durations(monkeypatch, {self.CAM1: 300.0})
+        clips, drifts = cv.sync_webcams([self.CAM1], self._segs(), [], 2)
+        assert clips[0].start == 22.497368 and clips[0].rate == -0.00136
+        assert [(d.at, d.intercept, d.rate) for d in drifts] == [
+            (22.497368, 0.0, -0.00136)
+        ]
+
+    def test_a_coarse_start_still_takes_the_correction(self, monkeypatch):
+        # A phone clip has only its own whole-second filename convention and
+        # a whole-hour offset guess, which is what the cross-correlation was
+        # written to fix. It keeps the intercept.
+        phone = "VID_20260811_211622.mp4"
+        self._fake_refine(monkeypatch, {phone: (-3.0, 0.001, 5)})
+        self._fake_durations(monkeypatch, {phone: 300.0})
+        clips, drifts = cv.sync_webcams([phone], self._segs(), [], 0)
+        assert clips[0].start == 19.0
+        assert [(d.intercept, d.rate) for d in drifts] == [(-3.0, 0.001)]
 
     def test_a_manual_offset_shifts_every_clip_and_skips_correlation(self, monkeypatch):
         # --webcam-offset is the escape hatch for when correlation cannot work,
