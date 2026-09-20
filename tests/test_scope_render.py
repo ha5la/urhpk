@@ -169,12 +169,39 @@ class TestRenderScopeBackground:
             scope_end=50.0,
         )
         fchain = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
-        assert "[1:v]scale=1920:1080" in fchain
+        assert fchain.split("[1:v]")[1].startswith("setpts=")
+        assert "scale=1920:1080" in fchain.split("[1:v]")[1]
         assert "enable='between(t,5.000,50.000)'" in fchain
         # The scope overlay replaces the audio-derived background, so it is
         # the layer the PiPs and HUD sit on -- it must not be composited on
         # top of them.
         assert "[specbg][scopebg]overlay=" in fchain
+
+    def test_scope_branch_stretches_its_timeline_by_the_fitted_rate(
+        self, monkeypatch, tmp_path
+    ):
+        # The sweeps are stamped on the laptop's clock and drawn against audio
+        # recorded on the radio's, so the scope drifts across a round exactly
+        # as the cast PiP does -- 0.22 s/h on the September round, measured by
+        # refine_scope_start against the operator's own CW.
+        captured = {}
+        monkeypatch.setattr(
+            cv.subprocess, "run", lambda cmd, check=True: captured.update(cmd=cmd)
+        )
+        cv.render(
+            str(tmp_path / "a.wav"),
+            str(tmp_path / "out.mp4"),
+            1920,
+            1080,
+            scope=str(tmp_path / "scope.mp4"),
+            scope_start=5.0,
+            scope_end=50.0,
+            scope_rate=0.0005,
+        )
+        fchain = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
+        chain = fchain.split("[1:v]")[1].split("[scopebg]")[0]
+        assert chain.startswith("setpts=PTS/0.9995")
+        assert chain.index("setpts=") < chain.index("fps=")
 
     def test_scope_shifts_cast_and_webcam_input_indices(self, monkeypatch, tmp_path):
         captured = {}
@@ -197,7 +224,8 @@ class TestRenderScopeBackground:
         fchain = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
         # scope=input 1, cast=input 2, webcam=input 3 -- confirms indices
         # shift correctly to make room for scope ahead of the existing ones.
-        assert "[1:v]scale=1920:1080" in fchain
+        assert fchain.split("[1:v]")[1].startswith("setpts=")
+        assert "scale=1920:1080" in fchain.split("[1:v]")[1]
         assert "[2:v]setpts=" in fchain
         assert "[3:v]setpts=" in fchain
 

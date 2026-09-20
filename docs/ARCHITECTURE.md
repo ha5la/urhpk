@@ -526,8 +526,15 @@ cannot show — layout, PiP, waterfall.
   round cannot end the shared filtergraph early and silently truncate the main
   video and audio. This is a real risk class with multi-input filtergraphs.
 - **Sync differs per stream, and the difference is the point:**
-  - cast and scope carry real absolute timestamps (asciinema's Unix epoch header;
-    `time.time()` per sweep), so a plain `-itsoffset` places them exactly.
+  - the cast carries a real absolute timestamp (asciinema's Unix epoch header), so
+    a plain `-itsoffset` places it exactly.
+  - the scope's `time.time()` per sweep is real and absolute too, but it is an
+    *arrival* time: the radio swept earlier and the LAN took its share, so the
+    waterfall drew 0.83 s behind the audio on the September round.
+    `refine_scope_start` matches the trace at a segment's own QRG against that
+    segment's audio envelope — a keyed signal makes the same shape in both — and
+    fits the lag and the clock rate together, the same answer in the same shape
+    `refine_webcam_start` returns.
   - the HUD needs **no offset at all** — it is generated *from* the output timeline
     rather than captured against an independent clock, so its t=0 already is the
     output's.

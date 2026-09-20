@@ -73,6 +73,7 @@ from urhpk.rig_state import (
     match_qso_times,
 )
 from urhpk.scope_render import render_scope_video
+from urhpk.scope_sync import refine_scope_start
 from urhpk.timeline import (
     GAP_KEEP_S,
     SPLIT_EXCESS_S,
@@ -187,6 +188,7 @@ def render(
     scope: str | None = None,
     scope_start: float = 0.0,
     scope_end: float = 0.0,
+    scope_rate: float = 0.0,
     hud: str = "",
     hud_face: tuple[int, int, int, int] = (0, 0, 0, 0),
 ) -> None:
@@ -222,11 +224,13 @@ def render(
     )
     bg = "specbg"
     if scope:
-        # scope is our own render_scope_video output -- like the cast branch
-        # (and unlike webcam), its own timestamps are real/absolute
-        # (icom_net.py's write_scope_record uses real time.time() values),
-        # so a plain -itsoffset positions it exactly, no drift-rate
-        # correction needed. Drawn *under* the subtitles pass (unlike
+        # scope is our own render_scope_video output. Its timestamps are real
+        # and absolute (icom_net.py's write_scope_record uses time.time()) but
+        # they are *arrival* times on this laptop's clock, for sweeps the radio
+        # took earlier and against audio the radio's own sample clock stamped
+        # -- so it needs both halves of what the webcam needs: an offset for
+        # the lag and setpts for the rate, both from refine_scope_start.
+        # Drawn *under* the subtitles pass (unlike
         # cast/webcam, which sit on top of it as PiPs) so it acts as a real
         # replacement background rather than an inset -- the audio-derived
         # showspectrum layer stays underneath as a fallback for any stretch
@@ -240,7 +244,8 @@ def render(
         # same class of problem.
         scope_idx = add_input(_stream_input_args(scope_start, scope))
         fchain += (
-            f";[{scope_idx}:v]scale={W}:{H},fps={RENDER_FPS},format=yuv420p,"
+            f";[{scope_idx}:v]setpts=PTS/{1 - scope_rate:.8f},"
+            f"scale={W}:{H},fps={RENDER_FPS},format=yuv420p,"
             f"tpad=stop_mode=clone:stop_duration=99999[scopebg]"
             f";[{bg}][scopebg]overlay=x=0:y=0:"
             f"enable='between(t,{max(scope_start, 0.0):.3f},{scope_end:.3f})'[bg2]"
@@ -907,6 +912,24 @@ def main() -> None:
     known_wav = sum(1 for s in segs if s.ptt is not None)
     print(f"  WAV metadata: {known_wav}/{len(segs)} segments have IC-9700 rig tags")
 
+    # Needs the rig tags above: the anchors are RX segments in a keyed mode,
+    # at their own QRG.
+    scope_rate = 0.0
+    if scope_records and scope_start is not None:
+        placed = scope_start
+        scope_start, scope_rate, n = refine_scope_start(scope_records, segs, placed)
+        if n:
+            print(
+                f"  scope: sweep arrival is {placed - scope_start:.2f}s behind the "
+                f"audio, with a {scope_rate * 3600:+.3f}s/hour clock-drift rate "
+                f"from {n} anchor(s) -> starts at {scope_start:.2f}s"
+            )
+        else:
+            print(
+                "  scope: no confident match against the audio (no RX segments "
+                "long enough in a keyed mode) -- placed by arrival timestamp only"
+            )
+
     webcams: list[WebcamClip] = []
     if args.webcam:
         webcams, drifts = sync_webcams(
@@ -1132,6 +1155,7 @@ def main() -> None:
         scope=scope_video,
         scope_start=scope_start or 0.0,
         scope_end=scope_end or 0.0,
+        scope_rate=scope_rate,
         hud=hud_video,
         hud_face=hud_art_.slots["face"],
     )

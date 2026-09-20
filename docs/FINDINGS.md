@@ -826,6 +826,32 @@ work instead is a deliberate calibration: one short Alt+V capture of a clap,
 where the frame the hands meet and the transient in the audio are both
 unambiguous, measuring this camera's `Lv - La` once and for all.
 
+### The scope draws what arrived, not what was swept
+
+Reported as a waterfall running ~800 ms behind the audio. Measured by taking the
+scope's amplitude in the bins around each RX segment's own QRG and correlating
+it against that segment's audio envelope — a keyed CW signal makes the same
+shape in both, and correlates at 0.79–0.91:
+
+| output time | scope late by |
+|---|---|
+| 745 s | +0.80 s |
+| 1322 s | +0.70 s |
+| 3518 s | +0.65 s |
+| 4761 s | +0.55 s |
+
+Two separate errors in one number. The **constant** is the path between the
+radio's own sweep and `time.time()` on the laptop that receives it — CI-V over
+the LAN, stamped on arrival, so the waterfall is always that far behind. The
+**slope**, −0.22 s/h, is the same laptop-vs-radio clock rate the webcam fits,
+and the scope was the only stream not corrected for it (the cast borrows the
+webcam's; the scope borrowed nothing).
+
+`refine_scope_start` fits both, and its rate is the third independent
+measurement of that clock pair on one round: **+0.201 s/h** from 17 scope
+anchors, against **+0.194** and **+0.214 s/h** from the two webcam captures'
+audio. Three streams, two different physical signals, 0.02 s/h apart.
+
 ### Where the face actually is
 
 The PiP took a centred crop, which assumes the operator sits in the middle of a
