@@ -775,10 +775,15 @@ Two consequences beyond applying the intercept:
   …700.508370`) and both streams are then written starting at 0, so the
   inter-input offset is dropped. Aligning on the clip's audio therefore still
   leaves the *video* late — the residual after this fix, and the skew audible in
-  the source clip itself. `WEBCAM_AV_SKEW_S` applies it as a **floor**: the two
-  stamps are arrival times, each already carrying its own path's latency, and
-  the camera's is the slower path, so the true skew is this plus however much
-  slower it is. Only the difference of the two latencies is unmeasured; the
+  the source clip itself. It is **not a camera constant** — it is a start-up
+  race between the two inputs, so every capture has its own and every capture
+  logs it: `webcam_log.av_skew` reads the pair from the clip's own
+  `*-webcam.log` (September's two: 80.9 ms and 82.6 ms, which is how close a
+  race this particular pair of devices is), and `WEBCAM_AV_SKEW_S` is only the
+  fallback for a clip whose log didn't survive beside it. Applied either way as
+  a **floor**: the two stamps are arrival times, each already carrying its own
+  path's latency, and the camera's is the slower path, so the true skew is this
+  plus however much slower it is. Only that difference is unmeasured, and the
   correction cannot overshoot.
 
 **The envelope's own 50 ms grid was a quarter of the error it was measuring.**

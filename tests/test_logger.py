@@ -1247,6 +1247,34 @@ class TestWebcamPreciseStart:
         assert webcam_log.frame_zero_utc(str(log)) is None
 
 
+class TestWebcamAvSkew:
+    """How far apart the two inputs were when each handed over its first
+    sample. ffmpeg writes both streams from 0, so this much of the capture's
+    own A/V alignment is dropped on the way into the file -- and it is a
+    start-up race, different on every capture, not a property of the camera."""
+
+    def test_reads_the_gap_between_the_two_inputs(self, tmp_path):
+        log = tmp_path / "x.log"
+        log.write_text(
+            "Input #0, video4linux2,v4l2, from '/dev/video0':\n"
+            "  Duration: N/A, start: 1788796700.427445, bitrate: 147456 kb/s\n"
+            "Input #1, pulse, from 'default':\n"
+            "  Duration: N/A, start: 1788796700.508370, bitrate: 1536 kb/s\n"
+        )
+        assert webcam_log.av_skew(str(log)) == pytest.approx(0.080925)
+
+    def test_none_when_only_one_input_carries_an_epoch(self, tmp_path):
+        log = tmp_path / "x.log"
+        log.write_text(
+            "Input #0, pulse, from 'default':\n"
+            "  Duration: N/A, start: 1788796700.508370, bitrate: 1536 kb/s\n"
+        )
+        assert webcam_log.av_skew(str(log)) is None
+
+    def test_none_for_missing_file(self, tmp_path):
+        assert webcam_log.av_skew(str(tmp_path / "nope.log")) is None
+
+
 class TestWebcamPreciseName:
     def test_inserts_timestamp_before_extension(self):
         start = datetime(2026, 7, 22, 12, 11, 1, 868307)

@@ -38,7 +38,7 @@ import wave
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from urhpk import wiring
+from urhpk import webcam_log, wiring
 from urhpk.cast_render import (
     CastClip,
     cast_start_fraction,
@@ -158,11 +158,11 @@ STREAM_TRIM_MARGIN_S = 5.0  # slack when trimming a side stream to the cut,
 MAX_CAPTURE_LATENCY_S = 1.5  # the most the webcam's own frame-0 stamp may be
 # moved by a correlation fit (sync_webcams); measured at 0.46-0.66s on this
 # camera, and a fit asking for more is fitting something else
-WEBCAM_AV_SKEW_S = 0.081  # the capture's own audio leads its own video by this
-# much: the two inputs are stamped 81 ms apart in the *-webcam.log and both
-# streams are then written from 0, so the offset between them is dropped. A
-# floor, not the whole skew -- the camera's pipeline is the slower of the two
-# (FINDINGS.md), so the picture is at least this late once the audio is aligned
+WEBCAM_AV_SKEW_S = 0.081  # fallback for a capture whose ffmpeg log is gone:
+# each one measures its own (webcam_log.av_skew), a start-up race between the
+# camera and PulseAudio that came out 80.9 and 82.6 ms on September's two. A
+# floor either way -- both stamps are arrival times and the camera's path is
+# the slower, so the picture is at least this late once the audio is aligned
 
 
 def _stream_input_args(start: float, path: str) -> list[str]:
@@ -443,6 +443,14 @@ def _webcam_start(
     return start, False, "coarse, whole-hour only"
 
 
+def _webcam_av_skew(path: str) -> float:
+    """How far this capture's own audio leads its own video, from the ffmpeg
+    log beside it -- `WEBCAM_AV_SKEW_S` for a clip whose log didn't survive,
+    which is this camera's measured value and within 2 ms of both of
+    September's two captures."""
+    return webcam_log.av_skew(f"{os.path.splitext(path)[0]}.log") or WEBCAM_AV_SKEW_S
+
+
 def sync_webcams(
     paths: list[str],
     segs: list[Segment],
@@ -544,11 +552,12 @@ def sync_webcams(
             )
         elif n:
             # The fit aligns the clip's *audio*; the picture at any one file
-            # time is WEBCAM_AV_SKEW_S older than the sound beside it, so the
-            # placement owes that too. Only meaningful behind an applied fit:
-            # it is what the fit leaves over, not a correction of its own.
-            # An independently recorded clip has its own, unknown skew.
-            skew = WEBCAM_AV_SKEW_S if exact else 0.0
+            # time is older than the sound beside it by the gap between the two
+            # capture inputs' first samples, so the placement owes that too.
+            # Only meaningful behind an applied fit: it is what the fit leaves
+            # over, not a correction of its own. An independently recorded clip
+            # has its own, unknown skew, and no log of it here.
+            skew = _webcam_av_skew(path) if exact else 0.0
             refined -= skew
             fits[i] = (refined, rate)
             print(

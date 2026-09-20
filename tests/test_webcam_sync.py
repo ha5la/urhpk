@@ -3,6 +3,7 @@
 from datetime import datetime
 
 import numpy as np
+import pytest
 
 import contest_video as cv
 from urhpk import video_format, webcam_sync
@@ -516,6 +517,25 @@ class TestSyncWebcams:
         assert [(d.at, d.intercept, d.rate) for d in drifts] == [
             (21.837368 - cv.WEBCAM_AV_SKEW_S, 0.0, -0.00136)
         ]
+
+    def test_the_skew_is_read_from_the_clips_own_capture_log(
+        self, monkeypatch, tmp_path
+    ):
+        # It is a start-up race between two inputs, not a camera constant:
+        # this capture's log says 0.12 s, so 0.12 s is what its picture owes,
+        # whatever the last capture measured.
+        clip = tmp_path / self.CAM1
+        clip.write_bytes(b"")
+        (tmp_path / f"{clip.stem}.log").write_text(
+            "Input #0, video4linux2,v4l2, from '/dev/video0':\n"
+            "  Duration: N/A, start: 1788796700.400000, bitrate: 147456 kb/s\n"
+            "Input #1, pulse, from 'default':\n"
+            "  Duration: N/A, start: 1788796700.520000, bitrate: 1536 kb/s\n"
+        )
+        self._fake_refine(monkeypatch, {str(clip): (-0.66, 0.001, 21)})
+        self._fake_durations(monkeypatch, {str(clip): 300.0})
+        clips, _ = cv.sync_webcams([str(clip)], self._segs(), [], 2)
+        assert clips[0].start == pytest.approx(21.837368 - 0.12)
 
     def test_the_clips_own_av_skew_only_follows_an_applied_fit(self, monkeypatch):
         # The skew is what is left after the correlation has aligned the

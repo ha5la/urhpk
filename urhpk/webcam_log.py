@@ -38,6 +38,22 @@ def frame_zero_utc(log_path: str) -> datetime | None:
     return datetime.fromtimestamp(epoch, tz=timezone.utc).replace(tzinfo=None)
 
 
+def av_skew(log_path: str) -> float | None:
+    """Seconds by which the capture's own audio leads its own video, or None
+    if the log doesn't carry both inputs' epochs.
+
+    Each input reports the wallclock at which it handed ffmpeg its first
+    sample, and the two differ -- opening the PulseAudio stream takes longer
+    than opening the camera. ffmpeg then writes both output streams from 0,
+    which drops that difference, so the file's audio sits this much ahead of
+    its picture. It is a start-up race rather than a property of the camera:
+    measure it per capture, here, and don't assume the last one's."""
+    video_epoch, audio_epoch = _input_epochs(log_path)
+    if video_epoch is None or audio_epoch is None:
+        return None
+    return audio_epoch - video_epoch
+
+
 def _input_epochs(log_path: str) -> tuple[float | None, float | None]:
     """The v4l2 and pulse inputs' own `start:` epochs, either None if the log
     doesn't carry it as an absolute time."""

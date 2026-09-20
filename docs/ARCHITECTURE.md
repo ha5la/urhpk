@@ -1148,8 +1148,11 @@ start/stop, off by default):
   it into the container afterwards works but needs a second copy of a multi-GB file
   on disk exactly when space is tightest (see FINDINGS.md). A rename is a
   directory-entry update, independent of size. `contest_video.py` reads it with
-  `parse_webcam_precise_filename` and has no `*-webcam.log` path at all: the log
-  is the logger's own input to the rename, not a sidecar the video depends on.
+  `parse_webcam_precise_filename`. It reads the `*-webcam.log` beside the clip
+  for one thing only — the gap between the two capture inputs' first samples
+  (`webcam_log.av_skew`, the clip's own A/V skew) — and falls back to
+  `WEBCAM_AV_SKEW_S` when it isn't there: a sidecar the video uses, never one it
+  depends on.
 - **The rename happens while the capture runs**, on the toolbar's 10 Hz tick, as
   soon as the log carries frame 0 — not at stop, so a power cut or a `kill -9`
   (where nothing gets to run at the end) still leaves the timestamp on the file.
