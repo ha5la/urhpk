@@ -191,19 +191,39 @@ def _find_offset_correction(
     its match in webcam_audio (0.0 if nothing usable). `confidence` is the
     peak's normalized correlation (roughly 0..1; higher is more trustworthy,
     see refine_webcam_start's min_confidence)."""
-    r_env = _rms_envelope(radio_audio, radio_sr, env_win_s)
-    w_env = _rms_envelope(webcam_audio, webcam_sr, env_win_s)
-    if len(r_env) < 3 or len(w_env) < len(r_env):
+    return envelope_offset(
+        _rms_envelope(radio_audio, radio_sr, env_win_s),
+        _rms_envelope(webcam_audio, webcam_sr, env_win_s),
+        padding_s,
+        env_win_s,
+    )
+
+
+def envelope_offset(
+    ref_env: np.ndarray,
+    search_env: np.ndarray,
+    padding_s: float,
+    env_win_s: float,
+) -> tuple[float, float]:
+    """Where `ref_env` sits inside `search_env`, as a correction in seconds to
+    the placement that put it `padding_s` in, plus the peak's normalized
+    correlation as a confidence.
+
+    Both are envelopes on the same `env_win_s` grid -- amplitude against time,
+    nothing audio-specific about it: scope_sync matches a signal's amplitude on
+    the radio's own spectrum display against the audio of that same signal this
+    way. (0.0, 0.0) when there is nothing to match."""
+    if len(ref_env) < 3 or len(search_env) < len(ref_env):
         return 0.0, 0.0
-    r_env = r_env - r_env.mean()
-    w_env = w_env - w_env.mean()
-    r_norm = float(np.linalg.norm(r_env))
-    if r_norm == 0:
+    ref_env = ref_env - ref_env.mean()
+    search_env = search_env - search_env.mean()
+    ref_norm = float(np.linalg.norm(ref_env))
+    if ref_norm == 0:
         return 0.0, 0.0
-    corr = np.correlate(w_env, r_env, mode="valid")
+    corr = np.correlate(search_env, ref_env, mode="valid")
     best_idx = int(np.argmax(corr))
-    w_local_norm = float(np.linalg.norm(w_env[best_idx : best_idx + len(r_env)]))
-    confidence = corr[best_idx] / (r_norm * w_local_norm) if w_local_norm > 0 else 0.0
+    local = float(np.linalg.norm(search_env[best_idx : best_idx + len(ref_env)]))
+    confidence = corr[best_idx] / (ref_norm * local) if local > 0 else 0.0
     correction = padding_s - (best_idx + _peak_offset(corr, best_idx)) * env_win_s
     return correction, float(confidence)
 
