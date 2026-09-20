@@ -458,6 +458,7 @@ def sync_webcams(
     offset_h: int,
     input_log: str | None = None,
     manual_offset: float | None = None,
+    av_skew: float | None = None,
 ) -> tuple[list[WebcamClip], list[Drift]]:
     """Place every capture of the round on the output timeline, in
     chronological order, and return every clock-drift fit that came out of it,
@@ -557,7 +558,11 @@ def sync_webcams(
             # Only meaningful behind an applied fit: it is what the fit leaves
             # over, not a correction of its own. An independently recorded clip
             # has its own, unknown skew, and no log of it here.
-            skew = _webcam_av_skew(path) if exact else 0.0
+            skew = (
+                (_webcam_av_skew(path) if av_skew is None else av_skew)
+                if exact
+                else 0.0
+            )
             refined -= skew
             fits[i] = (refined, rate)
             print(
@@ -695,6 +700,14 @@ def main() -> None:
         "the coarse whole-hour webcam sync -- bypasses the automatic audio "
         "cross-correlation entirely; use this if it finds no confident "
         "match (e.g. the webcam clip has no audio track), or to override it",
+    )
+    ap.add_argument(
+        "--webcam-av-skew",
+        type=float,
+        help="seconds this round's capture ran its picture behind its own "
+        "audio, measured (clap in front of the camera, see RECORDING.md) "
+        "rather than read off the capture log, which only carries the part "
+        "of it the two inputs' start stamps account for",
     )
     ap.add_argument(
         "--input-log",
@@ -903,6 +916,7 @@ def main() -> None:
             offset_h,
             input_log=args.input_log,
             manual_offset=args.webcam_offset,
+            av_skew=args.webcam_av_skew,
         )
         # The webcam capture and the cast recording (asciinema, also on this
         # machine) are timestamped by the *same* laptop system clock -- so the

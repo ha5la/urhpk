@@ -793,6 +793,26 @@ of 0.05 s — ±25 ms on a number that is itself a few hundred ms, and each anch
 carried it into the fit. `_peak_offset` fits a parabola through the peak and its
 two neighbours, which the anchor table above is fine-grained enough to need.
 
+**The clap measurement, and what it says the skew is not.** A 13 s Alt+V capture
+of the operator clapping, on an otherwise idle machine, measured against its own
+audio: the transient is sample-exact and the frame the hands meet is unambiguous
+to ±1 frame at 16.6 fps.
+
+| clap | audio onset | hands meet | picture late by |
+|---|---|---|---|
+| 1 | 8.759 s | between 8.867 and 8.933 | +0.14 s |
+| 2 | 9.655 s | between 9.766 and 9.833 | +0.145 s |
+
+That capture's own stamp gap is 83.8 ms, so 60 ms of the 145 is the camera's
+pipeline running behind PulseAudio's — **and the September round's clips needed
+~480 ms by eye against a stamp gap of 80.9 and 82.6 ms**. Three captures on one
+machine and one camera whose stamp gaps agree to 3 ms while the real skew ranges
+over 145–480 ms: what varies is how far behind the v4l2 capture runs, which is a
+scheduling and buffering question and therefore a *load* question — an idle
+laptop against one running the logger, the radio session, the scope recorder and
+irssi. So there is no constant to find, in the log or anywhere else, and
+`--webcam-av-skew` exists to carry the number a round measured for itself.
+
 **Failed: measuring the skew from the clip's own content.** Mouth motion against
 the clip's own audio envelope, 114 six-second windows over the operator's TX
 segments, frame-to-frame absolute difference in a 300×240 box on the detected

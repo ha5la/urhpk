@@ -537,6 +537,16 @@ class TestSyncWebcams:
         clips, _ = cv.sync_webcams([str(clip)], self._segs(), [], 2)
         assert clips[0].start == pytest.approx(21.837368 - 0.12)
 
+    def test_a_measured_skew_beats_what_the_log_can_tell(self, monkeypatch):
+        # The log's two stamps are a floor: the September round's captures
+        # measured 0.48 s against the 0.081 s their headers account for, the
+        # rest being how far behind the camera's pipeline ran under a round's
+        # load. A round that has measured its own says so.
+        self._fake_refine(monkeypatch, {self.CAM1: (-0.66, 0.001, 21)})
+        self._fake_durations(monkeypatch, {self.CAM1: 300.0})
+        clips, _ = cv.sync_webcams([self.CAM1], self._segs(), [], 2, av_skew=0.48)
+        assert clips[0].start == pytest.approx(21.837368 - 0.48)
+
     def test_the_clips_own_av_skew_only_follows_an_applied_fit(self, monkeypatch):
         # The skew is what is left after the correlation has aligned the
         # clip's *audio*: the picture at any file time is that much older.

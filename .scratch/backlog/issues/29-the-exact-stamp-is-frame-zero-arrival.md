@@ -54,3 +54,13 @@ their filename stamps; both casts still take intercept +0.00 s.
 What is left, unfixed: the clip's own audio leads its own video by ~81 ms (the
 capture log's two input headers are 0.081 s apart and both streams are written
 starting at 0), and the correlation aligns the audio. See FINDINGS.md.
+
+## Comments
+
+The 81 ms the log accounts for is not the whole skew, and the skew is not a
+constant. A clap capture on an idle machine measures 145 ms against an 83.8 ms
+stamp gap; the September round's clips needed ~480 ms by eye against 80.9 and
+82.6 ms. The stamp gaps agree to 3 ms across all three, so what varies is how
+far behind the v4l2 capture runs under load. `--webcam-av-skew` carries a
+round's own measured value; the log-derived number stays as the floor for a
+round that never measured one.

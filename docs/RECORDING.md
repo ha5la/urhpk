@@ -453,6 +453,16 @@ Clock drift is the round's, not the clip's — one laptop clock against the
 radio's — so it is fitted from the longest clip and the others use that rate,
 each keeping its own exact start. `--webcam-offset` applies to every clip.
 
+**Clap at the start of the capture.** The correlation lines up the clip's
+*audio*; its picture runs behind its own audio by however far the camera's
+pipeline is behind PulseAudio's, which is not a constant — 145 ms on an idle
+machine, ~480 ms on the September round, against the 81–84 ms the capture log's
+two input stamps account for in both. One clap in front of the camera, right
+after Alt+V, measures it: find the audio transient (sample-exact), find the
+frame the hands meet (±1 frame), and the difference is the number for
+`--webcam-av-skew`. Without it the placement uses the log's stamp gap, which is
+only a floor, and the PiP runs late by the rest.
+
 **Framing is automatic.** Each clip is scanned for the operator's face and
 cropped onto it rather than onto the middle of the frame, which matters because
 Alt+V records with no preview to sit straight in front of: on a real round the
