@@ -567,9 +567,9 @@ the same radio, 15 minutes apart: **+0.233 s/h** over 9 anchors and
 **+0.181 s/h** over 9. Same sign, same order, 0.05 s/h between them — the first
 repeatability measurement the technique has, and it sits inside the ±0.3 s/h the
 two rounds above put the crystals at. Both fits also wanted to move their clip's
-start by about the same amount (−0.68 s and −0.65 s against a µs-precise stamp
-that needs no moving), which puts a figure on the correlation's own bias: it is
-the same for both clips, so it is the method, not the clocks.
+start by about the same amount (−0.68 s and −0.65 s), which is the same camera's
+capture latency in both — see "The exact stamp is frame 0's arrival" below, where
+the anchors behind those two numbers are broken out.
 
 The first of those two fits read **−4.894 s/h** until the round's sub-band WAV
 was taken out of the timeline (see "Dual watch" above). A 17.6 s step in the
@@ -740,6 +740,42 @@ capture.** It works (tested on a real ~2 h/3 GB file: a 15 s stream-copy remux) 
 needs a full second copy of the file on disk at exactly the point in a round when
 free space is tightest. The rename that replaced it took 0.006 s on that same file —
 a directory-entry update, independent of size.
+
+### The exact stamp is frame 0's arrival, not frame 0
+
+Reported as a PiP a second behind, worse at some points of the round than others,
+on a September round rendered with the exact filename start and the fit's rate
+only. Measured by re-running the correlation anchor by anchor against the
+round's own audio, at 40-anchor sampling:
+
+| clip | confident anchors | correction | residual std |
+|---|---|---|---|
+| 1 (4413 s) | 21 of 25 | −0.70 s → −0.40 s | 0.036 s |
+| 2 (3973 s) | 18 of 19 | −0.40 s → −0.30 s | 0.042 s |
+
+Every confident anchor of both clips agrees on the sign, at a residual std
+comparable to the 50 ms correlation window itself, and the two clips were
+recorded 75 minutes apart. That is a systematic offset, not a bad fit: the
+stamp `-use_wallclock_as_timestamps` writes is taken when ffmpeg *receives*
+frame 0, with the exposure, the USB transfer and the driver's buffers between
+the scene and it. The clip is therefore placed that much late, and the
+correlation — which matches the room against the radio's own recording of it —
+is the only thing in the pipeline that can see it.
+
+Two consequences beyond applying the intercept:
+
+- **The +4.09 s fit that made the intercept untrusted had a different cause.**
+  Its anchors straddled a 17.6 s discontinuity in the audio timeline and the
+  least-squares line came out tilted. With that timeline bug fixed, the same
+  round's two clips fit to within 0.2 s of each other. Sign and magnitude
+  (`MAX_CAPTURE_LATENCY_S`) separate the two cases: a camera cannot deliver a
+  frame before it was stamped.
+- **The clip's own audio leads its own video by ~81 ms.** The capture log's two
+  input headers are stamped 0.081 s apart (`v4l2 …700.427445`, `pulse
+  …700.508370`) and both streams are then written starting at 0, so the
+  inter-input offset is dropped. Aligning on the clip's audio therefore still
+  leaves the *video* that much late — the residual after this fix, and the
+  audible A/V skew in the source clip itself.
 
 ### Where the face actually is
 

@@ -71,3 +71,10 @@ also wanted to move their own exact start by about the same amount (−0.68 s an
 −0.65 s), which is the correlation's own bias rather than anything about the
 clocks. In FINDINGS.md under the split-excess section, beside July's −0.296 s/h
 and August's +0.272 s/h.
+
+## Comments
+
+Superseded in part by issue 29: the shared −0.68 s / −0.65 s is not the
+correlation's bias but the camera's capture latency, and an exact start takes
+the intercept again — bounded, and signed. What stands from this ticket is the
+cast PiPs not inheriting it: `Drift.intercept` is still 0 for an exact clip.

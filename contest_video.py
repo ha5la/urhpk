@@ -155,6 +155,9 @@ CAST_PIP_ALPHA = 0.85  # slightly transparent so the waterfall shows
 # faintly through the terminal PiP; 1.0 = opaque
 STREAM_TRIM_MARGIN_S = 5.0  # slack when trimming a side stream to the cut,
 # so tpad's last-frame cloning never shows at the end of a preview
+MAX_CAPTURE_LATENCY_S = 1.5  # the most the webcam's own frame-0 stamp may be
+# moved by a correlation fit (sync_webcams); measured at 0.46-0.66s on this
+# camera, and a fit asking for more is fitting something else
 
 
 def _stream_input_args(start: float, path: str) -> list[str]:
@@ -469,7 +472,7 @@ def sync_webcams(
     ]
     for i, (start, exact, src) in enumerate(placed):
         detail = (
-            f"exact -- {src}, same-machine clock, no cross-correlation needed"
+            f"exact -- {src}, same-machine clock, capture latency still to come"
             if exact
             else f"{src} -- see refine_webcam_start below"
         )
@@ -503,25 +506,36 @@ def sync_webcams(
     # now removes -- but not the sample-clock part, which no NTP can reach. The
     # rate printed below re-measures what is actually left on the next long round.
     #
-    # Only the *rate* is taken from an exact clip's fit. The intercept is not:
-    # an envelope correlation in 50 ms windows cannot better a mus-precise stamp
-    # off this machine's own clock at the capture's frame 0, and when the two
-    # disagree it is the correlation that is wrong. September's fit moved an
-    # exact start +4.09s and reported -4.894s/hour where the same round's second
-    # clip, fifteen minutes later on the same two clocks, fitted +0.181s/hour --
-    # its anchors straddled a discontinuity in the audio timeline and the line
-    # came out tilted. The disagreement between the two numbers is now printed,
-    # which is what would have said so at render time.
+    # An exact start is precise to the microsecond and still late: the stamp is
+    # frame 0's *arrival*, taken when ffmpeg was handed the frame, with the
+    # exposure, the USB transfer and the driver's buffers all sitting between
+    # the scene and it. The correlation is what measures that latency -- it
+    # matches what the room sounded like against the radio's own recording of
+    # the same instant -- so an exact start takes the intercept too.
+    #
+    # The latency runs one way and only so far, which is the guard a fit must
+    # pass before it may move an exact start: a positive correction claims the
+    # camera delivered frame 0 before it was stamped, and one past
+    # MAX_CAPTURE_LATENCY_S claims a pipeline no webcam has. September's first
+    # clip wanted +4.09s and reported -4.894s/hour where the same round's
+    # second clip, fifteen minutes later on the same two clocks, fitted
+    # +0.181s/hour -- its anchors straddled a discontinuity in the audio
+    # timeline and the line came out tilted. The disagreement between the two
+    # rates is printed either way.
+    #
+    # The cast PiPs share this clip's clock but not its camera, so the Drift
+    # they borrow keeps an intercept of 0 (see below): an asciinema header
+    # timestamp is written by the same laptop with nothing in front of it.
     fits: dict[int, tuple[float, float]] = {}
     for i, (path, (start, exact, _)) in enumerate(zip(paths, placed)):
         refined, rate, n = refine_webcam_start(path, segs, start)
-        if n and exact:
+        if n and exact and not -MAX_CAPTURE_LATENCY_S <= refined - start <= 0:
             fits[i] = (start, rate)
             print(
                 f"  {tag(i)}: audio cross-correlation found a "
                 f"{rate * 3600:+.3f}s/hour clock-drift rate using {n} anchor(s); "
-                f"the start stays exact at {start:.2f}s (the fit wanted "
-                f"{refined - start:+.2f}s)"
+                f"the start stays exact at {start:.2f}s -- the fit wanted "
+                f"{refined - start:+.2f}s, which no capture latency explains"
             )
         elif n:
             fits[i] = (refined, rate)
@@ -553,7 +567,7 @@ def sync_webcams(
         for i, path in enumerate(paths)
     ]
     drifts = [
-        Drift(refined, refined - placed[i][0], rate)
+        Drift(refined, 0.0 if placed[i][1] else refined - placed[i][0], rate)
         for i, (refined, rate) in sorted(fits.items())
     ]
     return sorted(clips, key=lambda c: c.start), drifts

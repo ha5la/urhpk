@@ -540,12 +540,14 @@ cannot show — layout, PiP, waterfall.
     the fit measured over *its own* stretch of the round (`drift_at`), not the
     round's best one. A rate is a line, so a fit only describes the clock where it
     was measured.
-  - **the correlation supplies the rate, never the start, for a clip placed
-    exactly.** A µs-precise stamp off this machine's own clock at frame 0 is not
-    improvable by an RMS-envelope correlation in 50 ms windows, and September's
-    fit moved one +4.09 s. `Drift.intercept` is 0 for those, so the cast PiPs —
-    placed from their own exact asciinema headers — stop inheriting a correction
-    for something that was not wrong.
+  - **an exact start is precise and late, and the correlation measures by how
+    much.** The stamp is frame 0's *arrival* — exposure, USB transfer and driver
+    buffers all sit between the scene and it — so an exact clip takes the fit's
+    intercept too, guarded by `MAX_CAPTURE_LATENCY_S` and by sign: latency
+    cannot hand over a frame before it was stamped, and September's tilted fit
+    asked for +4.09 s. `Drift.intercept` stays 0 for an exact clip — the cast
+    PiPs share the laptop's clock but not its camera, and must not inherit that
+    camera's latency.
 - **A stream that began before the audio must be *entered partway in*, not clamped
   to t=0.** `stream_start` differs from `audio_time_for` for exactly this case, and
   `_stream_input_args` turns a negative start into an `-ss` seek into that input

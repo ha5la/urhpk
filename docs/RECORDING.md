@@ -407,8 +407,9 @@ corner. Two different sync paths exist depending on how the clip was made:
 - **Recorded via `puskas_logger.py`'s own Alt+V capture** (MJPG 848×480 at
   30 fps, pinned — see FINDINGS.md for why that shape and not 4:3; about
   960 MiB per hour) on the same machine as the logger, with the same
-  `datetime.now(timezone.utc)` clock as every QSO/keystroke:
-  exact sync, no cross-correlation needed. The file itself is renamed about
+  `datetime.now(timezone.utc)` clock as every QSO/keystroke: exact to the
+  microsecond, and still cross-correlated for the capture latency between the
+  scene and that stamp (0.46–0.66 s on this camera — FINDINGS.md). The file itself is renamed about
   a second in with a µs-precise UTC timestamp baked into the filename (e.g.
   `foo-webcam.mp4` -> `foo-webcam-20260706T160037.123456Z.mp4`) —
   `parse_webcam_precise_filename` reads it straight off the filename, no

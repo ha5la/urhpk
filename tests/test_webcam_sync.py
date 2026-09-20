@@ -460,38 +460,55 @@ class TestSyncWebcams:
         # of these -- but only the fit measured over the stretch of round the
         # cast actually covers says anything about the clock there, which is
         # why each carries the output time it was taken at. Both clips here
-        # are exact, so both intercepts are 0 and the rate is all that is left.
+        # are exact, so both intercepts are 0: what moved the first clip is
+        # its camera's latency, which the cast does not shoot through.
         self._fake_refine(
             monkeypatch, {self.CAM1: (-0.5, 0.001, 3), self.CAM2: (+0.25, 0.002, 9)}
         )
         self._fake_durations(monkeypatch, {self.CAM1: 80.8, self.CAM2: 300.0})
         clips, drifts = cv.sync_webcams([self.CAM1, self.CAM2], self._segs(), [], 2)
         assert [(round(d.at, 3), d.intercept, d.rate) for d in drifts] == [
-            (22.497, 0.0, 0.001),
+            (21.997, 0.0, 0.001),
             (106.520, 0.0, 0.002),
         ]
         assert [c.rate for c in clips] == [0.001, 0.002]  # each keeps its own fit
 
     def test_a_clip_that_cannot_fit_its_own_drift_borrows_the_rounds(self, monkeypatch):
         # Too short or too quiet to cross-correlate does not mean it does not
-        # drift. Its start is already exact from the filename, so it borrows
-        # the rate alone -- the intercept belongs to the clip it was measured at.
+        # drift. It borrows the rate alone -- the intercept is the latency of
+        # the one capture it was measured on.
         self._fake_refine(
             monkeypatch, {self.CAM1: (-0.5, 0.002, 7), self.CAM2: (0.0, 0.0, 0)}
         )
         self._fake_durations(monkeypatch, {self.CAM1: 300.0, self.CAM2: 20.0})
         clips, drifts = cv.sync_webcams([self.CAM1, self.CAM2], self._segs(), [], 2)
         assert [(d.intercept, d.rate) for d in drifts] == [(0.0, 0.002)]
-        assert clips[0].start == 22.497368 and clips[0].rate == 0.002
+        assert clips[0].start == 21.997368 and clips[0].rate == 0.002
         assert clips[1].start == 106.519807 and clips[1].rate == 0.002
 
-    def test_an_exact_start_is_not_moved_by_the_correlation(self, monkeypatch):
-        # The filename's stamp is this machine's own clock at the capture's
-        # frame 0; an envelope correlation in 50 ms windows cannot better it,
-        # and when the two disagree it is the correlation that is wrong --
-        # September's fit moved an exact start +4.09 s because its anchors
-        # straddled a discontinuity in the audio timeline. The rate is still
-        # the fit's to give: no timestamp can measure a rate.
+    def test_an_exact_start_takes_a_capture_latency_sized_correction(self, monkeypatch):
+        # The filename's stamp is frame 0's *arrival* -- camera, USB and driver
+        # buffering all sit between the scene and it -- so it runs late, and
+        # the correlation is what measures by how much. The cast PiP shares
+        # this clip's clock but not its camera, so the drift it borrows keeps
+        # an intercept of 0.
+        self._fake_refine(monkeypatch, {self.CAM1: (-0.66, -0.00136, 21)})
+        self._fake_durations(monkeypatch, {self.CAM1: 300.0})
+        clips, drifts = cv.sync_webcams([self.CAM1], self._segs(), [], 2)
+        assert clips[0].start == 21.837368 and clips[0].rate == -0.00136
+        assert [(d.at, d.intercept, d.rate) for d in drifts] == [
+            (21.837368, 0.0, -0.00136)
+        ]
+
+    def test_an_exact_start_is_not_moved_by_a_fit_no_camera_could_explain(
+        self, monkeypatch
+    ):
+        # Latency can only make the stamp late, and only by so much: a fit
+        # wanting to move an exact start *forwards* claims the camera
+        # delivered frame 0 before it was stamped. September's did, by
+        # +4.09 s, because its anchors straddled a discontinuity in the audio
+        # timeline. The rate is still the fit's to give: no timestamp can
+        # measure a rate.
         self._fake_refine(monkeypatch, {self.CAM1: (+4.09, -0.00136, 7)})
         self._fake_durations(monkeypatch, {self.CAM1: 300.0})
         clips, drifts = cv.sync_webcams([self.CAM1], self._segs(), [], 2)
