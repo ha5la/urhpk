@@ -31,6 +31,16 @@ def frame_zero_utc(log_path: str) -> datetime | None:
     old recording without the flag and, implausibly, no usable audio start) or
     the log can't be read.
     """
+    video_epoch, audio_epoch = _input_epochs(log_path)
+    epoch = video_epoch if video_epoch is not None else audio_epoch
+    if epoch is None:
+        return None
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).replace(tzinfo=None)
+
+
+def _input_epochs(log_path: str) -> tuple[float | None, float | None]:
+    """The v4l2 and pulse inputs' own `start:` epochs, either None if the log
+    doesn't carry it as an absolute time."""
     video_epoch = audio_epoch = None
     cur = None
     try:
@@ -49,8 +59,5 @@ def frame_zero_utc(log_path: str) -> datetime | None:
                         audio_epoch = val
                 cur = None
     except OSError:
-        return None
-    epoch = video_epoch if video_epoch is not None else audio_epoch
-    if epoch is None:
-        return None
-    return datetime.fromtimestamp(epoch, tz=timezone.utc).replace(tzinfo=None)
+        pass
+    return video_epoch, audio_epoch
