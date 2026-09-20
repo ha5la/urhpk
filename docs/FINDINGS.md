@@ -770,12 +770,36 @@ Two consequences beyond applying the intercept:
   round's two clips fit to within 0.2 s of each other. Sign and magnitude
   (`MAX_CAPTURE_LATENCY_S`) separate the two cases: a camera cannot deliver a
   frame before it was stamped.
-- **The clip's own audio leads its own video by ~81 ms.** The capture log's two
-  input headers are stamped 0.081 s apart (`v4l2 …700.427445`, `pulse
+- **The clip's own audio leads its own video by *at least* 81 ms.** The capture
+  log's two input headers are stamped 0.081 s apart (`v4l2 …700.427445`, `pulse
   …700.508370`) and both streams are then written starting at 0, so the
   inter-input offset is dropped. Aligning on the clip's audio therefore still
-  leaves the *video* that much late — the residual after this fix, and the
-  audible A/V skew in the source clip itself.
+  leaves the *video* late — the residual after this fix, and the skew audible in
+  the source clip itself. `WEBCAM_AV_SKEW_S` applies it as a **floor**: the two
+  stamps are arrival times, each already carrying its own path's latency, and
+  the camera's is the slower path, so the true skew is this plus however much
+  slower it is. Only the difference of the two latencies is unmeasured; the
+  correction cannot overshoot.
+
+**The envelope's own 50 ms grid was a quarter of the error it was measuring.**
+`_find_offset_correction` takes the integer argmax of a correlation between
+envelopes sampled in 50 ms windows, so every anchor was quantised to a multiple
+of 0.05 s — ±25 ms on a number that is itself a few hundred ms, and each anchor
+carried it into the fit. `_peak_offset` fits a parabola through the peak and its
+two neighbours, which the anchor table above is fine-grained enough to need.
+
+**Failed: measuring the skew from the clip's own content.** Mouth motion against
+the clip's own audio envelope, 114 six-second windows over the operator's TX
+segments, frame-to-frame absolute difference in a 300×240 box on the detected
+face against a 100 Hz RMS envelope. The lags scatter across the whole ±0.4 s
+search range; only 13 windows reach a peak score of 0.25, and those have a
+standard deviation of 0.199 s and a median of −0.24 s — the wrong sign for a
+skew the container itself documents. At 18 fps of real capture rate, with a
+headset on the operator's face and the far station's voice coming out of the
+speakers into the same microphone, there is no usable lip signal. What would
+work instead is a deliberate calibration: one short Alt+V capture of a clap,
+where the frame the hands meet and the transient in the audio are both
+unambiguous, measuring this camera's `Lv - La` once and for all.
 
 ### Where the face actually is
 

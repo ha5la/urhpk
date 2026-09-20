@@ -297,6 +297,21 @@ class TestWebcamDriftCorrection:
         assert abs(correction - true_correction) < 0.1
         assert confidence > 0.3
 
+    def test_find_offset_correction_resolves_finer_than_its_window(self):
+        # The envelope is sampled in 50 ms windows, so the raw peak can only
+        # land on a multiple of that -- 25 ms of quantisation error on every
+        # anchor, and the same error again on the fit they feed. The peak's
+        # two neighbours say where between the windows it really sits.
+        sr = 16000
+        padding_s = 5.0
+        radio_bursts = [1.0, 1.4, 1.9, 2.3]
+        true_correction = 2.03  # deliberately not a multiple of 0.05
+        radio = _burst_signal(sr, 3.0, radio_bursts, seed=1)
+        cam_bursts = [padding_s - true_correction + b for b in radio_bursts]
+        cam = _burst_signal(sr, 3.0 + 2 * padding_s, cam_bursts, seed=1)
+        correction, _ = _find_offset_correction(radio, sr, cam, sr, padding_s)
+        assert abs(correction - true_correction) < 0.015
+
     def test_find_offset_correction_low_confidence_on_unrelated_audio(self):
         sr = 16000
         padding_s = 5.0
@@ -468,7 +483,7 @@ class TestSyncWebcams:
         self._fake_durations(monkeypatch, {self.CAM1: 80.8, self.CAM2: 300.0})
         clips, drifts = cv.sync_webcams([self.CAM1, self.CAM2], self._segs(), [], 2)
         assert [(round(d.at, 3), d.intercept, d.rate) for d in drifts] == [
-            (21.997, 0.0, 0.001),
+            (round(21.997368 - cv.WEBCAM_AV_SKEW_S, 3), 0.0, 0.001),
             (106.520, 0.0, 0.002),
         ]
         assert [c.rate for c in clips] == [0.001, 0.002]  # each keeps its own fit
@@ -483,7 +498,8 @@ class TestSyncWebcams:
         self._fake_durations(monkeypatch, {self.CAM1: 300.0, self.CAM2: 20.0})
         clips, drifts = cv.sync_webcams([self.CAM1, self.CAM2], self._segs(), [], 2)
         assert [(d.intercept, d.rate) for d in drifts] == [(0.0, 0.002)]
-        assert clips[0].start == 21.997368 and clips[0].rate == 0.002
+        assert clips[0].start == 21.997368 - cv.WEBCAM_AV_SKEW_S
+        assert clips[0].rate == 0.002
         assert clips[1].start == 106.519807 and clips[1].rate == 0.002
 
     def test_an_exact_start_takes_a_capture_latency_sized_correction(self, monkeypatch):
@@ -495,10 +511,20 @@ class TestSyncWebcams:
         self._fake_refine(monkeypatch, {self.CAM1: (-0.66, -0.00136, 21)})
         self._fake_durations(monkeypatch, {self.CAM1: 300.0})
         clips, drifts = cv.sync_webcams([self.CAM1], self._segs(), [], 2)
-        assert clips[0].start == 21.837368 and clips[0].rate == -0.00136
+        assert clips[0].start == 21.837368 - cv.WEBCAM_AV_SKEW_S
+        assert clips[0].rate == -0.00136
         assert [(d.at, d.intercept, d.rate) for d in drifts] == [
-            (21.837368, 0.0, -0.00136)
+            (21.837368 - cv.WEBCAM_AV_SKEW_S, 0.0, -0.00136)
         ]
+
+    def test_the_clips_own_av_skew_only_follows_an_applied_fit(self, monkeypatch):
+        # The skew is what is left after the correlation has aligned the
+        # clip's *audio*: the picture at any file time is that much older.
+        # With no fit applied there is nothing for it to be left over from.
+        self._fake_refine(monkeypatch, {self.CAM1: (+4.09, -0.00136, 7)})
+        self._fake_durations(monkeypatch, {self.CAM1: 300.0})
+        clips, _ = cv.sync_webcams([self.CAM1], self._segs(), [], 2)
+        assert clips[0].start == 22.497368
 
     def test_an_exact_start_is_not_moved_by_a_fit_no_camera_could_explain(
         self, monkeypatch

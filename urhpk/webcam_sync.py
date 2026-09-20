@@ -204,8 +204,27 @@ def _find_offset_correction(
     best_idx = int(np.argmax(corr))
     w_local_norm = float(np.linalg.norm(w_env[best_idx : best_idx + len(r_env)]))
     confidence = corr[best_idx] / (r_norm * w_local_norm) if w_local_norm > 0 else 0.0
-    correction = padding_s - best_idx * env_win_s
+    correction = padding_s - (best_idx + _peak_offset(corr, best_idx)) * env_win_s
     return correction, float(confidence)
+
+
+def _peak_offset(corr: np.ndarray, best_idx: int) -> float:
+    """Where the correlation peak really sits between the windows either side
+    of `best_idx` (-0.5..+0.5 windows), by fitting a parabola through the
+    three.
+
+    The envelope is sampled in env_win_s windows, so an integer peak index
+    quantises every correction to a multiple of that: 25 ms of error on an
+    offset that is itself only a few hundred ms, and every anchor carries it
+    into the fit. The peak is not at a sample, and its two neighbours' heights
+    say which side of that sample it fell on."""
+    if best_idx == 0 or best_idx >= len(corr) - 1:
+        return 0.0
+    left, peak, right = (float(corr[best_idx + d]) for d in (-1, 0, 1))
+    denom = left - 2 * peak + right
+    if denom == 0:
+        return 0.0
+    return float(np.clip(0.5 * (left - right) / denom, -0.5, 0.5))
 
 
 def refine_webcam_start(

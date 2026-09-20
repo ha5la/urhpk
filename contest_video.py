@@ -158,6 +158,11 @@ STREAM_TRIM_MARGIN_S = 5.0  # slack when trimming a side stream to the cut,
 MAX_CAPTURE_LATENCY_S = 1.5  # the most the webcam's own frame-0 stamp may be
 # moved by a correlation fit (sync_webcams); measured at 0.46-0.66s on this
 # camera, and a fit asking for more is fitting something else
+WEBCAM_AV_SKEW_S = 0.081  # the capture's own audio leads its own video by this
+# much: the two inputs are stamped 81 ms apart in the *-webcam.log and both
+# streams are then written from 0, so the offset between them is dropped. A
+# floor, not the whole skew -- the camera's pipeline is the slower of the two
+# (FINDINGS.md), so the picture is at least this late once the audio is aligned
 
 
 def _stream_input_args(start: float, path: str) -> list[str]:
@@ -538,12 +543,24 @@ def sync_webcams(
                 f"{refined - start:+.2f}s, which no capture latency explains"
             )
         elif n:
+            # The fit aligns the clip's *audio*; the picture at any one file
+            # time is WEBCAM_AV_SKEW_S older than the sound beside it, so the
+            # placement owes that too. Only meaningful behind an applied fit:
+            # it is what the fit leaves over, not a correction of its own.
+            # An independently recorded clip has its own, unknown skew.
+            skew = WEBCAM_AV_SKEW_S if exact else 0.0
+            refined -= skew
             fits[i] = (refined, rate)
             print(
                 f"  {tag(i)}: audio cross-correlation refined start by "
-                f"{refined - start:+.2f}s and found a "
-                f"{rate * 3600:+.3f}s/hour clock-drift rate using {n} anchor(s) "
-                f"-> starts at {refined:.2f}s"
+                f"{refined - start + skew:+.2f}s"
+                + (
+                    f" (and {skew * 1000:.0f} ms more for the capture's own A/V skew)"
+                    if skew
+                    else ""
+                )
+                + f" and found a {rate * 3600:+.3f}s/hour clock-drift rate "
+                f"using {n} anchor(s) -> starts at {refined:.2f}s"
             )
         else:
             print(
