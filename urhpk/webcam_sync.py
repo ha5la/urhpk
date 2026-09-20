@@ -325,21 +325,26 @@ def refine_webcam_start(
             corrections.append(correction)
     if not corrections:
         return webcam_start, 0.0, 0
-    n = len(corrections)
-    if n == 1:
-        return webcam_start + corrections[0], 0.0, 1
-    fit_t = np.array(audio_ts)
+    intercept, rate = robust_line_fit(audio_ts, corrections)
+    return webcam_start + intercept, rate, len(corrections)
+
+
+def robust_line_fit(ts: list[float], corrections: list[float]) -> tuple[float, float]:
+    """Least-squares (intercept, slope) through per-anchor corrections, with
+    outliers rejected: a single anchor is its own intercept and no slope.
+
+    A few spurious correlation peaks (confident enough to keep but wildly
+    inconsistent -- another voice briefly matching by chance, a second signal
+    in the scope's span) skew one least-squares pass substantially. Found on a
+    real ~2h same-machine webcam recording: one naive fit put the whole-round
+    drift at +3.4s; rejecting anchors >1.5 std from the running fit and
+    refitting converged to +5.1s, residual std 2.6s -> ~0.1s. Only attempted
+    with >=4 points; fewer can't tell an outlier from real curvature."""
+    if len(corrections) == 1:
+        return corrections[0], 0.0
+    fit_t = np.array(ts)
     fit_c = np.array(corrections)
-    # A few spurious correlation peaks (confidence >= min_confidence but a
-    # wildly inconsistent correction -- e.g. another voice briefly matching
-    # by chance) can skew a single least-squares fit substantially. Found
-    # on a real ~2h same-machine webcam recording: one naive fit put the
-    # whole-round drift at +3.4s; iteratively rejecting outliers (>1.5
-    # std from the running fit) and refitting converged to +5.1s with the
-    # residual std dropping from ~2.6s to ~0.1s -- the robust fit is the
-    # trustworthy one. Only attempted with >=4 points; fewer than that
-    # can't reliably tell an outlier from real curvature.
-    if n >= 4:
+    if len(fit_c) >= 4:
         for _ in range(4):
             rate, intercept = np.polyfit(fit_t, fit_c, 1)
             resid = fit_c - (rate * fit_t + intercept)
@@ -351,7 +356,7 @@ def refine_webcam_start(
                 break
             fit_t, fit_c = fit_t[keep], fit_c[keep]
     rate, intercept = np.polyfit(fit_t, fit_c, 1)
-    return webcam_start + float(intercept), float(rate), n
+    return float(intercept), float(rate)
 
 
 def webcam_start_wall(path: str) -> datetime | None:
