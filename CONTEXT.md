@@ -190,6 +190,17 @@ A timestamped value on the video timeline, e.g. the rotator azimuth at a given
 moment. A mark may carry `None` — that is a real reading, not a gap.
 _Avoid_: sample, point, keyframe
 
+**QTH map**:
+The video's drone shot: a camera above our own station looking along the
+**bearing** of the station being worked, on satellite imagery. It shows a
+**station pair**, which is why it follows the bearing and not the **azimuth**.
+_Avoid_: radar, plan view, minimap, globe
+
+**Shot**:
+What the **QTH map**'s camera is doing at one moment — holding on a station, or
+part-way through turning onto the next. One shot is one frame's worth of camera.
+_Avoid_: scene, view, pose
+
 **Anchor**:
 A time correspondence between the audio and the log that is confident enough to
 fit a drift correction against.

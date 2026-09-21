@@ -117,6 +117,11 @@ This is the long, unattended step — roughly 1.5× the round's own length at
 720p with everything on. Preview first: `--duration 1200 --res 720p` cuts it to
 minutes, and `--hud-demo` checks the status bar's layout in about a second.
 
+**The first render from a new QTH fetches map tiles** (a few hundred, cached in
+`~/.puskas/tiles/` and never fetched again) for the drone shot under the
+waterfall. Without a network, or with no locators in the log, the map is skipped
+with a one-line reason and the waterfall keeps the whole column.
+
 Each stage carries its own progress bar with an ETA, so where it has got to is
 a `tail -f` away when the output is redirected to a log.
 

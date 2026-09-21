@@ -1,6 +1,6 @@
 # 10 — Translucent map beside the cast PiP
 
-Status: needs-info
+Status: resolved
 
 There is plenty of unused space next to the cast PiP. The vision: a
 third-person aerial view of the QTH that **rotates with the antenna**, with a
@@ -250,8 +250,29 @@ So the full recipe, all of it measured rather than guessed:
 | Imagery | Sentinel-2 cloudless (EOX), CC BY 4.0, ~200 tiles once per QTH |
 | Cost | 757 ms/frame in the full renderer, ~22 min for a 41-QSO round's transitions |
 
-Nothing of this is wired into `contest_video.py` yet: the scope panel still
-takes the whole right column, and the renderer lives in `/tmp/ticket10/`.
+## Built
+
+`urhpk/qth_map.py`, composited by `contest_video.py` into the lower half of the
+right-hand column. ARCHITECTURE.md has the component notes; what the prototypes
+settled is all above.
+
+What integration added beyond the prototypes:
+
+- **The right column splits** the way the row above the HUD already did, with
+  both rects fixed before either branch is built. Both panel heights are forced
+  even — each is encoded as its own h264 clip, and x264 refuses an odd
+  dimension, the same trap `hud_height` fell into.
+- **The map panel is opaque**, unlike the cast PiP beside it. It is a panel of
+  its own rather than an inset, and there is nothing behind it worth seeing.
+- **Frame reuse**, via `Shot.key()`, the same mechanism as `hud_frame_key`. The
+  camera only moves between QSOs, so a round is a few thousand distinct renders
+  rather than a quarter of a million.
+- **Never fatal.** The imagery comes off a public tile server. A round that
+  cannot reach one, or that logged no locators, prints one line saying so and
+  renders without the map — the waterfall keeps the whole column, exactly as
+  before this existed.
+- **Tiles cache in `~/.puskas/tiles/`**, not the round directory: the imagery
+  belongs to the QTH and every round from here wants the same tiles.
 
 ## The shimmer, and why bilinear could not fix it
 

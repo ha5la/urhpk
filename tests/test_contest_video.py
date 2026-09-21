@@ -75,6 +75,58 @@ class TestHudRender:
         graph = cmd[cmd.index("-filter_complex") + 1]
         assert "[hudbar]overlay=x=0:y=main_h-h" in graph
 
+    def _panels(self, **kw):
+        """(scope rect, map rect) as the filtergraph actually places them."""
+        cmd = _render_cmd(hud="h.mp4", casts=[CAST], **kw)
+        graph = cmd[cmd.index("-filter_complex") + 1]
+
+        def rect(scaled, placed):
+            size = re.search(scaled, graph)
+            pos = re.search(placed, graph)
+            if size is None or pos is None:
+                return None
+            return (*(int(v) for v in pos.groups()), *(int(v) for v in size.groups()))
+
+        return (
+            rect(
+                r"scale=(\d+):(\d+),fps=\d+,format=yuv420p",
+                r"\[scopebg\]overlay=x=(\d+):y=(\d+)",
+            ),
+            rect(
+                r"scale=(\d+):(\d+),fps=\d+,tpad[^;]*\[mappanel\]",
+                r"\[mappanel\]overlay=x=(\d+):y=(\d+)",
+            ),
+        )
+
+    def test_the_map_shares_the_right_column_with_the_scope(self):
+        """Waterfall above, drone shot below it, in the column the scope used
+        to have to itself -- and not one pixel of overlap."""
+        scope, qmap = self._panels(scope="s.mp4", qth_map="m.mp4")
+        sx, sy, sw, sh = scope
+        mx, my, mw, mh = qmap
+        assert (mx, mw) == (sx, sw)
+        assert my >= sy + sh, "the map overlaps the waterfall"
+        assert my + mh <= 1080 - hud_draw.hud_height(1080)
+
+    def test_without_a_map_the_scope_keeps_the_whole_column(self):
+        scope, qmap = self._panels(scope="s.mp4")
+        assert qmap is None
+        assert scope[3] == 1080 - hud_draw.hud_height(1080) - 2 * scope[1]
+
+    def test_both_panels_are_even_high_for_libx264(self):
+        # Each is encoded as its own clip before render() sees it, and x264
+        # refuses an odd dimension -- the same trap hud_height fell into.
+        scope, qmap = self._panels(scope="s.mp4", qth_map="m.mp4")
+        assert scope[3] % 2 == 0 and qmap[3] % 2 == 0
+
+    def test_the_map_panel_is_opaque(self):
+        """A panel of its own, not an inset over the waterfall -- unlike the
+        cast PiP beside it, which is deliberately translucent."""
+        cmd = _render_cmd(hud="h.mp4", casts=[CAST], qth_map="m.mp4")
+        graph = cmd[cmd.index("-filter_complex") + 1]
+        branch = graph[graph.index("[mappanel]") : graph.index("[vmap]")]
+        assert "colorchannelmixer" not in branch and "yuva" not in branch
+
     def test_the_webcam_goes_into_the_artworks_face_recess(self):
         # Its own crop and position come from the theme, so this pins that the
         # rect render() is handed is the rect it actually uses.

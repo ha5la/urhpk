@@ -65,6 +65,7 @@ from urhpk.hud_draw import (
 )
 from urhpk.icom_net import read_scope_records
 from urhpk.qso_windows import qso_windows
+from urhpk.qth_map import map_targets, render_map_video
 from urhpk.rig_state import (
     apply_clock_offset,
     build_state_events,
@@ -154,6 +155,7 @@ CAST_PIP_MARGIN_FRAC = 0.015  # a small inset -- the logger UI is most of what
 # along the bottom, the room above it is the limit.
 CAST_PIP_ALPHA = 0.85  # slightly transparent so the waterfall shows
 # faintly through the terminal PiP; 1.0 = opaque
+MAP_PANEL_GAP_FRAC = 0.011  # between the scope and the map below it
 SCOPE_PANEL_W_FRAC = 0.35  # the scope's own share of the row above the HUD,
 # beside the terminal rather than behind it (see render). 0.35 of 1920 is 672px
 # against the recording's 475 bins, so no sweep is squeezed below one pixel
@@ -192,6 +194,7 @@ def render(
     scope_start: float = 0.0,
     scope_end: float = 0.0,
     scope_rate: float = 0.0,
+    qth_map: str | None = None,
     hud: str = "",
     hud_face: tuple[int, int, int, int] = (0, 0, 0, 0),
 ) -> None:
@@ -230,6 +233,13 @@ def render(
     scope_w = round(W * SCOPE_PANEL_W_FRAC)
     scope_x = W - scope_w - cast_x
     cast_w = scope_x - 2 * cast_x
+    # With a map, the right-hand column is shared the way the row is: waterfall
+    # above, the drone shot below it. Both heights are forced even because each
+    # is encoded as its own h264 clip before it gets here.
+    panel_gap = round(H * MAP_PANEL_GAP_FRAC)
+    scope_h = cast_h if qth_map is None else ((cast_h - panel_gap) // 2 // 2) * 2
+    map_h = ((cast_h - panel_gap - scope_h) // 2) * 2
+    map_y = cast_y + scope_h + panel_gap
 
     # Full-screen scrolling waterfall, dimmed to ~half luma so it reads as an
     # ambient background and the text stays crisp on top. overlap=0.8 makes it
@@ -261,7 +271,7 @@ def render(
         # same class of problem.
         # With no terminal beside it the scope is the background it always
         # was, and takes the whole canvas.
-        sw, sh = (scope_w, cast_h) if casts else (W, H)
+        sw, sh = (scope_w, scope_h) if casts else (W, H)
         sx, sy = (scope_x, cast_y) if casts else (0, 0)
         scope_idx = add_input(_stream_input_args(scope_start, scope))
         fchain += (
@@ -328,6 +338,18 @@ def render(
                 f"enable='{gate}'[castv{i}]"
             )
             cur = f"castv{i}"
+    if qth_map:
+        # Opaque, unlike the cast PiP: this is a panel of its own, not an inset
+        # over the waterfall, and there is nothing behind it worth seeing. No
+        # -itsoffset for the same reason as the HUD below -- it is generated
+        # from the output timeline rather than captured against another clock.
+        map_idx = add_input(["-i", qth_map])
+        fchain += (
+            f";[{map_idx}:v]scale={scope_w}:{map_h},fps={RENDER_FPS},"
+            f"tpad=stop_mode=clone:stop_duration=99999[mappanel]"
+            f";[{cur}][mappanel]overlay=x={scope_x}:y={map_y}[vmap]"
+        )
+        cur = "vmap"
     if hud:
         # No -itsoffset: unlike every other side stream here, the HUD clip is
         # generated *from* the output timeline rather than captured against an
@@ -1191,6 +1213,35 @@ def main() -> None:
             max_duration=scope_span + STREAM_TRIM_MARGIN_S,
         )
 
+    map_video = None
+    targets = map_targets(qsos, windows, mywwl)
+    if targets:
+        map_video = stem + ".map.mp4"
+        # Sized as render() will place it, so the panel is rendered at its own
+        # resolution rather than scaled up from a guess.
+        panel_gap = round(H * MAP_PANEL_GAP_FRAC)
+        panel_h = H - hud_height(H) - 2 * round(H * CAST_PIP_MARGIN_FRAC)
+        scope_h = ((panel_h - panel_gap) // 2 // 2) * 2
+        try:
+            drawn = render_map_video(
+                targets,
+                map_video,
+                round(W * SCOPE_PANEL_W_FRAC),
+                ((panel_h - panel_gap - scope_h) // 2) * 2,
+                total,
+                mywwl,
+                my_callsign,
+            )
+            print(f"  {drawn} frames drawn for {int(total * RENDER_FPS)}")
+        except Exception as e:
+            # Never fatal: the imagery comes off a public tile server, and a
+            # round that cannot reach one still has a video to render. The
+            # scope keeps the whole column, exactly as before the map existed.
+            print(f"[map] skipped: {e}")
+            map_video = None
+    else:
+        print("[map] skipped: no worked station has a locator")
+
     print("rendering (this takes a while) ...")
     render(
         wav,
@@ -1203,6 +1254,7 @@ def main() -> None:
         scope_start=scope_start or 0.0,
         scope_end=scope_end or 0.0,
         scope_rate=scope_rate,
+        qth_map=map_video,
         hud=hud_video,
         hud_face=hud_art_.slots["face"],
     )
@@ -1213,6 +1265,8 @@ def main() -> None:
             os.remove(clip.path)
         if scope_video:
             os.remove(scope_video)
+        if map_video:
+            os.remove(map_video)
         os.remove(hud_video)
     print(f"wrote {args.out}")
 

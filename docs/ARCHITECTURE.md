@@ -321,6 +321,7 @@ above it.
 | `urhpk/chapters.py` | YouTube chapters and SRT captions |
 | `urhpk/cast_render.py` | The terminal PiP: an asciinema `.cast` replayed into frames |
 | `urhpk/scope_render.py` | The spectrum-scope waterfall background |
+| `urhpk/qth_map.py` | The drone shot over the QTH, turning to face who is worked |
 | `urhpk/hud.py` | The HUD's data layer: what the bar shows at any moment |
 | `urhpk/hud_draw.py` | The HUD's drawing layer: artwork, sprites, readouts |
 | `urhpk/video_format.py` | Frame size and rate — the two facts all three renderers must agree on |
@@ -511,6 +512,12 @@ cannot show — layout, PiP, waterfall.
 - **Composite order is background → scope → cast → HUD → webcam.** The HUD is a
   status bar: nothing may overlap it. The webcam goes on top of it, inside the face
   recess.
+- **The right-hand column is shared too: waterfall above, map below.** Same rule
+  and same reason as the row — both rects are fixed before either branch is built.
+  The map panel is **opaque**, unlike the cast PiP beside it: it is a panel of its
+  own rather than an inset, and there is nothing behind it worth seeing through.
+  Without a map the scope keeps the whole column, which is what a round with no
+  reachable tile server or no logged locators falls back to.
 - **The row above the HUD is shared, not stacked: terminal left, scope panel
   right.** Both rects are fixed in `render` before either branch is built, because
   the one thing they must not do is overlap. The scope took the whole canvas and
@@ -582,6 +589,68 @@ cannot show — layout, PiP, waterfall.
 - **Filter-graph string assertions cannot catch how branches combine.** Three real
   bugs got through them. Verify a change by rendering an actual clip and decoding a
   frame back out.
+
+### QTH map (the drone shot)
+
+`urhpk/qth_map.py`. A camera above the QTH looking along the bearing of the
+station being worked, on satellite imagery, swinging to the next station as the
+round reaches it. It follows the **bearing**, never the rotator **azimuth** —
+the HUD's compass already says where the antenna points.
+
+- **No terrain model and no 3D engine.** A tilted camera looking at flat ground
+  is exactly a homography of an ortho image, and this QTH is on the Pest plain,
+  so the ground is a per-pixel inverse map of one mosaic. What makes it read as
+  Google Earth is the imagery, not the machinery.
+- **The camera is three numbers from a bearing and a distance**: `back = 0.45 D`
+  behind the QTH, `alt = 0.38 D` above it, tilted to the mean of the depression
+  angles to the two ends. That frames the whole path — QTH low, station high —
+  for 33 km and 233 km alike, with no per-station tuning. Scaling by `D**0.55`
+  instead makes a long path read as long and pushes the station off the top edge
+  past about 150 km.
+- **Two texture levels, not one.** A single mosaic has to reach the far end of
+  the path, and that sets its resolution *everywhere* — including the near
+  ground at the bottom of the frame, where a tilted camera has the most of its
+  own to spend. A wide level (zoom picked from the round's longest path) plus a
+  fine one (z11, 52 m/px, ±50 km), coarsest painted first. The boundary needs no
+  cross-fade: the composite holds its colour across it, so only sharpness
+  changes, and the haze at that range covers it.
+- **Anisotropic ground filtering, not just mipmapping.** A pixel's ground
+  footprint is stretched along the view direction, so bilinear's 2x2 misses most
+  of it and lands on different texels each frame — which is a visible shimmer.
+  Mipmapping alone barely helps: picking the level by the long axis blurs the
+  ground to mush, by the short axis it still aliases. Only spreading taps along
+  the long axis fixes it. Measured against a 128-tap reference, RMSE goes 7.41
+  (bilinear) → 6.53 (mip only) → 0.53 (4 taps) → 0.16 (8 taps).
+  - Three properties of a ground plane under a camera with no roll make that
+    cheap: the footprint depends **only on the screen row**, its long axis is
+    **screen-vertical**, and rows sharing a mip level are a **contiguous band**.
+    So the level and tap count are per-row constants, the taps are sub-pixel
+    offsets in `y`, and the sampler uses slices rather than masks.
+  - **The taps spread across one screen pixel** — that is the whole footprint.
+    Spreading them by the anisotropy *ratio* in pixels smears the ground to mush,
+    and did until a zoomed crop showed it.
+  - Four taps is enough *because of the framing*: the proportional pull-back
+    holds the tilt near 27°, where the anisotropy measures 3x median and 6x max,
+    not the tens a grazing camera gives. Where the taps cannot cover the long
+    axis the level is raised to what they can — bounded anisotropy, so the cost
+    stays fixed if the tilt ever drops.
+- **The camera only moves between QSOs**, so every frame of a hold is the same
+  frame. `Shot.key()` is what the renderer reuses on, the same way
+  `hud_frame_key` works: a round is a few thousand distinct renders rather than
+  a quarter of a million.
+- **The swing** is a smoothstep, the bearing taken the short way round and the
+  distance interpolated *geometrically* — it drives how far the camera pulls
+  back, and a 47 km framing opening out to 168 km otherwise rushes at one end.
+  Both stations stay at their true positions throughout, one fading out and one
+  in: mid-turn the camera faces a bearing nobody was worked on, and nothing may
+  be drawn where no station is.
+- **Tiles are cached in `~/.puskas/tiles/`**, not in the round directory: the
+  imagery belongs to the QTH, and every round from here wants the same tiles.
+  `zoom_for` picks the coarsest zoom that fills a 2048 px budget, which is what
+  keeps a mosaic to ~100 tiles — without it a 233 km path asks a public tile
+  server for over a thousand.
+- **Never fatal.** The imagery comes off a public server; a round that cannot
+  reach one, or that logged no locators, prints why and renders without the map.
 
 ### HUD (DOOM-style status bar)
 
