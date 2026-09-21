@@ -218,6 +218,37 @@ so the level machinery is source-agnostic. What Sentinel-2 adds:
 pixel grid. A 41-QSO round's transitions go from 88 s to ~114 s. Tiles are 202
 for this QTH at these two levels, fetched once and cached — not per round.
 
-**Left to do**: the level boundary is visible where the fine level ends. Haze
-hides most of it at this tilt; a short cross-fade band across the last few km
-of the fine level would finish it.
+**The level boundary turned out not to need anything.** Sentinel-2's composite
+keeps the colour identical across it, so the only discontinuity is sharpness,
+and the haze at that range covers it. Bilinear sampling (below) softens what
+was left. No cross-fade band was needed.
+
+## The swing, rendered the settled way
+
+`/tmp/ticket10/swing2.py` → `swing2.mp4`. Same 1 s / 1.4 s / 1 s shape as
+before, now on Sentinel-2 with both levels and **bilinear** texel sampling.
+Sharp from the QTH to the horizon at both ends of the move, and nothing about
+the level boundary is visible.
+
+**Bilinear is what the rest of the quality costs.** 248 ms/frame against 66 for
+nearest — 3.8x, because each level becomes four gathers over the whole pixel
+grid instead of one. A 41-QSO round's transitions go to about 7 minutes. That
+is still small against the rest of a render, and it is unoptimised: the fine
+level covers a minority of the frame, so gathering only in-bounds pixels is the
+obvious saving and has not been tried.
+
+So the full recipe, all of it measured rather than guessed:
+
+| Decision | Settled on |
+|---|---|
+| Where | lower half of the scope panel, ~672x350 |
+| Driven by | the station being worked, not the rotator azimuth |
+| Camera | `back = 0.45 D`, `alt = 0.38 D`, tilt = mean of the two depressions |
+| Move | smoothstep; bearing the short way, distance in log space |
+| Ground | two levels, z8 at 415 m/px + z11 at 52 m/px, coarsest painted first |
+| Sampling | bilinear |
+| Imagery | Sentinel-2 cloudless (EOX), CC BY 4.0, ~200 tiles once per QTH |
+| Cost | 248 ms/frame, ~7 min for a 41-QSO round's transitions |
+
+Nothing of this is wired into `contest_video.py` yet: the scope panel still
+takes the whole right column, and the renderer lives in `/tmp/ticket10/`.
