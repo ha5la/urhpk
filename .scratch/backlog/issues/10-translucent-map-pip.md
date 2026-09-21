@@ -143,15 +143,17 @@ this round, ~34 ms each. If the view swings between stations rather than
 cutting, that is ~30 interpolated frames per QSO, about 40 s of CPU for the
 whole round. Either way the render budget is a non-issue.
 
-### The one composition choice left
+### Composition: settled
 
-`back`/`alt` proportional to distance (`k=1`) means every path composes
-identically and only the label says how far it was. Scaling them by `D^0.55`
-instead makes a long path visibly long — and at 168 km and 233 km pushes the
-far station off the top edge, because the far end climbs towards the horizon
-faster than the frame grows. Somewhere around `D^0.8`, or a clamp that keeps
-the far pin inside the frame, is the usable middle. Both renders are in
-`/tmp/ticket10/`.
+**Proportional pull-back** (`back = 0.45 D`, `alt = 0.38 D`). Every path
+composes identically and the caption carries the distance. `D^0.55` was tried
+and rejected: it makes a long path read as long, and pushes the far station off
+the top edge at 168 and 233 km.
+
+### What drives it: settled
+
+**The station being worked, not the rotator azimuth.** The HUD's compass
+already shows where the antenna points, and saying it twice earns nothing.
 
 ### Imagery licence, before this ships
 
@@ -160,3 +162,29 @@ is not obviously clear for a published video. **Sentinel-2 (Copernicus) is the
 safe one**: open licence including commercial use, and its 10 m/px is far
 sharper than any of these views need — the 47 km shot is already oversampled at
 104 m/px. Worth switching before anything is rendered for YouTube.
+
+## The swing between stations
+
+`/tmp/ticket10/swing.py` → `swing.mp4`: one second on HG5O (47 km, 307°), a
+1.4 s move, one second on HA3KHB (168 km, 251°). 102 frames at 672x350.
+
+- **Smoothstep on the transition parameter**, bearing taken the short way
+  round. Distance is interpolated in *log* space, so the pull-back — from a
+  47 km framing to a 168 km one — feels even rather than rushing at one end.
+- **Both stations are drawn at their true positions throughout**, the old one
+  fading out over the first half and the new one in over the second. Nothing is
+  ever shown at a place no station is: mid-swing the camera points at a bearing
+  nobody was worked on, and the pins are simply where they really are.
+- **The QTH stays pinned at frame centre** by construction — the camera always
+  sits directly behind it along the current heading, so `across` is identically
+  zero. Verified numerically across the swing rather than by eye.
+- A station still above the top edge **waits until it is in frame** before its
+  label is drawn; clamping the label instead put it on top of the caption.
+- **51 ms per frame** at this mosaic size. A round of 41 QSOs, swinging for
+  1.4 s at each, is **88 s** of render — plus one still per unique station.
+
+**One production caveat the demo shows.** It uses a single mosaic sized for the
+longer of the two paths, so the HG5O end renders at 415 m/px where it got
+104 m/px on its own, and is visibly softer. Production wants either a mosaic
+per segment or a two-level texture — coarse and wide underneath, fine and
+narrow near the camera.
