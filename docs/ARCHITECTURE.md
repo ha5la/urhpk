@@ -514,9 +514,14 @@ cannot show — layout, PiP, waterfall.
 - **A round's webcam clips share that one recess, stacked in time order**
   (`sync_webcams` sorts them; each overlay is enabled from its own start). Between
   two clips the earlier one's `tpad`-cloned last frame is what stays on screen.
-- **A round's casts share the one PiP slot the same way.** A round the logger had
-  to be restarted in has one cast per session; they stack in time order and each
-  takes the slot from its own start, with the same `tpad` freeze filling the gap.
+- **A round's casts share the one PiP slot the same way**, with one difference
+  that matters because they are transparent: each cast's overlay **ends where the
+  next one begins** (`between`, not `gte`). Left enabled to the end, an earlier
+  cast's `tpad`-cloned frame stays underneath the next one, which then blends
+  0.85 over 0.85 and lets 2 % of the waterfall through instead of 15 % — reported
+  as the second cast of a round looking opaque, measured as the waterfall's
+  scrolling showing through at 0.132 under the first and 0.000 under the second.
+  The freeze still fills the gap *between* casts, which is what it is for.
 - **Each clip's crop is its own, and is a constant.** `webcam_face` scans the clip
   and the crop is centred on the median face; a clip with no scan (no detector
   installed) keeps the size-agnostic centred expression. The crop must not vary

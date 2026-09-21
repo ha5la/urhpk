@@ -260,7 +260,10 @@ class TestHudLayering:
         # A round the logger was restarted in is several casts in one slot,
         # the same shape as the webcam recess above: each is overlaid on the
         # composite so far, reads its own file and takes the slot from its own
-        # start, with the one before it frozen by tpad to fill the gap.
+        # start, with the one before it frozen by tpad to fill the gap -- and
+        # handing the slot over when the next one starts, so the two are never
+        # drawn on top of each other (they are transparent; see
+        # test_an_earlier_cast_stops_being_drawn_where_the_next_one_starts).
         cmd = _render_cmd(
             casts=[CastClip("a.mp4", 12.5), CastClip("b.mp4", 4501.25)],
             hud="h.mp4",
@@ -276,7 +279,7 @@ class TestHudLayering:
         assert reads == {"castpip0": "a.mp4", "castpip1": "b.mp4"}
         assert graph.index("[castpip0]overlay") < graph.index("[castpip1]overlay")
         assert graph.index("[castpip1]overlay") < graph.index("[hudbar]overlay")
-        assert "enable='gte(t,12.500)'" in graph
+        assert "enable='between(t,12.500,4501.250)'" in graph
         assert "enable='gte(t,4501.250)'" in graph
 
     def test_the_cast_is_sized_to_the_room_above_the_bar(self):

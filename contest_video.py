@@ -280,6 +280,20 @@ def render(
         cast_scale = f"-2:{H - hud_h - 2 * cast_y}"
         for i, clip in enumerate(casts):
             idx = add_input(_stream_input_args(clip.start, clip.path))
+            # Each cast holds the slot until the next one takes it, and not a
+            # frame longer: left enabled to the end of the video, its cloned
+            # last frame stays *under* the next cast, which then blends 0.85
+            # over 0.85 and reaches the waterfall at 2%. Reported as the second
+            # cast of a round looking opaque where the first looked
+            # transparent; measured as the waterfall's own scrolling showing
+            # through at a ratio of 0.132 under the first and 0.000 under the
+            # second.
+            gate = f"gte(t,{max(clip.start, 0.0):.3f})"
+            if i + 1 < len(casts):
+                gate = (
+                    f"between(t,{max(clip.start, 0.0):.3f},"
+                    f"{max(casts[i + 1].start, 0.0):.3f})"
+                )
             # format=yuva420p + colorchannelmixer=aa lowers the PiP's alpha so
             # the overlay blends it over the waterfall (a little transparency,
             # not a wash) -- overlay honours the top input's own alpha channel.
@@ -288,7 +302,7 @@ def render(
                 f"format=yuva420p,colorchannelmixer=aa={CAST_PIP_ALPHA},"
                 f"tpad=stop_mode=clone:stop_duration=99999[castpip{i}]"
                 f";[{cur}][castpip{i}]overlay=x={cast_x}:y={cast_y}:"
-                f"enable='gte(t,{max(clip.start, 0.0):.3f})'[castv{i}]"
+                f"enable='{gate}'[castv{i}]"
             )
             cur = f"castv{i}"
     if hud:

@@ -121,6 +121,35 @@ class TestRenderWebcamSync:
         cast_chain = fchain.split("[1:v]")[1].split("[castpip0]")[0]
         assert f"colorchannelmixer=aa={cv.CAST_PIP_ALPHA}" in cast_chain
 
+    def test_an_earlier_cast_stops_being_drawn_where_the_next_one_starts(
+        self, monkeypatch, tmp_path
+    ):
+        # Reported on a real round: the second cast looked opaque where the
+        # first looked transparent. Both carry the same alpha -- but the first
+        # overlay was enabled for the whole rest of the video, so the second
+        # blended over the first's tpad-frozen last frame instead of over the
+        # waterfall, and 0.85 over 0.85 left the background 2% visible.
+        # Measured on the September render: the waterfall's own scrolling
+        # showed through cast 1 at a ratio of 0.132 and through cast 2 at
+        # 0.000.
+        captured = {}
+        monkeypatch.setattr(
+            cv.subprocess, "run", lambda cmd, check=True: captured.update(cmd=cmd)
+        )
+        cv.render(
+            str(tmp_path / "a.wav"),
+            str(tmp_path / "out.mp4"),
+            1280,
+            720,
+            casts=[
+                CastClip(str(tmp_path / "one.mp4"), 5.0),
+                CastClip(str(tmp_path / "two.mp4"), 100.0),
+            ],
+        )
+        fchain = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
+        assert "[castpip0]overlay=x=13:y=11:enable='between(t,5.000,100.000)'" in fchain
+        assert "[castpip1]overlay=x=13:y=11:enable='gte(t,100.000)'" in fchain
+
     def test_cast_pip_stretches_timeline_by_cast_rate(self, monkeypatch, tmp_path):
         # The cast recording (asciinema) and the webcam capture are both
         # timestamped by the same laptop system clock, so the same clock-
