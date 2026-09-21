@@ -246,9 +246,58 @@ So the full recipe, all of it measured rather than guessed:
 | Camera | `back = 0.45 D`, `alt = 0.38 D`, tilt = mean of the two depressions |
 | Move | smoothstep; bearing the short way, distance in log space |
 | Ground | two levels, z8 at 415 m/px + z11 at 52 m/px, coarsest painted first |
-| Sampling | bilinear |
+| Sampling | anisotropic, 4 taps (see below) |
 | Imagery | Sentinel-2 cloudless (EOX), CC BY 4.0, ~200 tiles once per QTH |
-| Cost | 248 ms/frame, ~7 min for a 41-QSO round's transitions |
+| Cost | 573 ms/frame, ~16 min for a 41-QSO round's transitions |
 
 Nothing of this is wired into `contest_video.py` yet: the scope panel still
 takes the whole right column, and the renderer lives in `/tmp/ticket10/`.
+
+## The shimmer, and why bilinear could not fix it
+
+Reported as pixel flicker while the animation runs. It is minification
+aliasing: a screen pixel's footprint on the ground grows with range and is
+stretched along the view direction, so in the distance it covers several texels
+vertically and about one horizontally. Bilinear averages 2x2 texels whatever
+the footprint is, misses most of it, and lands on different texels as the
+camera moves — which is the flicker.
+
+Two properties of a ground plane under a camera with no roll make the fix
+cheap: **the footprint depends only on the screen row**, and **its long axis is
+screen-vertical**. So the mip level and the tap count are per-row constants,
+the taps are sub-pixel offsets in y, and the rows sharing a mip level are a
+contiguous band — slices, not masks.
+
+Measured against a 128-tap reference, on the HG5O frame:
+
+| | ms/frame | RMSE vs reference |
+|---|---|---|
+| bilinear (what the earlier videos used) | 244 | 7.41 |
+| mip only | 220 | 6.53 |
+| anisotropic, 4 taps | 573 | 0.53 |
+| anisotropic, 8 taps | 1069 | 0.16 |
+| anisotropic, 16 taps | 1935 | 0.10 |
+
+**Mip alone barely helps** — which is the whole reason the answer is
+*anisotropic* and not just mipmapping. Choosing the level by the long axis
+blurs the ground to mush; by the short axis it still aliases. Only spreading
+taps along the long axis fixes it.
+
+**Four taps is enough here, and that is a consequence of the composition.**
+The footprint anisotropy measured 3x median and 6x maximum, not the tens a
+grazing camera would give — because the proportional pull-back keeps the tilt
+at about 27°, not near-horizontal. 8 taps is visually identical to 4.
+
+Two mistakes worth not repeating, both caught by looking at the render rather
+than the numbers:
+
+- The taps must spread across **one screen pixel** in y. Spreading them by the
+  anisotropy *ratio* in pixels smears the ground into mush — and did, until the
+  crop showed it.
+- That same error was in the reference frame the RMSE was measured against, so
+  the first table made bilinear look four times worse than it is. A reference
+  has to be the same thing done properly, not the same mistake done harder.
+
+Where the taps cannot cover the long axis (not the case at this tilt, but it
+would be at a lower one), the level is raised to what they *can* cover — the
+standard bounded-anisotropy formulation, so cost stays fixed as tilt drops.
