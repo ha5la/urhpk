@@ -70,7 +70,7 @@ band field, so this only matters for merging QSO lists, not for rendering.
 | `--cast FILE` | asciinema `.cast` recording of the logger/irssi tmux session, shown as a large picture-in-picture; repeat for a round the logger was restarted in |
 | `--webcam FILE` | Webcam/selfie clip, shown as a small picture-in-picture bottom-right; repeat for a round captured in several Alt+V clips |
 | `--webcam-offset SECONDS` | Manual fallback sync correction for `--webcam`, bypassing automatic sync entirely |
-| `--scope FILE` | `.scope` recording (from `puskas_logger.py`) — replaces the audio-derived waterfall with the radio's own spectrum wherever it covers |
+| `--scope FILE` | `.scope` recording (from `puskas_logger.py`) — the radio's own spectrum, in its own panel right of the terminal (the full canvas when there is no `--cast` to share the row with) |
 | `--no-video` | Stop after the chapters and `.srt` — they are ready in about a second, so a wrong timeline shows up without waiting out a render |
 | `--hud-demo OUT.png` | Write one HUD bar with dummy values and exit; needs no recording at all |
 | `--hud-preview OUT.png` | Write one HUD bar built from this recording at `--hud-preview-t SECONDS`, and exit |

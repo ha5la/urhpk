@@ -154,6 +154,9 @@ CAST_PIP_MARGIN_FRAC = 0.015  # a small inset -- the logger UI is most of what
 # along the bottom, the room above it is the limit.
 CAST_PIP_ALPHA = 0.85  # slightly transparent so the waterfall shows
 # faintly through the terminal PiP; 1.0 = opaque
+SCOPE_PANEL_W_FRAC = 0.35  # the scope's own share of the row above the HUD,
+# beside the terminal rather than behind it (see render). 0.35 of 1920 is 672px
+# against the recording's 475 bins, so no sweep is squeezed below one pixel
 STREAM_TRIM_MARGIN_S = 5.0  # slack when trimming a side stream to the cut,
 # so tpad's last-frame cloning never shows at the end of a preview
 MAX_CAPTURE_LATENCY_S = 1.5  # the most the webcam's own frame-0 stamp may be
@@ -214,6 +217,20 @@ def render(
 
     hud_h = hud_height(H)
 
+    # The row above the HUD is shared: terminal on the left, scope panel on the
+    # right. Both rects are fixed here, before either branch is built, because
+    # the one thing they must not do is overlap -- a terminal scaled only by
+    # its own aspect covered the middle of the span, which is exactly where the
+    # tuned frequency sits, so the visible strip of waterfall was the wrong
+    # third of it. The panel takes SCOPE_PANEL_W_FRAC of the canvas and the
+    # terminal gets what is left, `decrease` keeping its own aspect within it.
+    cast_x = round(W * CAST_PIP_X_FRAC)
+    cast_y = round(H * CAST_PIP_MARGIN_FRAC)
+    cast_h = H - hud_h - 2 * cast_y
+    scope_w = round(W * SCOPE_PANEL_W_FRAC)
+    scope_x = W - scope_w - cast_x
+    cast_w = scope_x - 2 * cast_x
+
     # Full-screen scrolling waterfall, dimmed to ~half luma so it reads as an
     # ambient background and the text stays crisp on top. overlap=0.8 makes it
     # scroll fast enough to fill the frame within the first few seconds.
@@ -242,12 +259,16 @@ def render(
         # with the one proven mechanism already used for those PiPs' own
         # start gate, rather than mixing two different techniques for the
         # same class of problem.
+        # With no terminal beside it the scope is the background it always
+        # was, and takes the whole canvas.
+        sw, sh = (scope_w, cast_h) if casts else (W, H)
+        sx, sy = (scope_x, cast_y) if casts else (0, 0)
         scope_idx = add_input(_stream_input_args(scope_start, scope))
         fchain += (
             f";[{scope_idx}:v]setpts=PTS/{1 - scope_rate:.8f},"
-            f"scale={W}:{H},fps={RENDER_FPS},format=yuv420p,"
+            f"scale={sw}:{sh},fps={RENDER_FPS},format=yuv420p,"
             f"tpad=stop_mode=clone:stop_duration=99999[scopebg]"
-            f";[{bg}][scopebg]overlay=x=0:y=0:"
+            f";[{bg}][scopebg]overlay=x={sx}:y={sy}:"
             f"enable='between(t,{max(scope_start, 0.0):.3f},{scope_end:.3f})'[bg2]"
         )
         bg = "bg2"
@@ -275,9 +296,11 @@ def render(
         # the one before it in chronological order and takes the slot from its
         # own start, with the earlier one's tpad-cloned last frame filling the
         # gap between them.
-        cast_x = round(W * CAST_PIP_X_FRAC)
-        cast_y = round(H * CAST_PIP_MARGIN_FRAC)
-        cast_scale = f"-2:{H - hud_h - 2 * cast_y}"
+        cast_scale = (
+            f"{cast_w}:{cast_h}:force_original_aspect_ratio=decrease"
+            if scope
+            else f"-2:{cast_h}"
+        )
         for i, clip in enumerate(casts):
             idx = add_input(_stream_input_args(clip.start, clip.path))
             # Each cast holds the slot until the next one takes it, and not a

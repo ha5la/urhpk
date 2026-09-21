@@ -511,6 +511,15 @@ cannot show — layout, PiP, waterfall.
 - **Composite order is background → scope → cast → HUD → webcam.** The HUD is a
   status bar: nothing may overlap it. The webcam goes on top of it, inside the face
   recess.
+- **The row above the HUD is shared, not stacked: terminal left, scope panel
+  right.** Both rects are fixed in `render` before either branch is built, because
+  the one thing they must not do is overlap. The scope took the whole canvas and
+  the terminal sat on it, which hid the middle of the span — the tuned frequency,
+  the only part anyone looks at — and left the *edges* of the span showing.
+  `SCOPE_PANEL_W_FRAC` gives the panel its share and the terminal takes what is
+  left, `force_original_aspect_ratio=decrease` keeping its own shape inside that
+  box. With no cast to share with, the scope is the full-canvas background it
+  always was.
 - **A round's webcam clips share that one recess, stacked in time order**
   (`sync_webcams` sorts them; each overlay is enabled from its own start). Between
   two clips the earlier one's `tpad`-cloned last frame is what stays on screen.

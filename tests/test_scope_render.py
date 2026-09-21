@@ -176,6 +176,38 @@ class TestRenderScopeBackground:
         # the layer the PiPs and HUD sit on -- it must not be composited on
         # top of them.
         assert "[specbg][scopebg]overlay=" in fchain
+        assert "overlay=x=0:y=0" in fchain  # nothing covers it: take the canvas
+
+    def test_a_cast_pushes_the_scope_into_a_panel_beside_it(
+        self, monkeypatch, tmp_path
+    ):
+        # Full-canvas, the scope is a background the terminal sits on -- and
+        # the terminal covers the middle of the span, which is where the
+        # tuned frequency is. Beside it instead, the whole span is visible,
+        # and the terminal is bounded so the two cannot overlap whatever the
+        # round's terminal shape.
+        captured = {}
+        monkeypatch.setattr(
+            cv.subprocess, "run", lambda cmd, check=True: captured.update(cmd=cmd)
+        )
+        cv.render(
+            str(tmp_path / "a.wav"),
+            str(tmp_path / "out.mp4"),
+            1920,
+            1080,
+            scope=str(tmp_path / "scope.mp4"),
+            scope_start=0.0,
+            scope_end=50.0,
+            casts=[CastClip(str(tmp_path / "cast.mp4"), 5.0)],
+            hud=str(tmp_path / "hud.mp4"),
+        )
+        fchain = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
+        scope_chain = fchain.split("[1:v]")[1].split("[scopebg]")[0]
+        assert "scale=672:708" in scope_chain
+        assert "[scopebg]overlay=x=1228:y=16" in fchain
+        # and the terminal may not grow into it
+        cast_chain = fchain.split("[2:v]")[1].split("[castpip0]")[0]
+        assert "scale=1188:708:force_original_aspect_ratio=decrease" in cast_chain
 
     def test_scope_branch_stretches_its_timeline_by_the_fitted_rate(
         self, monkeypatch, tmp_path
@@ -225,7 +257,7 @@ class TestRenderScopeBackground:
         # scope=input 1, cast=input 2, webcam=input 3 -- confirms indices
         # shift correctly to make room for scope ahead of the existing ones.
         assert fchain.split("[1:v]")[1].startswith("setpts=")
-        assert "scale=1920:1080" in fchain.split("[1:v]")[1]
+        assert "[scopebg]" in fchain.split("[1:v]")[1]
         assert "[2:v]setpts=" in fchain
         assert "[3:v]setpts=" in fchain
 
