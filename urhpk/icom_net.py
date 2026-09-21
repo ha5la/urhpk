@@ -1133,14 +1133,23 @@ class IcomNetRig:
             ) from None
 
         # Audio last, and only if asked for: it is the one stream nothing else
-        # depends on, so a failure here must not have cost the CI-V session
-        # that was already up before it started.
+        # depends on, so a failure here must not cost the CI-V session that was
+        # already up before it started -- hence caught rather than raised. The
+        # caller sees a connected rig with no audio arriving, which is what
+        # on_audio's consumer reports; raising here would instead hand back no
+        # session at all and make the round's insurance able to break the round.
         if self._audio is not None:
-            self._audio_local_id = os.urandom(4)
-            self._audio_remote_id = await _rendezvous(
-                self._audio, self._audio_local_id, timeout
-            )
-            self._tasks.append(asyncio.create_task(self._audio_loop()))
+            try:
+                self._audio_local_id = os.urandom(4)
+                self._audio_remote_id = await _rendezvous(
+                    self._audio, self._audio_local_id, timeout
+                )
+            except (IcomNetError, OSError):
+                self._audio_local_id = None
+                self._audio.close()
+                self._audio = None
+            else:
+                self._tasks.append(asyncio.create_task(self._audio_loop()))
 
         # Prime current state rather than waiting for the next front-panel change.
         self._send_civ_command(0x03)

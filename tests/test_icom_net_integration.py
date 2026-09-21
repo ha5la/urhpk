@@ -562,3 +562,23 @@ async def test_close_cancels_the_meter_poller_before_tearing_down_sockets(fake_r
     assert meter_task in rig._tasks
     await rig.close()
     assert meter_task.done()
+
+
+async def test_a_dead_audio_stream_does_not_cost_the_civ_session(fake_radio):
+    """The round's audio capture is insurance; CI-V is the thing it cannot
+    lose. A radio that opens CI-V and then never answers on the audio port
+    must still leave a usable session behind."""
+    rig = IcomNetRig(
+        "127.0.0.1",
+        "testuser",
+        "testpass",
+        control_port=fake_radio.control_port,
+        civ_port=fake_radio.civ_port,
+        audio_port=fake_radio.civ_port + 7,  # nothing listens here
+        rx_sample=16000,
+    )
+    try:
+        await rig.connect(timeout=1.0)
+        assert await wait_until(lambda: rig.freq_hz == 144_174_000, timeout=2.0)
+    finally:
+        await rig.close()
