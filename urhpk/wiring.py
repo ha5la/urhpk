@@ -105,3 +105,29 @@ def discover_round_inputs(directory: Path) -> RoundInputs:
         # what follows it is a fixed-width UTC stamp.
         webcams=[str(p) for p in sorted(directory.glob("*-webcam-*.mp4"))],
     )
+
+
+AV_SKEW_FILE = "webcam-av-skew"  # contest_video reads it, the operator writes it
+
+
+def round_av_skew(directory: Path) -> float | None:
+    """Seconds of webcam A/V skew this round measured for itself, or None.
+
+    The one number about a round that none of the round's own recordings
+    carries: how far the camera's pipeline ran behind PulseAudio's under that
+    round's load (RECORDING.md has the clap that measures it). It belongs to
+    the round rather than to the camera -- an idle machine and a round measured
+    145 ms and ~480 ms on the same hardware -- so it lives beside the round's
+    other files, where a re-render months later still finds it.
+
+    A file that cannot be read as a number raises rather than falling back:
+    the fallback renders two hours of video with the sync this file exists to
+    correct, and says nothing."""
+    path = directory / AV_SKEW_FILE
+    if not path.is_file():
+        return None
+    text = path.read_text().strip()
+    try:
+        return float(text)
+    except ValueError:
+        raise ValueError(f"{path} ({AV_SKEW_FILE}) is not a number: {text!r}") from None

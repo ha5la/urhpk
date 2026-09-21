@@ -70,6 +70,7 @@ band field, so this only matters for merging QSO lists, not for rendering.
 | `--cast FILE` | asciinema `.cast` recording of the logger/irssi tmux session, shown as a large picture-in-picture; repeat for a round the logger was restarted in |
 | `--webcam FILE` | Webcam/selfie clip, shown as a small picture-in-picture bottom-right; repeat for a round captured in several Alt+V clips |
 | `--webcam-offset SECONDS` | Manual fallback sync correction for `--webcam`, bypassing automatic sync entirely |
+| `--webcam-av-skew SECONDS` | How far this round's capture ran its picture behind its own audio (the clap below). Defaults to the `webcam-av-skew` file in the round directory, then to the capture log's stamp gap |
 | `--scope FILE` | `.scope` recording (from `puskas_logger.py`) — the radio's own spectrum, in its own panel right of the terminal (the full canvas when there is no `--cast` to share the row with) |
 | `--no-video` | Stop after the chapters and `.srt` — they are ready in about a second, so a wrong timeline shows up without waiting out a render |
 | `--hud-demo OUT.png` | Write one HUD bar with dummy values and exit; needs no recording at all |
@@ -462,6 +463,19 @@ after Alt+V, measures it: find the audio transient (sample-exact), find the
 frame the hands meet (±1 frame), and the difference is the number for
 `--webcam-av-skew`. Without it the placement uses the log's stamp gap, which is
 only a floor, and the PiP runs late by the rest.
+
+**Write the number into the round directory**, as a file called
+`webcam-av-skew` holding just the number:
+
+```
+echo 0.48 > webcam-av-skew
+```
+
+`contest_video.py` reads it as the flag's default, so a re-render months later
+carries the round's own measurement without anyone remembering a command line;
+the flag still overrides it for one render. A file that isn't a number is an
+error, not a shrug -- the alternative is two hours of video rendered with the
+sync this file exists to correct, silently.
 
 **Framing is automatic.** Each clip is scanned for the operator's face and
 cropped onto it rather than onto the middle of the frame, which matters because

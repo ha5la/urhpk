@@ -156,3 +156,23 @@ class TestRoundDirectoryGuard:
         round_dir.mkdir()
         monkeypatch.setattr(wiring, "PROJECT_ROOT", tmp_path)
         wiring.require_round_directory(round_dir)  # must not raise
+
+
+class TestRoundAvSkew:
+    """A round's own measured webcam A/V skew (see RECORDING.md's clap): the
+    one number about a round that no file of the round's own carries, and that
+    a re-render must not silently forget."""
+
+    def test_reads_the_number_the_round_measured(self, tmp_path):
+        (tmp_path / "webcam-av-skew").write_text("0.48\n")
+        assert wiring.round_av_skew(tmp_path) == 0.48
+
+    def test_none_when_the_round_never_measured_one(self, tmp_path):
+        assert wiring.round_av_skew(tmp_path) is None
+
+    def test_a_malformed_file_is_an_error_not_a_shrug(self, tmp_path):
+        # Silently ignoring it renders the whole round with the wrong sync and
+        # says nothing, which is the failure this file exists to prevent.
+        (tmp_path / "webcam-av-skew").write_text("about half a second\n")
+        with pytest.raises(ValueError, match="webcam-av-skew"):
+            wiring.round_av_skew(tmp_path)

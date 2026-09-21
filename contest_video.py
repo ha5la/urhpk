@@ -850,6 +850,16 @@ def main() -> None:
     # exactly how they are meant to be used.
     wiring.require_round_directory()
 
+    # The flag still wins, for trying a different value without editing the
+    # round; what the file gives is a round not having to remember.
+    if args.webcam_av_skew is None:
+        args.webcam_av_skew = wiring.round_av_skew(Path())
+        if args.webcam_av_skew is not None:
+            print(
+                f"  webcam: A/V skew {args.webcam_av_skew:.3f}s, measured by this "
+                f"round ({wiring.AV_SKEW_FILE})"
+            )
+
     W, H = RESOLUTIONS[args.res]
     segs = scan_segments(args.recdir)
     if not segs:
