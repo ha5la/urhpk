@@ -59,12 +59,58 @@ a smaller span, with anything beyond it clamped to the rim, looks like the
 honest compromise; colliding pins (five stations at 307°/47 km here) still need
 dodging or a count badge either way.
 
-## What this needs decided
+## Decided
 
-1. **What it displaces.** Splitting the right column (scope above, map below,
-   672x~350 each) is the cheapest; shrinking the cast is the other option —
-   both terminal panes are more than half black for most of a round.
-2. **Aerial or outline.** Outline needs no licence, no fetch and reads at size.
-   Aerial needs a source decision and only means anything at a scale where no
-   worked station fits.
-3. **True range or spread range**, per above.
+**Where it goes**: the scope panel splits horizontally — waterfall above, map
+below, roughly `672x350` each at 1080p.
+
+**Not a top-down map.** The view wanted is a drone shot above the QTH, turning
+to face the station being worked — Google Earth, not a chart. The outline mock
+above is not it.
+
+## The drone view, measured
+
+Feasible, and cheaper than the top-down one.
+
+**No 3D engine and no Google Earth Studio needed.** A tilted pinhole camera
+looking at flat ground is exactly a homography of an ortho image, and JN97TF
+sits on the Pest plain; at any altitude worth using, relief is below a pixel.
+So it is *one* aerial image plus a per-pixel inverse map. `/tmp/ticket10/`
+has the geometry working against a synthetic ground texture — the imagery is
+the only thing still to source.
+
+**Cost: 34 ms per heading, 12.4 s for all 360.** Same cache-by-whole-degree
+argument as the top-down view, so the render-time cost is a dict lookup.
+Storage is one image, not a tile set: at 25 km altitude the view spans ~200 km
+of ground in 672 px, so ~300 m/px is already oversampled and a 2048² picture
+covers 600 km. A low-altitude view would need its own, much sharper image over
+a few km — two altitudes means two images, not a pyramid.
+
+**It cannot carry the pins, at any altitude.** Two independent reasons, both
+visible in the mock:
+
+- **A perspective view is a wedge.** At 60° horizontal FOV it shows ±30° of
+  bearing, so with the beam at 307° this round's stations at 251°, 271°, 169°,
+  121° and 30° are simply off-screen. The top-down plot shows all eleven at
+  once; this shows two or three.
+- **Distance collapses onto the horizon.** A station at 47 km and one at
+  233 km land within a few pixels of each other vertically, at every altitude
+  tried (0.3, 3, 25 and 90 km). Perspective spends its resolution on the
+  nearby ground, which is the part with nothing in it.
+
+So this is an atmosphere element: it says where the antenna is pointing,
+beautifully, and says nothing about who was worked. That is a legitimate thing
+to want — but it does not replace the worked-station display, and the two
+cannot be the same panel.
+
+## Still to decide
+
+1. **Imagery source and licence** for the one ortho image. Open options
+   (Sentinel-2 is 10 m/px and free) are more than sharp enough at 25 km
+   altitude; a low-altitude view is where a licence question actually bites.
+2. **Altitude and tilt** — 25 km / 35° is the one in the mock that reads best.
+3. **What drives the heading**: the rotator azimuth (already a telemetry time
+   series, ground truth for where the antenna points) or the bearing of the
+   station being worked (from the input log's `qso` events). They normally
+   agree; the rotator is the simpler and more honest of the two.
+4. **Whether the pins get their own home** — this panel cannot hold them.
