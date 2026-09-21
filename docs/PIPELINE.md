@@ -62,9 +62,15 @@ it records to its SD card, splitting a new WAV on every RX/TX transition. Then
 recording, so until you say so the toolbar carries a red `SD ✗`.
 
 While the round runs, the logger is writing five things besides the log: rig and
-rotator telemetry, every keystroke and QSO, the radio's sweeps, and —
-if Alt+V was pressed — a webcam capture. None of it is recoverable afterwards,
-which is why it is all on by default.
+rotator telemetry, every keystroke and QSO, the radio's sweeps, the receive
+audio off the radio's LAN session, and — if Alt+V was pressed — a webcam
+capture. None of it is recoverable afterwards, which is why it is all on by
+default.
+
+The LAN audio is the one that overlaps something else: it is the same sound the
+Voice Recorder is putting on the SD card, and it exists because that one is
+switched on by hand and cannot be asked whether it is running. A round where
+`SD ✗` stayed red still has its audio.
 
 **What must be true before you start** — most of it the logger checks for
 itself once the radio connects, so the last column is what to look at rather
@@ -78,6 +84,7 @@ than what to remember:
 | `chronyd` serving the radio's subnet | `/etc/chrony/conf.d/radio-ntp.conf` | `sudo chronyc clients` lists `icom9700` |
 | Laptop's own clock stepped and converged | `./sync-clock.sh` | `chronyc tracking` |
 | Voice Recorder running | radio front panel | red `SD ✗` until `Alt+S` |
+| Room for the round on this disk | — | yellow `DISK n.nG` under 5 GB free |
 | File Split on, RX REC Condition = Always | radio: QSO RECORDER > Recorder Set | yellow `■ REC SET` if not |
 | Rotator powered, rotctld up | `hamlib_supervisor.py`, window `bg` | `ROT:` reads degrees, not `---` |
 

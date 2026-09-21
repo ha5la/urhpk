@@ -103,3 +103,14 @@ the reopen follows — the case the current watchdog silently passes.
 (3) is not testable that way and must not be faked. It is the real radio or
 nothing, and a negative result over one bench session proves very little; this
 happened once in 2 h 20 m.
+
+## Comments
+
+**Checked 2026-09-21: not fixed.** The only commit that ever touched this
+ticket is the one that filed it. `_civ_loop` still reopens on `last_data`,
+which every scope sweep refreshes, and `_meter_loop` still fires four commands
+per cycle without ever asking whether a reply came back — so all three of
+"notice", "recover" and "find the trigger" are still to do.
+
+What was fixed is a *consequence*, not the cause: the restart cost the round
+its single `.cast`, and a round now survives being restarted (ticket 31).

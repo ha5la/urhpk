@@ -19,7 +19,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from urhpk import icom_net, webcam_log
+from urhpk import icom_net, lan_audio, webcam_log
 
 WEBCAM_DEVICE = "/dev/video0"  # find with: v4l2-ctl --list-devices
 WEBCAM_AUDIO_SOURCE = "default"  # find with: pactl list short sources
@@ -54,6 +54,87 @@ def on_scope(start_hz: int, end_hz: int, pixels: bytes) -> None:
         _scope_rec["file"], time.time(), start_hz, end_hz, pixels
     )
     _scope_rec["file"].flush()
+
+
+# ──────────────────────────────────────────────────────────────
+# LAN audio recorder — the radio's own receive audio to a .wav file.
+#
+# Insurance, not the primary recording: the SD card's Voice Recorder is
+# started by hand and cannot be interrogated, so a round where REC was
+# forgotten has no audio at all and says nothing about it. This one needs
+# nobody to remember it. urhpk/lan_audio.py has the format and why there are
+# two files.
+#
+# Always non-fatal. A socket that never comes up, or a disk that fills,
+# stops the capture and shows it in the toolbar; CI-V is the thing a round
+# cannot lose, and it is on a different socket.
+# ──────────────────────────────────────────────────────────────
+
+LAN_AUDIO_RATE = 16000  # the AF stage's own rate; 48 kHz buys only quantisation
+LOW_DISK_BYTES = 5 * 1000**3  # ~43 h of this capture, ~2 h of webcam
+
+LAN_AUDIO_STALE_S = 10.0  # datagrams arrive ~100/s; this much silence is a fault
+
+_lan_audio: dict = {"path": None, "writer": None, "failed": False, "last_at": 0.0}
+
+
+def lan_audio_open(path: Path, rate: int = LAN_AUDIO_RATE) -> None:
+    """Arm the capture. The file is opened by the first datagram, so a round
+    whose radio never connects leaves no empty WAV behind."""
+    _lan_audio.update(path=path, rate=rate, writer=None, failed=False)
+
+
+def on_lan_audio(
+    seq: int, pcm: bytes, received_at: float, now: float | None = None
+) -> None:
+    if _lan_audio["path"] is None or _lan_audio["failed"]:
+        return
+    try:
+        if _lan_audio["writer"] is None:
+            _lan_audio["writer"] = lan_audio.LanAudioWriter(
+                _lan_audio["path"], _lan_audio["rate"]
+            )
+        _lan_audio["writer"].write(seq, pcm, received_at)
+    except Exception:
+        _lan_audio["failed"] = True
+        return
+    _lan_audio["last_at"] = time.monotonic() if now is None else now
+
+
+def lan_audio_status(now: float | None = None) -> str:
+    """ "recording", "stalled", "failed" or "off" — the toolbar's audio chip.
+
+    "recording" asks when a datagram last landed, not whether a file was ever
+    opened. Those are different questions, and the round the CW macros died in
+    is what a session looking alive on the wrong half of the link costs."""
+    if _lan_audio["failed"]:
+        return "failed"
+    if _lan_audio["writer"] is None:
+        return "off"
+    age = (time.monotonic() if now is None else now) - _lan_audio["last_at"]
+    return "recording" if age < LAN_AUDIO_STALE_S else "stalled"
+
+
+def lan_audio_close() -> None:
+    writer, _lan_audio["writer"] = _lan_audio["writer"], None
+    _lan_audio.update(path=None, failed=False)
+    if writer is not None:
+        try:
+            writer.close()
+        except Exception:
+            pass
+
+
+def low_disk_warning(free_bytes: int) -> str | None:
+    """What the toolbar says when the round is running out of room, or None.
+
+    A warning and not a hard stop, deliberately: whether to carry on with a
+    nearly-full disk is the operator's call mid-round, and the alternative —
+    stopping the capture that is the audio's only backup — is not obviously
+    the safer one."""
+    if free_bytes >= LOW_DISK_BYTES:
+        return None
+    return f"DISK {free_bytes / 1000**3:.1f}G"
 
 
 # ──────────────────────────────────────────────────────────────

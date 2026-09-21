@@ -87,7 +87,7 @@ and iterating the HUD's layout from the root is how they are meant to be used.
 | `~/.puskas/puskas-seen-stations.json` | harvested station database (all rounds, accumulates) |
 | `~/.puskas/on4kst-seen-stations.json` | ON4KST session database (written by the bridge) |
 | `.puskas_cache/` | API response cache (CWD; delete to force a fresh fetch) |
-| `*.edi`, `*.jsonl`, `*.scope`, `*.cast`, `*.mp4` | one round's own files (CWD) |
+| `*.edi`, `*.jsonl`, `*.scope`, `*.cast`, `*.wav`, `*.mp4` | one round's own files (CWD) |
 | `webcam-av-skew` | the one number a round measures about itself rather than records (CWD; RECORDING.md) |
 
 **Running**: this is one `uv` project, not a set of standalone scripts.

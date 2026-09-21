@@ -2229,7 +2229,7 @@ class FakeRig:
     """Stands in for IcomNetRig in the radio task: connects instantly, never
     goes stale, and records that it was closed."""
 
-    def __init__(self, *_args):
+    def __init__(self, *_args, **_kwargs):
         self.closed = asyncio.Event()
 
     async def connect(self, timeout=None):
@@ -2244,6 +2244,7 @@ class FakeRig:
     def on_update(self, _cb): ...
     def on_scope(self, _cb): ...
     def on_meters(self, _cb): ...
+    def on_audio(self, _cb): ...
     def enable_scope(self): ...
     def enable_meters(self): ...
 
@@ -2253,8 +2254,8 @@ def fake_radio_session(monkeypatch):
     """The radio task, running against a stand-in rig."""
     rigs: list[FakeRig] = []
 
-    def _build(*args):
-        rigs.append(FakeRig(*args))
+    def _build(*args, **kwargs):
+        rigs.append(FakeRig(*args, **kwargs))
         return rigs[-1]
 
     monkeypatch.setattr(pl.icom_net, "IcomNetRig", _build)
@@ -2380,7 +2381,9 @@ class TestStartingBandAndMode:
                 await answer.wait()
                 self._cb(432_100_000, "CW", "70CM")
 
-        monkeypatch.setattr(pl.icom_net, "IcomNetRig", lambda *a: SlowRig(*a))
+        monkeypatch.setattr(
+            pl.icom_net, "IcomNetRig", lambda *a, **kw: SlowRig(*a, **kw)
+        )
 
         pl._radio_start()
         waiting = asyncio.create_task(pl._await_radio())

@@ -1,6 +1,6 @@
 # 21 — Capture the radio's LAN audio during a round
 
-Status: needs-triage
+Status: resolved
 
 `lan_audio_probe.py` proves the stream out end to end against the real radio.
 This is the ticket that puts it in `puskas_logger.py` so a round records it
@@ -70,3 +70,34 @@ Decide whether that is worth the code before building it.
   consumer that doesn't want audio.
 - Audio comes up after CI-V is confirmed ready, and gets its own disconnect in
   `close()`.
+
+## Comments
+
+**Built.** `urhpk/lan_audio.py` writes it, `recorders.py` arms it, the logger
+turns it on with `rx_sample=16000` and shows it as `AF ●`/`AF ✗`.
+
+The open question on **format** is settled as the middle option: a WAV plus a
+sidecar of `(sample, wall, boot, seq)` at every sequence gap and every 60 s. A
+lost datagram is concatenated over rather than padded with silence — inventing
+a duration in the one recording kept for when the real one is missing is the
+wrong failure — so the sidecar is what makes a hole provable.
+
+Two things came out of building it that the ticket did not anticipate:
+
+- **Rewriting the WAV header's sizes per checkpoint is not good enough.**
+  ffprobe reads an unclosed file as exactly as long as its last rewrite, so a
+  60 s interval throws away up to a minute of the backup recording in precisely
+  the case it exists for. They are rewritten after every datagram instead;
+  measured at 0.07% of one core for a whole round.
+- **`connect()` could still let the audio kill the round.** The rendezvous was
+  brought up last and commented as unable to cost the CI-V session, but it
+  raised, so a silent audio port took the whole session down with it every
+  `RADIO_RECONNECT_S`. Now caught: a working session with no audio, which is
+  what the toolbar chip is for.
+
+And one the round the CW macros died in taught: `lan_audio_status()` asks when
+a datagram last landed, not whether a file was ever opened.
+
+**Still open, deliberately not done here**: where this goes in
+`contest_video.py` when the SD card is missing, and whether `icom_net.py`'s
+audio path needs retransmit-request compliance on a dirtier LAN.

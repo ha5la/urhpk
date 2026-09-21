@@ -1052,6 +1052,35 @@ session-scoped on the radio's side); file is lazily opened on the first sweep an
 flushed per sweep. Measured on real hardware: 29.4 sweeps/s at 493 bytes each
 (18-byte header + 475 pixels) = ~14.5 kB/s, so **~105 MB per 2 h round**.
 
+**LAN audio recorder** (`YYMMDD-CALL-lan.wav` + `.jsonl` sidecar, always on once
+the radio connects): the receive audio off the same network session CI-V runs
+on, via `rx_sample=16000`/`on_audio`. `urhpk/lan_audio.py` writes it; 16 kHz
+mono LPCM is ~115 MB/h, and the whole capture costs 0.07% of one core.
+
+- **It is insurance, not the primary recording.** The SD card's Voice Recorder
+  is what the video is built from. This exists because that one is started by
+  hand and the radio cannot be asked whether it is running (FINDINGS.md), so a
+  forgotten `REC` costs the round every second of its audio and says nothing.
+- **Nothing it does may cost the round CI-V.** Audio is brought up last in
+  `connect()` and a failure there is caught, not raised: the caller gets a
+  working session with no audio rather than no session at all. A write that
+  throws — a full disk — sets the capture failed and returns.
+- **The header's sizes are rewritten after every datagram**, so a logger killed
+  mid-round leaves a WAV that plays whole. Rewriting them per checkpoint
+  instead was measurably worse: ffprobe reads an unclosed file as exactly as
+  long as its last rewrite.
+- **A lost datagram is concatenated over, not padded with silence**, and the
+  sidecar is what makes the hole provable — one record per sequence gap and one
+  a minute, each pinning a sample index to the wall clock, `CLOCK_BOOTTIME` and
+  the radio's own sequence number. Two clocks because an NTP step then shows up
+  as the pair diverging rather than as a silently bent timeline. Inventing
+  silence would put a fabricated duration into the one recording that is kept
+  for when the real one is missing.
+- **`lan_audio_status()` asks when a datagram last landed**, not whether a file
+  was ever opened. Those are different questions, and the round the CW macros
+  died in (`.scratch/backlog/issues/25-…`) is what measuring liveness on the
+  wrong half of a link costs.
+
 **Telemetry recorder** (`*-telemetry.jsonl`, always on, **one JSON line per
 actual change**, microsecond stamps): records are *partial* by source --
 `{"t", "freq_hz", "mode"}` written from the `icom_net` push callback,
@@ -1133,6 +1162,18 @@ running, because a round that was not recorded cannot be re-run:
   notice — the logger's pane is ~95 columns (half of a 191-column terminal, see
   `run-recorded-round.sh`) and a notice would crowd the clock off it, so
   nothing appears in this toolbar unbidden.
+- **`AF ●` / `AF ✗` (red)** — the LAN audio capture, from
+  `recorders.lan_audio_status()`. Shown only while the rig is online, because
+  with no session there is nothing to stream and the `offline` block already
+  says so. Red covers three states the operator can do nothing different about:
+  the stream never came up, it stopped arriving, or a write failed.
+- **`DISK n.nG` (yellow)** — under 5 GB free on the round's own filesystem,
+  polled by `_disk_poll()` from the toolbar watcher twice a minute. Deliberately
+  a warning and not a hard stop: carrying on with a nearly-full disk is the
+  operator's call mid-round, and the alternative — stopping the capture that is
+  the audio's only backup — is not obviously the safer one. The residual risk is
+  stated and accepted: a full disk takes the logger down, and this is what fills
+  it.
 - **`● REC` / `NO WEBCAM` (yellow) / `WEBCAM DIED` (red)** — from
   `recorders.webcam_status()`. `webcam_reap()`, called by `_toolbar_watcher`, is what
   notices an ffmpeg that exited on its own; without it a capture that died at 18:20

@@ -584,6 +584,8 @@ restores `time.nist.gov`, and that is the one way this quietly comes undone.
   260704-HA5LA-webcam-…Z.mp4    ← Alt+V webcam capture (written by puskas_logger, optional)
   260704-HA5LA-webcam-…Z.log    ← ffmpeg capture log; the timestamp in that filename came from it
   260704-HA5LA.scope            ← radio sweeps (written by puskas_logger, optional input)
+  260704-HA5LA-lan.wav          ← the round's audio off the LAN, in case the SD card has none
+  260704-HA5LA-lan.wav.jsonl    ← where that WAV's samples sit on the wall clock, and where it lost any
   urhob2026cw_annotated.mp4     ← rendered video (written by contest_video.py)
   urhob2026cw_annotated.mp4.chapters.txt  ← paste into the YouTube description
   urhob2026cw_annotated.mp4.srt           ← upload as a YouTube captions track

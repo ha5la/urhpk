@@ -14,6 +14,7 @@ import asyncio
 import netrc
 import os
 import re
+import shutil
 import signal
 import sys
 import time
@@ -44,10 +45,16 @@ from urhpk.logbook import (
     tname_for,
 )
 from urhpk.recorders import (
+    LAN_AUDIO_RATE,
     forget_meters,
     input_log_open,
+    lan_audio_close,
+    lan_audio_open,
+    lan_audio_status,
     log_input_event,
+    low_disk_warning,
     on_buffer_changed,
+    on_lan_audio,
     on_radio_meters,
     on_scope,
     scope_open,
@@ -76,6 +83,7 @@ RADIO_HOST = os.environ.get("PUSKAS_RADIO_HOST", "icom9700")
 RADIO_CONNECT_TIMEOUT_S = 5.0
 RADIO_STALE_S = 5.0  # no CI-V-socket traffic for this long = session dead
 RADIO_RECONNECT_S = 15.0  # quiet time the radio needs before accepting a new session
+DISK_CHECK_S = 30.0  # how often the round asks whether it still has room
 
 # Every QSO's points and the EDI's PWWLo come from this, so the startup screen prints
 # it: a round from another QTH has to be noticed before the first QSO.
@@ -158,7 +166,9 @@ async def _radio_task() -> None:
         rig = None
         try:
             user, password = icom_net._load_netrc_credentials(RADIO_HOST)
-            rig = icom_net.IcomNetRig(RADIO_HOST, user, password)
+            rig = icom_net.IcomNetRig(
+                RADIO_HOST, user, password, rx_sample=LAN_AUDIO_RATE
+            )
             rig.on_update(_on_radio_update)
             await rig.connect(timeout=RADIO_CONNECT_TIMEOUT_S)
             # Both re-armed on every (re)connect: the meter poller is a task
@@ -170,6 +180,7 @@ async def _radio_task() -> None:
             rig.enable_scope()
             rig.on_meters(on_radio_meters)
             rig.enable_meters()
+            rig.on_audio(on_lan_audio)
             _radio["rig"] = rig
             _spawn(_recorder_check_run())
             _spawn(_ntp_check_run())
@@ -257,6 +268,7 @@ def _install_signal_handlers() -> None:
 
     async def _terminate(signum: int) -> None:
         webcam_stop_if_running()
+        lan_audio_close()
         await _radio_stop()
         os._exit(128 + signum)
 
@@ -442,6 +454,25 @@ def recorder_warnings(
         # RX and TX no longer strictly alternate.
         warnings.append("REC: RX = Squelch Auto")
     return warnings
+
+
+_disk: dict = {"warning": None, "next": 0.0}
+
+
+def _disk_poll() -> None:
+    """Ask the round's own filesystem how much room is left, twice a minute.
+
+    Called from the toolbar watcher rather than given a task of its own: it is
+    a stat, it has nowhere to block, and the watcher already runs at the only
+    cadence a toolbar chip can be seen at."""
+    now = time.monotonic()
+    if now < _disk["next"]:
+        return
+    _disk["next"] = now + DISK_CHECK_S
+    try:
+        _disk["warning"] = low_disk_warning(shutil.disk_usage(".").free)
+    except OSError:
+        _disk["warning"] = None
 
 
 async def _recorder_check_run() -> None:
@@ -820,6 +851,16 @@ async def run(lb: LogBook, tname: str):
         else:
             parts.append(("bg:ansired fg:white", "  SD ✗  │  "))
 
+        # Only while the rig is online: with no session there is nothing to
+        # stream and the offline chip above already says so.
+        if lan_audio_status() == "recording":
+            parts.append(("", "  AF ●  │  "))
+        elif online:
+            parts.append(("bg:ansired fg:white", "  AF ✗  │  "))
+
+        if _disk["warning"]:
+            parts.append(("bg:ansiyellow fg:black", f"  {_disk['warning']}  │  "))
+
         if _recorder_check["warnings"]:
             parts.append(("bg:ansiyellow fg:black", "  ■ REC SET  │  "))
 
@@ -883,6 +924,8 @@ async def run(lb: LogBook, tname: str):
             round(rot_az, 1) if rot_online else None,
             rot_online,
             _state["sd_ack"],
+            lan_audio_status(),
+            _disk["warning"],
             _recorder_check["warnings"],
             _ntp_check["warnings"],
             rec_notice_active,
@@ -915,6 +958,7 @@ async def run(lb: LogBook, tname: str):
         current one in this context yet."""
         last = None
         while True:
+            _disk_poll()
             webcam_finalize_name()
             notice = webcam_reap()
             if notice:
@@ -1346,6 +1390,7 @@ async def _round(lb: LogBook, tname: str) -> None:
         await run(lb, tname)
     finally:
         webcam_stop_if_running()
+        lan_audio_close()
         await _radio_stop()
 
 
@@ -1427,6 +1472,11 @@ def main():
     )
     input_log_open(_input_log_path)
     print(f"Input log: {_input_log_path}")
+    _lan_audio_path = Path(
+        f"{datetime.now(timezone.utc).strftime('%y%m%d')}-{lb.my_callsign}-lan.wav"
+    )
+    lan_audio_open(_lan_audio_path)
+    print(f"LAN audio: {_lan_audio_path} (backs up the SD card — toolbar AF)")
     print("Webcam:    Alt+V to start/stop recording")
     print("Audio:     switch on the radio's Voice Recorder, then Alt+S to confirm")
     print("Clock:     the radio takes its time from this laptop — toolbar CLK / ■ NTP")

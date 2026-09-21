@@ -151,8 +151,9 @@ _Avoid_: all RF uses except the fixed phrase "spectrum scope"
 
 **Side-channels**:
 Collectively, everything the logger writes during a round *besides the log*:
-telemetry, the input log, the scope capture and the webcam capture. None of it
-is recoverable afterwards, which is why they are named as a group.
+telemetry, the input log, the scope capture, the LAN audio capture and the
+webcam capture. None of it is recoverable afterwards, which is why they are
+named as a group.
 _Avoid_: telemetry (as an umbrella)
 
 **Telemetry**:
@@ -163,6 +164,12 @@ _Avoid_: using this for any other side-channel
 **Input log**:
 Keystrokes and QSOs — `*-input.jsonl`.
 _Avoid_: telemetry, keylog
+
+**LAN audio capture**:
+The receive audio the logger takes off the radio's network session —
+`*-lan.wav` and its sidecar. A **segment** is the SD card's recording of the
+same sound; this is the copy that needs nobody to remember it.
+_Avoid_: segment, recording
 
 ### Coined here
 
