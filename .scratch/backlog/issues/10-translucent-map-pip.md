@@ -114,3 +114,49 @@ cannot be the same panel.
    station being worked (from the input log's `qso` events). They normally
    agree; the rotator is the simpler and more honest of the two.
 4. **Whether the pins get their own home** — this panel cannot hold them.
+
+## The path shot, on real imagery
+
+`/tmp/ticket10/path_view.py`, rendered against Esri World Imagery tiles for
+four of the September round's own paths (33, 47, 168 and 233 km).
+
+**Framing both ends composes itself.** The camera sits behind the QTH along
+the bearing at `back = 0.45 D`, `alt = 0.38 D`, tilted to the mean of the two
+depression angles. That puts the QTH in the lower third and the worked station
+in the upper third for *any* path length, with no per-station tuning. The whole
+camera is three numbers derived from the bearing and the distance.
+
+**Flat ground is enough, confirmed against real imagery.** The ground is a
+per-pixel inverse map of one ortho mosaic; no DEM, no 3D, no Earth Studio. It
+looks like Google Earth because the imagery is the same kind of imagery.
+
+**Tiles are bounded by picking the zoom from the distance.** The mosaic is
+sized to a fixed ~2048 px budget, so the coarsest zoom that fills it is used:
+z10 at 104 m/px for a 47 km path, z7 at 830 m/px for 233 km. That is 64–100
+tiles per zoom level, fetched once per QTH and cached — not per round and not
+per frame. Without it a 233 km path asked for about 1,100 tiles, which is not a
+thing to do to a public tile server.
+
+**Caching is now per worked station, not per degree.** The camera depends on
+bearing *and* distance, so a round costs one render per unique station — 11
+this round, ~34 ms each. If the view swings between stations rather than
+cutting, that is ~30 interpolated frames per QSO, about 40 s of CPU for the
+whole round. Either way the render budget is a non-issue.
+
+### The one composition choice left
+
+`back`/`alt` proportional to distance (`k=1`) means every path composes
+identically and only the label says how far it was. Scaling them by `D^0.55`
+instead makes a long path visibly long — and at 168 km and 233 km pushes the
+far station off the top edge, because the far end climbs towards the horizon
+faster than the frame grows. Somewhere around `D^0.8`, or a clamp that keeps
+the far pin inside the frame, is the usable middle. Both renders are in
+`/tmp/ticket10/`.
+
+### Imagery licence, before this ships
+
+The mock uses Esri World Imagery, which is free to *use* with attribution but
+is not obviously clear for a published video. **Sentinel-2 (Copernicus) is the
+safe one**: open licence including commercial use, and its 10 m/px is far
+sharper than any of these views need — the 47 km shot is already oversampled at
+104 m/px. Worth switching before anything is rendered for YouTube.
