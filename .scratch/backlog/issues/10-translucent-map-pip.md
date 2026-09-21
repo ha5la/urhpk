@@ -248,7 +248,7 @@ So the full recipe, all of it measured rather than guessed:
 | Ground | two levels, z8 at 415 m/px + z11 at 52 m/px, coarsest painted first |
 | Sampling | anisotropic, 4 taps (see below) |
 | Imagery | Sentinel-2 cloudless (EOX), CC BY 4.0, ~200 tiles once per QTH |
-| Cost | 573 ms/frame, ~16 min for a 41-QSO round's transitions |
+| Cost | 757 ms/frame in the full renderer, ~22 min for a 41-QSO round's transitions |
 
 Nothing of this is wired into `contest_video.py` yet: the scope panel still
 takes the whole right column, and the renderer lives in `/tmp/ticket10/`.
