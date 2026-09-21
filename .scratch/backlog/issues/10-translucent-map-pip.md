@@ -185,6 +185,39 @@ sharper than any of these views need — the 47 km shot is already oversampled a
 
 **One production caveat the demo shows.** It uses a single mosaic sized for the
 longer of the two paths, so the HG5O end renders at 415 m/px where it got
-104 m/px on its own, and is visibly softer. Production wants either a mosaic
-per segment or a two-level texture — coarse and wide underneath, fine and
-narrow near the camera.
+104 m/px on its own, and is visibly softer. Two levels fix it — see below.
+
+## Two texture levels, and the imagery swap
+
+Both settled together, because the levels are what made the swap worth doing.
+
+**The blur was never about the source, it was about one texel size having to
+serve the whole frame.** A single mosaic must reach the far end of the path,
+and that sets its resolution everywhere — including the near ground at the
+bottom of the frame, which is exactly where a tilted camera has the most
+resolution to spend. Two levels, sampled coarsest-first so the finer one paints
+over where it reaches: **z8 at 415 m/px** covering the 168 km path, and
+**z11 at 52 m/px** covering ±50 km of near ground. `/tmp/ticket10/twolevel.png`
+is the same HG5O frame rendered both ways; the one-level version is mush where
+the two-level one has Budapest's streets and the Danube.
+
+**Sentinel-2 supports it, and suits it better than Esri did.** EOX's
+`s2cloudless` is a standard XYZ/WMTS pyramid — z8 and z11 both fetch normally —
+so the level machinery is source-agnostic. What Sentinel-2 adds:
+
+- **Both levels are decimations, never upsampling.** 10 m/px native is ~z13.4
+  here, so even the fine level at z11/52 m/px is still 5x coarser than the
+  source. The pyramid does run out just past z13; nothing here goes near it.
+- **It is a cloud-free annual composite**, so colour is consistent between the
+  two levels. Esri's mosaic of varying acquisition dates would put a seam at
+  the level boundary on top of the resolution one.
+- **CC BY 4.0**, which is the point of the swap — Esri's terms were never
+  clearly good for a published video.
+
+**Cost.** 66 ms/frame against 49 for one level: one extra gather over the same
+pixel grid. A 41-QSO round's transitions go from 88 s to ~114 s. Tiles are 202
+for this QTH at these two levels, fetched once and cached — not per round.
+
+**Left to do**: the level boundary is visible where the fine level ends. Haze
+hides most of it at this tilt; a short cross-fade band across the last few km
+of the fine level would finish it.
