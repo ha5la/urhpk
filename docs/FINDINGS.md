@@ -813,6 +813,12 @@ laptop against one running the logger, the radio session, the scope recorder and
 irssi. So there is no constant to find, in the log or anywhere else, and
 `--webcam-av-skew` exists to carry the number a round measured for itself.
 
+**One number per round, not per capture.** The September round's 480 ms was
+measured on its first capture and checked by eye on the second, 75 minutes and
+one logger restart later: the same value fits both. Which is what the load
+explanation predicts — the two captures ran under the same round, and it is the
+round that sets how far behind the camera runs.
+
 **Failed: measuring the skew from the clip's own content.** Mouth motion against
 the clip's own audio envelope, 114 six-second windows over the operator's TX
 segments, frame-to-frame absolute difference in a 300×240 box on the detected
