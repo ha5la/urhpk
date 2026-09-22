@@ -18,6 +18,7 @@ import struct
 import pytest
 
 from tests.helpers import wait_until
+from urhpk import icom_net
 from urhpk.icom_net import (
     CIV_CONTROLLER_ADDR,
     CIV_IC9700_ADDR,
@@ -122,6 +123,10 @@ class FakeIcomRadio:
         # Numbered settings (CI-V 0x1A 0x05), keyed by their two BCD bytes.
         # Values are one byte, or several for a setting like the clock.
         self.params: dict[bytes, int | bytes] = {}
+        # A radio that has stopped answering anything it is asked while its
+        # push traffic keeps flowing -- the September round's failure.
+        self.answer_commands = True
+        self.civ_open_magics: list[int] = []
         self._ctrl_transport = None
         self._civ_transport = None
 
@@ -214,6 +219,8 @@ class FakeIcomRadio:
             magic = data[0x15]
             if magic == 0x00:
                 self.civ_closed.set()
+            if magic in (0x04, 0x05):
+                self.civ_open_magics.append(magic)
             if magic in (0x04, 0x05) and not self.civ_opened.is_set():
                 self.civ_opened.set()
                 # Just needs to prove data is flowing -- connect()'s own open-wait
@@ -227,6 +234,8 @@ class FakeIcomRadio:
             if payload:
                 for frame in split_civ_frames(payload):
                     self.received_civ.append(frame)
+                    if not self.answer_commands:
+                        continue
                     if len(frame) >= 3 and frame[2] == 0x03:  # read freq
                         reply = civ_frame(
                             CIV_CONTROLLER_ADDR,
@@ -243,6 +252,15 @@ class FakeIcomRadio:
                             bytes([self._cur_mode]),
                         )
                         self._send_civ(reply)
+                    elif len(frame) == 4 and frame[2] == 0x15:  # read meter
+                        self._send_civ(
+                            civ_frame(
+                                CIV_CONTROLLER_ADDR,
+                                CIV_IC9700_ADDR,
+                                0x15,
+                                bytes([frame[3], 0x00, 0x99]),
+                            )
+                        )
                     elif len(frame) == 6 and frame[2:4] == b"\x1a\x05":  # read setting
                         value = self.params.get(bytes(frame[4:6]))
                         if value is not None:
@@ -581,4 +599,76 @@ async def test_a_dead_audio_stream_does_not_cost_the_civ_session(fake_radio):
         await rig.connect(timeout=1.0)
         assert await wait_until(lambda: rig.freq_hz == 144_174_000, timeout=2.0)
     finally:
+        await rig.close()
+
+
+async def _keep_pushing(radio: FakeIcomRadio) -> None:
+    """The dial keeps moving: inbound CI-V data never stops. This is what hid
+    the September round's failure -- push traffic on the same socket kept every
+    inbound-side liveness check healthy for the seven minutes the radio spent
+    answering nothing it was asked."""
+    hz = 144_100_000
+    while True:
+        hz += 1_000
+        radio.push_freq_mode(hz, 0x03)
+        await asyncio.sleep(0.02)
+
+
+async def test_a_radio_that_answers_nothing_is_seen_through_unbroken_push_traffic(
+    fake_radio,
+):
+    rig = IcomNetRig(
+        "127.0.0.1",
+        "testuser",
+        "testpass",
+        control_port=fake_radio.control_port,
+        civ_port=fake_radio.civ_port,
+    )
+    pusher = None
+    try:
+        await rig.connect(timeout=5.0)
+        rig.enable_meters(interval=0.05)
+        pusher = asyncio.create_task(_keep_pushing(fake_radio))
+        assert await wait_until(lambda: rig.cmd_stall_age() == 0.0, timeout=2.0)
+
+        fake_radio.answer_commands = False
+        assert await wait_until(lambda: rig.cmd_stall_age() > 0.3, timeout=2.0)
+        # The half of the link that was never broken still looks perfect.
+        assert rig.last_rx_age() < 0.5
+    finally:
+        if pusher is not None:
+            pusher.cancel()
+        await rig.close()
+
+
+async def test_the_civ_stream_is_reopened_when_only_the_command_path_is_dead(
+    fake_radio, monkeypatch
+):
+    monkeypatch.setattr(icom_net, "CMD_STALE_S", 0.2)
+    monkeypatch.setattr(icom_net, "CIV_STALE_S", 0.2)  # reopen spacing, not staleness
+    rig = IcomNetRig(
+        "127.0.0.1",
+        "testuser",
+        "testpass",
+        control_port=fake_radio.control_port,
+        civ_port=fake_radio.civ_port,
+    )
+    pusher = None
+    try:
+        await rig.connect(timeout=5.0)
+        rig.enable_meters(interval=0.05)
+        pusher = asyncio.create_task(_keep_pushing(fake_radio))
+        assert await wait_until(lambda: rig.cmd_stall_age() == 0.0, timeout=2.0)
+
+        fake_radio.answer_commands = False
+        opens = len(fake_radio.civ_open_magics)
+        assert await wait_until(
+            lambda: len(fake_radio.civ_open_magics) > opens, timeout=2.0
+        )
+        # Not the open-magic fallback: that is for a stream that never carried
+        # data at all, and this one is carrying it the whole time.
+        assert set(fake_radio.civ_open_magics) == {0x04}
+    finally:
+        if pusher is not None:
+            pusher.cancel()
         await rig.close()

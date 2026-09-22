@@ -187,6 +187,12 @@ real radio; the evidence is in FINDINGS.md.
   wfview's 100 ms, or the radio's receive-sequence tracker desyncs.
 - Every open attempt sends a real CI-V query alongside it: the radio never speaks
   first, so waiting for data before sending is a deadlock.
+- **Liveness is two signals, one per direction.** `last_rx_age()` watches inbound
+  traffic; `cmd_stall_age()` watches whether the meter poll is being answered. A
+  radio can push scope sweeps and transceive frames for minutes while answering
+  nothing it is asked, so a reopen is due when *either* goes stale. The open-magic
+  0x04→0x05 fallback stays tied to the inbound one: it is for a stream that never
+  carried data, not for one that is carrying it.
 - No extra token renewal between register and conninfo — a real client sends none.
 - `close()` sends a disconnect control packet (`type=0x05`, `seq=0`) on **every**
   socket it opened, not just the token deregister; without it the radio keeps the
@@ -880,6 +886,10 @@ These requirements must be preserved across all future changes:
   sessions for a while after an uncleanly-dropped one), so a transient radio/network
   error cannot kill rig state permanently. Liveness comes from `last_rx_age()`
   (no CI-V-socket traffic for `RADIO_STALE_S` = session dead), not from polling.
+- **A session that answers nothing gets its own chip**: `_civ_chip()` draws a red
+  `CIV ✗` when `cmd_stall_age()` passes `CMD_STALE_S`. The session is up and every
+  other chip is green in that state, so without it the operator finds out by
+  pressing a macro that sends nothing.
 - **The radio session is closed on every exit path, signals included**: a round
   ends by killing the tmux session (SIGHUP), which used to skip teardown entirely and
   leave exactly the abandoned session `icom_net.close`'s notes describe — the radio then

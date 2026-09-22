@@ -337,6 +337,20 @@ def _clock_chip() -> tuple[str, str]:
     return style, f"  CLK {offset:+.1f}s  │  "
 
 
+def _civ_chip() -> tuple[str, str] | None:
+    """(style, text) for the toolbar chip that says the radio has stopped
+    answering, or None while it answers -- one function so the redraw
+    signature cannot drift from what is actually drawn.
+
+    Everything the operator would notice this by is on the other half of the
+    link: the band, the frequency and the scope all keep updating from the
+    radio's push traffic while the macros send nothing at all."""
+    rig = _radio["rig"]
+    if rig is None or rig.cmd_stall_age() < icom_net.CMD_STALE_S:
+        return None
+    return "bg:ansired fg:white", "  CIV ✗  │  "
+
+
 def _clock_window_wait(offset_s: float, now: datetime) -> float:
     """Seconds to sleep so a burst starts CLOCK_WINDOW_S before the radio's
     next minute rollover.
@@ -858,6 +872,10 @@ async def run(lb: LogBook, tname: str):
         elif online:
             parts.append(("bg:ansired fg:white", "  AF ✗  │  "))
 
+        civ = _civ_chip()
+        if civ is not None:
+            parts.append(civ)
+
         if _disk["warning"]:
             parts.append(("bg:ansiyellow fg:black", f"  {_disk['warning']}  │  "))
 
@@ -925,6 +943,7 @@ async def run(lb: LogBook, tname: str):
             rot_online,
             _state["sd_ack"],
             lan_audio_status(),
+            _civ_chip(),
             _disk["warning"],
             _recorder_check["warnings"],
             _ntp_check["warnings"],

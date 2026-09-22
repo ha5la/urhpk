@@ -1867,6 +1867,38 @@ class TestClockChip:
         assert "CLK +2.0s" in text
 
 
+class _DeafRig:
+    """A live session whose radio has stopped answering what it is asked."""
+
+    def __init__(self, stall_age):
+        self._stall_age = stall_age
+
+    def cmd_stall_age(self):
+        return self._stall_age
+
+
+class TestCivChip:
+    """What the toolbar draws when the session is up but the radio answers
+    nothing -- the failure every other chip is blind to."""
+
+    def teardown_method(self):
+        pl._radio["rig"] = None
+
+    def test_no_session_draws_no_chip(self):
+        pl._radio["rig"] = None
+        assert pl._civ_chip() is None
+
+    def test_a_radio_answering_its_poll_draws_no_chip(self):
+        pl._radio["rig"] = _DeafRig(0.0)
+        assert pl._civ_chip() is None
+
+    def test_a_radio_answering_nothing_goes_red(self):
+        pl._radio["rig"] = _DeafRig(pl.icom_net.CMD_STALE_S)
+        style, text = pl._civ_chip()
+        assert "ansired" in style
+        assert "CIV ✗" in text
+
+
 # ──────────────────────────────────────────────────────────────
 # rotator.current
 # ──────────────────────────────────────────────────────────────
@@ -2239,6 +2271,9 @@ class FakeRig:
         self.closed.set()
 
     def last_rx_age(self):
+        return 0.0
+
+    def cmd_stall_age(self):
         return 0.0
 
     def on_update(self, _cb): ...

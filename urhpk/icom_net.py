@@ -618,6 +618,7 @@ def ping_reply(seq: int, sentid: bytes, rcvdid: bytes, echo: bytes) -> bytes:
 IDLE_PERIOD_S = 0.1
 TOKEN_RENEWAL_S = 60.0
 CIV_STALE_S = 2.0
+CMD_STALE_S = 5.0  # meter polls unanswered for this long = the command path is wedged
 DEREGISTER_ACK_TIMEOUT_S = 0.5  # the radio answers in ~2 ms; this is only a backstop
 CLIENT_NAME = "urhpk"
 
@@ -794,6 +795,7 @@ class IcomNetRig:
         self._civ_ready = asyncio.Event()
         self._tasks: list[asyncio.Task] = []
         self._last_civ_rx = 0.0
+        self._cmd_sent_at: float | None = None
 
     @property
     def band(self) -> str | None:
@@ -825,6 +827,19 @@ class IcomNetRig:
         reconnect supervisor needs."""
         last = self._last_civ_rx
         return float("inf") if last == 0.0 else time.monotonic() - last
+
+    def cmd_stall_age(self) -> float:
+        """Seconds the radio has been leaving the meter poll unanswered; 0.0
+        while it answers, and 0.0 when the poll is off and nothing is asking.
+
+        The other half of the link from last_rx_age(), and it has to be
+        measured separately: the radio's push traffic -- scope sweeps,
+        transceive frames -- keeps arriving on the same socket while its
+        command handler answers nothing at all, so inbound liveness reports a
+        healthy session throughout. The meter poll is the probe, being the only
+        steady outbound traffic there is."""
+        sent = self._cmd_sent_at
+        return 0.0 if sent is None else time.monotonic() - sent
 
     def on_civ_frame(self, callback) -> None:
         """callback(frame: bytes) fires for every inbound CI-V frame (sans
@@ -933,6 +948,8 @@ class IcomNetRig:
         while True:
             for sub in CIV_METERS:
                 self._send_civ_command(CIV_CMD_METER, bytes([sub]))
+            if self._cmd_sent_at is None:
+                self._cmd_sent_at = time.monotonic()
             await asyncio.sleep(METER_SETTLE_S)
             snapshot = dict(self._meters)
             if snapshot:
@@ -1218,6 +1235,7 @@ class IcomNetRig:
             meter = parse_meter_frame(frame)
             if meter is not None:
                 self._meters[meter[0]] = meter[1]
+                self._cmd_sent_at = None
                 continue
             update = parse_civ_update(frame)
             if update is not None:
@@ -1282,10 +1300,11 @@ class IcomNetRig:
             # tracker lose sync entirely -- it started demanding retransmission
             # of a huge, nonsensical seq range. Spacing retries by CIV_STALE_S
             # (2s) gives each attempt time to land before the next is sent.
-            if last_data == 0.0 or now - last_data >= CIV_STALE_S:
+            no_data = last_data == 0.0 or now - last_data >= CIV_STALE_S
+            if no_data or self.cmd_stall_age() >= CMD_STALE_S:
                 due = not opened_once or now - last_reopen >= CIV_STALE_S
                 if due:
-                    if opened_once and self._civ_open_magic == 0x04:
+                    if no_data and opened_once and self._civ_open_magic == 0x04:
                         self._civ_open_magic = (
                             0x05  # first magic got no data -- try the other one
                         )

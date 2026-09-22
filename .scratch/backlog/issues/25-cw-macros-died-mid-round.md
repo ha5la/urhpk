@@ -1,6 +1,6 @@
 # 25 — The CW macros died mid-round and nothing said so
 
-Status: needs-triage
+Status: ready-for-human
 
 Seven minutes into the September round's second hour the F-key macros stopped
 sending. The operator hand-keyed the rest of the QSO on the paddle, then
@@ -114,3 +114,21 @@ per cycle without ever asking whether a reply came back — so all three of
 
 What was fixed is a *consequence*, not the cause: the restart cost the round
 its single `.cast`, and a round now survives being restarted (ticket 31).
+
+**(1) and (2) done 2026-09-22; (3) still open — it needs the radio.**
+
+`IcomNetRig.cmd_stall_age()` is the command-path signal: the meter poll arms it,
+a meter reply clears it, and it stays 0.0 when the poll is off so a consumer that
+doesn't poll never sees a phantom stall. `_civ_loop` now reopens when *either*
+half is stale, and the open-magic 0x04→0x05 fallback stayed tied to the inbound
+half — a stream carrying data has nothing to learn from the other magic. The
+logger draws a red `CIV ✗` chip (`_civ_chip`) past `CMD_STALE_S` = 5 s.
+
+Tested against the fake transport with the push traffic that hid this: pushes
+every 20 ms, `answer_commands = False`, then the stall shows while
+`last_rx_age()` still reads healthy, and a reopen follows.
+
+(3) is unchanged and untouched: whether the four-command meter burst at 5/s
+alongside the scope stream is what wedges the radio's command handler is still a
+guess, and only the bench can answer it. What is different now is that the next
+occurrence announces itself and gets a reopen attempt for free.
