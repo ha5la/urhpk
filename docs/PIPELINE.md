@@ -125,7 +125,7 @@ with a one-line reason and the waterfall keeps the whole column.
 Each stage carries its own progress bar with an ETA, so where it has got to is
 a `tail -f` away when the output is redirected to a log.
 
-Out come `out.mp4`, `out.mp4.chapters.txt` and `out.mp4.srt`.
+Out come `out.mp4`, `out.chapters.txt` and `out.srt`.
 
 ## 4. Publish
 
@@ -163,8 +163,8 @@ Uploading is a deliberate separate manual step, run after reviewing the render, 
 youtubeuploader \
   -filename out.mp4 \
   -title "Puskás URH Kupa 2026-07 — HA5LA" \
-  -description "$(cat out.mp4.chapters.txt)" \
-  -caption out.mp4.srt \
+  -description "$(cat out.chapters.txt)" \
+  -caption out.srt \
   -secrets ~/.config/youtubeuploader/client_secrets.json \
   -cache ~/.config/youtubeuploader/request.token
 ```
