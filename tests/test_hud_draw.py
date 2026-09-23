@@ -228,6 +228,21 @@ class TestHudDrawing:
 
         assert brightness({}) < brightness({"2M": 0.5}) < brightness({"2M": 1.0})
 
+    def test_the_pwr_volts_and_amps_share_one_cell_layout(self):
+        # The two panels are one instrument: 13.8 V beside 8.4 A has to read
+        # as a pair, which means the same digit size and the same cells.
+        # Fitted to its own recess instead, the shorter value came out a
+        # larger digit sitting half a cell further right.
+        art = _art()
+        img = _drawn(vd=13.8, id_a=8.4)
+
+        def geometry(name):
+            x, y, w, h = art.slots[name]
+            rows, cols = np.nonzero(img[y : y + h, x : x + w].max(axis=2) > 120)
+            return rows.max() - rows.min(), cols.max()
+
+        assert geometry("vd") == geometry("id")
+
     def test_a_needle_turns_about_its_pivot_not_its_bounding_box(self):
         # These needles pivot on the ball at their base, so almost all of a
         # needle lies *ahead* of the compass centre. Turned about the box

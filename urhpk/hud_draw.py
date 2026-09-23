@@ -151,6 +151,11 @@ HUD_QSOS_FIELD = "188"
 # change mid-video. Its leading cell is a half digit too -- the highest band
 # this radio has is 1296 MHz, so a thousands digit above 1 cannot occur.
 HUD_QRG_FIELD = "1888.888"
+# PWR is two 2.5-digit panels rather than one field each of the width its own
+# value happens to need: the supply runs to 16 V and the PA to 17.9 A, so both
+# fit the same cells, and sharing them is what makes the pair read as one
+# instrument instead of two differently sized readouts.
+HUD_PWR_FIELD = "18.8"
 
 
 def _key_magenta(img: Image.Image) -> Image.Image:
@@ -540,6 +545,7 @@ def draw_hud_frame(state: HudState, art: HudArt) -> Image.Image:
             art.slots[name],
             f"{value:.1f}" if value is not None else "--.-",
             HUD_RED,
+            field=HUD_PWR_FIELD,
         )
 
     # --- stats: values only, right-aligned. Their captions (UTC / RATE /H /
