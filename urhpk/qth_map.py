@@ -437,25 +437,47 @@ def draw_map_frame(pyramids, shot: Shot, w: int, h: int, my_call: str) -> Image.
         )
         d.text((lx - tw / 2, y - 33), label, font=font, fill=colour + (a,))
 
+    def beside(point, label):
+        """The name box right of the dot. The station sits 12% down the frame
+        whatever the resolution, which at 720p leaves no room for a stalk."""
+        x, y = point
+        tw = d.textlength(label, font=font)
+        return (x + 8, y - 9, x + 16 + tw, y + 8)
+
+    def overlaps(a, b):
+        return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+    captions = [
+        (f"{my_call} → {target.callsign}   {target.distance_km:.0f} km", alpha)
+        for target, alpha in _fading(shot)
+        if alpha > 0.01
+    ]
+    caption_boxes = [d.textbbox((6, 4), text, font=font) for text, _ in captions]
+
     for target, alpha in _fading(shot):
         point = project(cam, target.bearing, target.distance_km, w, h)
-        # A station still above the top edge has nowhere to put its name that
-        # is not the caption, so it waits until it is in frame.
-        if point is None or alpha <= 0.01 or point[1] < 40:
+        if point is None or alpha <= 0.01:
             continue
+        box = beside(point, target.callsign)
+        if box[1] < 0 or box[2] > w or any(overlaps(box, c) for c in caption_boxes):
+            continue
+        a = int(255 * alpha)
         if me:
             d.line([me, point], fill=DX_COLOUR + (int(140 * alpha),), width=1)
-        marker(point, target.callsign, DX_COLOUR, alpha)
+        x, y = point
+        d.ellipse(
+            [x - 4, y - 4, x + 4, y + 4],
+            fill=DX_COLOUR + (a,),
+            outline=(20, 20, 20, a),
+        )
+        d.rectangle(box, fill=(0, 0, 0, a))
+        d.text(
+            (box[0] + 4, box[1] + 1), target.callsign, font=font, fill=DX_COLOUR + (a,)
+        )
     if me:
         marker(me, my_call, QTH_COLOUR, 1.0)
-    for target, alpha in _fading(shot):
-        if alpha > 0.01:
-            d.text(
-                (6, 4),
-                f"{my_call} → {target.callsign}   {target.distance_km:.0f} km",
-                font=font,
-                fill=(235, 240, 235, int(255 * alpha)),
-            )
+    for text, alpha in captions:
+        d.text((6, 4), text, font=font, fill=(235, 240, 235, int(255 * alpha)))
     d.text((6, h - 15), TILE_ATTRIBUTION, font=small, fill=(215, 220, 225, 220))
     return Image.alpha_composite(base, over).convert("RGB")
 

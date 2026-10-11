@@ -9,9 +9,12 @@ import numpy as np
 import pytest
 
 from urhpk.qth_map import (
+    DX_COLOUR,
     SWING_S,
+    build_pyramids,
     camera_at,
     camera_for,
+    draw_map_frame,
     map_targets,
     mosaic,
     project,
@@ -65,6 +68,31 @@ class TestTheCamera:
 
     def test_a_station_behind_the_camera_has_no_screen_position(self):
         assert project(camera_for(307.0, 90.0), 127.0, 90.0, W, H) is None
+
+
+class TestTheFrame:
+    @pytest.mark.parametrize("w, h", [(448, 232), (672, 348)])  # 720p, 1080p
+    def test_draws_the_worked_station_below_the_caption(self, w, h):
+        """The station being worked is the point of the shot, at either render
+        size, and its name must not land on the caption naming it."""
+
+        def blank(z, x, y):
+            return np.zeros((256, 256, 3), np.uint8)
+
+        targets = map_targets([_qso("HG5O", "JN97NL")], [(0.0, 60.0)], ME)
+        frame = np.asarray(
+            draw_map_frame(
+                build_pyramids(ME, targets, blank),
+                camera_at(targets, 30.0),
+                w,
+                h,
+                "HA5LA",
+            )
+        )
+        station_rows = np.nonzero((frame == DX_COLOUR).all(axis=2).any(axis=1))[0]
+        caption_rows = np.nonzero((frame[: h // 4] > 200).all(axis=2).any(axis=1))[0]
+        assert station_rows.size, "the station is not drawn"
+        assert station_rows.min() > caption_rows.max()
 
 
 class TestTheShot:
