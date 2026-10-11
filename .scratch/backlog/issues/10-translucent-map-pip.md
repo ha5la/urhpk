@@ -322,3 +322,218 @@ than the numbers:
 Where the taps cannot cover the long axis (not the case at this tilt, but it
 would be at a lower one), the level is raised to what they *can* cover — the
 standard bounded-anisotropy formulation, so cost stays fixed as tilt drops.
+
+## Terrain, and what looking for it found instead
+
+Reopened by a question: the panel renders imagery onto a plane, so what would
+a DEM under it buy? The answer is nothing, but finding that out turned up the
+term the flat model should have had all along.
+
+### Terrain: built, measured, rejected
+
+`/tmp/ticket10/terrain.py`. DEM is Mapzen terrarium off AWS Open Data, the
+same XYZ scheme as the imagery, so the level machinery is unchanged.
+
+**A heightfield has no inverse map.** Flat ground is a homography and the
+renderer inverts it per pixel; a ray over terrain can clear one ridge and be
+stopped by the next, so this marches every ray outward — 420 geometric steps,
+linear interpolation at the crossing, live-pixel compaction. That is the whole
+cost difference, and it is structural rather than a tuning failure.
+
+**At the settled composition relief is a rounding error.** Vertical
+displacement of the ground, in screen pixels:
+
+| path | peak in frame | median | 99th |
+|---|---|---|---|
+| HA7NS 37 km | 270 m | 2.0 px | 3.7 px |
+| HA3KHB 168 km | 1835 m | 0.5 px | 1.5 px |
+| HA1VHF 233 km | 2114 m | 0.4 px | 1.4 px |
+
+**It gets worse with distance, which is the composition's own doing.**
+`alt = 0.38 D` scales with the path and mountains do not, so the longer the
+path the smaller the relief. The pull-back that made every path frame itself
+is exactly what makes terrain invisible.
+
+Nothing rescues it at that composition: 8x vertical exaggeration and hillshade
+are still indistinguishable, and dropping the camera from `0.38 D` to `0.06 D`
+moves relief only 0.5 px to 1.1 px — the scene compresses toward the horizon
+as fast as relief grows — while collapsing both pins onto the horizon.
+
+The cause is angular size. 672 px over 60° is 0.09°/px; a 1 km hill at 80 km
+subtends 0.7°. Google Earth's drama is the Alps at 20 km, not the Pest plain
+at 170.
+
+### Earth curvature is the term that was actually missing
+
+Same metric, same panels — and it scales up exactly where terrain scales down:
+
+| path | terrain | curvature | drop at the DX |
+|---|---|---|---|
+| HA7NS 37 km | 2.0 px | 1.1 px | 226 m |
+| HA3KHB 168 km | 0.5 px | 5.2 px (99th 22.5) | 4657 m |
+| HA1VHF 233 km | 0.4 px | 7.3 px (99th 36.3) | 8958 m |
+
+On the long paths it is 10–18x what terrain does. Rendering a DEM on a flat
+earth would have modelled the small term and ignored the large one.
+
+**It needs no march.** The ray meets `z = -d²/2R` in closed form: a quadratic
+in the horizontal distance instead of a divide, and its discriminant going
+negative *is* the horizon. Measured in `draw_ground` at 672x350, 4 taps, two
+levels: `_ground` alone 1.24 ms flat against 8.19 ms curved, but it is twelve
+calls in a frame dominated by bilinear gathers, so the frame goes **550 ms to
+633 ms — +83 ms, +15%**. Whole frames on real tiles measured 517–655 ms flat
+against 589–644 ms curved. About +3 min on a 41-QSO round's transitions.
+
+The visible change is the far third: the ground falls away, more of it fits,
+and the DX pin drops from floating above the ground onto it — on a flat earth
+the renderer puts a 233 km station 9 km too high.
+
+### The horizon has to be framed for, and the mosaic has to reach it
+
+At the shipped camera the horizon is 1062 km away and the mosaic stops at
+443 km, so it is never in shot. (Worth recording: an earlier read of these
+renders called a curved edge "the horizon". It was the mosaic boundary bent by
+curvature.)
+
+Framing it is two constraints — QTH on the 90% row, horizon on the 10% row —
+in three unknowns, so altitude stays free, and altitude is what decides where
+the DX lands, because the horizon runs away as `sqrt(2·alt·R)` while the
+station stays at 233 km:
+
+| alt km | back km | tilt | horizon from QTH | HA1VHF row | near edge | m/px bottom |
+|---|---|---|---|---|---|---|
+| 10 | 17 | 16.7° | 340 km | 10.6% | 15 km | 26 |
+| 20 | 33 | 18.1° | 472 km | 12.9% | 29 km | 50 |
+| 45 | 68 | 20.3° | 690 km | 19.3% | 60 km | 103 |
+| 70 | 99 | 22.0° | 845 km | 24.7% | 88 km | 151 |
+| 110 | 145 | 24.1° | 1039 km | 31.7% | 129 km | 222 |
+
+Two things fall out. **A low camera crowds the pins** — at 10 km the station
+sits 70% of the way to the horizon, which is why they collide. And **a low
+camera is what the blurry foreground was**: 26 m/px at the bottom row against
+a 52 m/px fine level is 2x magnification. Both clear at about 45–70 km.
+
+Keeping `BACK_FRAC`/`ALT_FRAC` and moving only the tilt does not work: it puts
+the QTH at 102%, just off the bottom. The fractions would go to roughly
+`alt = 0.30 D`, `back = 0.43 D`.
+
+Showing a horizon also needs a **third texture level** — z6 at 1.66 km/px — for
+the band between the existing wide level and the horizon. 49 tiles, and the
+renderer already paints coarsest-first, so no code change.
+
+### Why terrain still fails once the horizon is visible
+
+This is the case terrain should have won, and the reason it does not is not
+geometry.
+
+**At 70 km altitude the geometric horizon is 845 km from the QTH, and no
+amount of atmosphere lets you see that far.** The longest documented sight
+line on Earth is around 440 km. At a measured haze curve the horizon sits at
+92% opacity, so everything terrain does out there is behind grey.
+
+Drop to 20 km — horizon 472 km — and cheat the haze the way Google Earth does,
+and it finally appears: the horizon is visibly serrated and the snow on the
+High Tatras reads as a bright ridge.
+
+| feature | from QTH | height | silhouette |
+|---|---|---|---|
+| Mátra | 80 km | 1014 m | 5.2 px |
+| Low Tatras | 200 km | 2043 m | 5.3 px |
+| High Tatras | 250 km | 2655 m | 5.7 px |
+| E Carpathians | 500 km | 2061 m | 2.4 px |
+
+An order of magnitude better than 0.4 px — and still invisible at panel size.
+It shows in a 3x crop, and a 3x crop is not what ships. The march costs
+**51–76 s/frame** supersampled, about 100x the current frame.
+
+**Hillshade does not save it, and cannot.** It is the cheap kind of shading —
+Lambertian off the DEM gradient, no ray casting, 0.6–0.8 s a frame — and it
+changes the picture a great deal (27 grey levels mean, 60 at the 99th) without
+ever reading as landscape: at sun 8° the frame goes muddy, at 45° it is barely
+there. Sentinel-2 cloudless is an annual composite with its own near-nadir
+illumination already in it, so a second light is two contradictory suns on one
+surface. Cast shadows were not built: if hillshade cannot read, they cannot.
+
+**So terrain needs three things to go right at once** — a camera lower than the
+pin spacing wants, a haze model nobody believes, and a light that fights the
+imagery — for a payoff that vanishes at 672x350. Dropped.
+
+### Decided, not built
+
+Three changes, all independent of the DEM, so dropping terrain costs none of
+them:
+
+- **Curvature** — `z = -d²/2R`, closed form, in `_ground` and `project`.
+  **+15%**, and it is the only one of the three that stands alone.
+- **Supersampling** — the horizon is a hard per-pixel boolean, so it
+  staircases; 3x removes it completely. **0.2 s to 1.6 s**, or far less if only
+  the ~40 rows around the horizon are supersampled.
+- **Borders** — Natural Earth 50m admin-0, the struct parse from the old
+  basemap mock, projected through the same camera and hidden past the horizon.
+  Too cheap to separate from the supersampled frame it was measured in.
+
+Curvature is worth doing on its own merits — it is the 5–7 px error, and it
+puts the DX pin on the ground — so it is cut out as **ticket 33**.
+Supersampling and borders only pay for themselves if the camera is reframed so
+the horizon is in shot, which is a composition change this ticket has not
+taken, and they stay here until it is.
+
+Mocks: `terrain.py`, `curve_bench.py`, `curve_px.py`, `curve_look.py`,
+`reframe.py`, `skyline.py`, `haze_test.py`, `shadow_test.py` in `/tmp/ticket10/`.
+
+## Previewed against the shipped renderer
+
+Two pairs — HA5LA→HA1VHF (233 km) and HA5LA→HG5O (47 km) — rendered by the
+production renderer and by the same camera with curvature, 3x supersampling
+and borders, before writing any of it. `/tmp/ticket10/preview_pairs.py` and
+`preview_horizon.py`.
+
+**At the camera as it ships, two of the three do nothing.** Curvature moves
+the far ground and drops the pin onto it, and the borders are the largest
+visible change — Slovakia and Austria read across the upper half of the 233 km
+frame. Supersampling improves nothing anyone can point at, because its whole
+justification is the staircased horizon and the horizon is 1062 km away while
+the mosaic stops at 443. On the 47 km path none of the three is visible at
+all: curvature is ~1 px there and no border falls inside 47 km of Budapest.
+**0.61 s to 6.0 s a frame, about 10x, for one of the two paths.**
+
+**Framed so the horizon is in shot, all three pay together.** At alt 45 km,
+back 68 km, tilt 20.3°, horizon 690 km from the QTH on the 10% row: a hard
+clean horizon with sky above it where the flat model merely fades into the
+mosaic edge, borders running the whole way out to it, and at last the edge
+supersampling exists for. **0.78 s to 8.3 s.**
+
+**But that camera is three further changes, not one.**
+
+- **It is the same camera for every path.** Pinning the QTH to 90% and the
+  horizon to 10% uses both degrees of freedom, leaving nothing to adapt to
+  path length. HA1VHF lands at 19% of frame height and HG5O at **55%**, barely
+  above the QTH. The proportional pull-back — the rule this ticket settled on,
+  and the reason a 33 km path and a 233 km one compose alike — is gone.
+- **A third texture level is required**: z6 out to 1250 km, 49 tiles, for the
+  band between the existing wide level at 443 km and the horizon at 690. The
+  renderer already paints coarsest-first, so no code change.
+- **The haze can no longer be scaled by the path.** `rng / (distance_km *
+  3.2)` saturates at 150 km for a 47 km path; with 690 km of ground in frame
+  the whole picture goes flat grey. The preview scales it by the horizon
+  instead, identically in both panels so it does not confound the comparison.
+
+So the horizon is not a feature that can be added to this panel — it is a
+different panel. The 233 km frame is plainly better for it and the 47 km frame
+is plainly worse than what ships today, and eight of this round's eleven QSOs
+are under 82 km.
+
+### Open
+
+Which way the composition goes, which is what everything except curvature now
+waits on:
+
+1. the horizon camera for every path, losing per-path framing;
+2. the shipped camera under some distance and the horizon camera over it,
+   accepting that consecutive shots compose differently;
+3. keep today's framing, take curvature and borders, drop supersampling.
+
+Curvature is out as ticket 33 and is unaffected by this choice — it is a
+correctness fix to ground already on screen. Supersampling and borders stay
+here: borders are nearly free and read at either camera, supersampling only
+earns its 10x once there is a horizon to anti-alias.
