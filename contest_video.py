@@ -38,6 +38,8 @@ import wave
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import numpy as np
+
 from urhpk import webcam_log, wiring
 from urhpk.cast_render import (
     CastClip,
@@ -89,7 +91,6 @@ from urhpk.timeline import (
     remap_audio_t,
     scan_segments,
     stream_start,
-    sub_band_wavs,
     trim_to_duration,
 )
 from urhpk.video_format import RENDER_FPS, RESOLUTIONS
@@ -110,24 +111,46 @@ from urhpk.webcam_sync import (
 # ---------------------------------------------------------------------------
 
 
-def concat_audio(segs: list[Segment], out_wav: str) -> None:
+def concat_audio(
+    segs: list[Segment], out_wav: str, sub_band: list[Segment] = ()
+) -> None:
     """Assemble the round's audio, each segment cut to its own eff_dur.
 
     Sample-accurate by construction, which the cut has to be: the split excess
     is 5.57 ms and ffmpeg's concat demuxer trims on whole demuxed packets, 64 ms
     at the recorder's rate. An audio timeline that doesn't match the one every
     other stream is drawn against is a drift with nothing to bound it --
-    FINDINGS.md has what that looked like."""
+    FINDINGS.md has what that looked like.
+
+    With dual watch the output is stereo, as the radio plays it: the main band
+    left, and right the sub band wherever it recorded, the main band elsewhere.
+    The sub band is placed by wall clock within each main segment."""
     with wave.open(segs[0].path) as first:
         params = first.getparams()
+    subs = []
+    for b in sub_band:
+        with wave.open(b.path) as w:
+            subs.append((b.wall, np.frombuffer(w.readframes(w.getnframes()), np.int16)))
+    rate = params.framerate
     with wave.open(out_wav, "wb") as out:
-        out.setnchannels(params.nchannels)
+        out.setnchannels(2 if subs else params.nchannels)
         out.setsampwidth(params.sampwidth)
-        out.setframerate(params.framerate)
+        out.setframerate(rate)
         for s in segs:
             with wave.open(s.path) as w:
                 keep = round(_eff(s) * w.getframerate())
-                out.writeframes(w.readframes(keep))
+                frames = w.readframes(keep)
+            if not subs:
+                out.writeframes(frames)
+                continue
+            left = np.frombuffer(frames, np.int16)
+            right = left.copy()
+            for wall, pcm in subs:
+                at = round((s.wall - wall).total_seconds() * rate)
+                lo, hi = max(0, -at), min(len(right), len(pcm) - at)
+                if lo < hi:
+                    right[lo:hi] = pcm[at + lo : at + hi]
+            out.writeframes(np.column_stack([left, right]).tobytes())
 
 
 def _ffprobe_duration(path: str) -> float:
@@ -888,12 +911,12 @@ def main() -> None:
         sys.exit(f"no timestamped WAVs found in {args.recdir}")
     compensate_split_excess(segs)
     print(f"{len(segs)} segments, {segs[-1].audio_t + _eff(segs[-1]):.0f}s audio")
-    sub_band = sub_band_wavs(args.recdir)
+    sub_band = scan_segments(args.recdir, main_band=False)
     if sub_band:
         print(
-            f"  dual watch: {len(sub_band)} sub-band file(s) skipped "
-            f"({', '.join(sub_band)}) -- a second band over the same wall-clock "
-            f"time, not the next segment"
+            f"  dual watch: {len(sub_band)} sub-band file(s) "
+            f"({', '.join(os.path.basename(b.path) for b in sub_band)}) "
+            f"go to the right channel over the wall-clock time they cover"
         )
     print(
         f"  split excess: {len(segs) - 1} boundaries x {SPLIT_EXCESS_S * 1000:.2f} ms "
@@ -909,6 +932,7 @@ def main() -> None:
     # which is derived to the hour and cannot care about a sub-second shift.
     telemetry = load_telemetry(args.telemetry) if args.telemetry else []
     moved = apply_clock_offset(segs, telemetry, offset_h)
+    apply_clock_offset(sub_band, telemetry, offset_h)
     if moved:
         shifts = sorted(t.clock_offset_s for t in telemetry if t.clock_offset_s)
         print(
@@ -1165,7 +1189,7 @@ def main() -> None:
 
     wav = os.path.splitext(args.out)[0] + ".concat.wav"
     print("concatenating audio ...")
-    concat_audio(segs, wav)
+    concat_audio(segs, wav, sub_band)
 
     cast_videos = []
     for i, clip in enumerate(casts):

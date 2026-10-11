@@ -358,8 +358,12 @@ unit-testable, and `hud_draw.py` knows nothing about where its numbers came from
   longer than the round it spans. September's eighteen seconds of dual watch put
   17.6 s into the timeline that no wall clock claims, which the cast, scope and
   webcam then ran ahead of the HUD by for the rest of the video. `scan_segments`
-  takes the A series; `sub_band_wavs` names what it skipped, in the render's own
-  output.
+  takes the A series, and with `main_band=False` the B files, which go to the
+  right channel and nowhere else: `concat_audio` turns stereo when there is one,
+  main band left, right the sub band wherever it recorded and the main band
+  elsewhere — how the radio plays dual watch in the operator's ears. Each B file
+  is clock-corrected like the A series and placed by wall clock inside each A
+  segment, so the split excess cut from the A series never shifts it.
 - **Multiple EDI files merge into one timeline** — a round worked across bands
   writes one EDI per band but is still one physical recording. `merge_edi`
   concatenates and sorts by `dt`. `Qso` carries no band field; band only ever

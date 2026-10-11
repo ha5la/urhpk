@@ -6,7 +6,9 @@ tests -- each branch can be right while the graph that joins them is wrong."""
 import json
 import re
 import wave
-from datetime import datetime
+from datetime import datetime, timedelta
+
+import numpy as np
 
 import contest_video as cv
 from urhpk import cast_render, hud_draw, video_format
@@ -368,3 +370,67 @@ class TestConcatAudio:
         cv.concat_audio(segs, out)
         with wave.open(out) as w:
             assert w.getnframes() == sum(round(_eff(s) * SR) for s in segs)
+
+
+class TestDualWatchAudio:
+    """With dual watch on the radio plays the sub band in the right ear and
+    the main band in the left; the rest of the time both ears get the main
+    band. The video plays what the operator heard."""
+
+    T0 = datetime(2026, 10, 5, 16, 14, 0)
+
+    def _wav(self, tmp_path, name, samples, start_s, eff_dur=None):
+        path = str(tmp_path / name)
+        with wave.open(path, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(SR)
+            w.writeframes(np.asarray(samples, np.int16).tobytes())
+        return Segment(
+            path,
+            self.T0 + timedelta(seconds=start_s),
+            len(samples) / SR,
+            0.0,
+            eff_dur=eff_dur,
+        )
+
+    def _channels(self, path):
+        with wave.open(path) as w:
+            assert w.getnchannels() == 2
+            pcm = np.frombuffer(w.readframes(w.getnframes()), np.int16)
+        return pcm[0::2], pcm[1::2]
+
+    def test_the_right_ear_hears_the_sub_band_while_it_records(self, tmp_path):
+        main = [self._wav(tmp_path, "a.wav", [1000] * 3 * SR, 0.0)]
+        sub = [self._wav(tmp_path, "b.wav", [-2000] * SR, 1.0)]
+        out = str(tmp_path / "out.wav")
+        cv.concat_audio(main, out, sub_band=sub)
+        left, right = self._channels(out)
+        assert (left == 1000).all()
+        assert (right[:SR] == 1000).all()
+        assert (right[SR : 2 * SR] == -2000).all()
+        assert (right[2 * SR :] == 1000).all()
+
+    def test_the_sub_band_stays_on_wall_clock_across_a_main_band_split(self, tmp_path):
+        """The split excess is cut from the main band's segments, not from the
+        sub band's one file, so each main segment picks the sub band up at its
+        own wall-clock start rather than where the previous one left off."""
+        first = self._wav(
+            tmp_path, "a1.wav", [1000] * 2 * SR, 0.0, eff_dur=2.0 - SPLIT_EXCESS_S
+        )
+        second = self._wav(tmp_path, "a2.wav", [1000] * 2 * SR, 2.0)
+        ramp = np.arange(3 * SR) % 30000
+        sub = [self._wav(tmp_path, "b.wav", ramp, 1.0)]
+        out = str(tmp_path / "out.wav")
+        cv.concat_audio([first, second], out, sub_band=sub)
+        _, right = self._channels(out)
+        at_split = round(_eff(first) * SR)
+        assert right[at_split] == ramp[SR]  # 2.0 s wall = 1.0 s into the sub band
+        assert right[at_split - 1] == ramp[round((2.0 - SPLIT_EXCESS_S - 1.0) * SR) - 1]
+
+    def test_a_round_without_dual_watch_stays_mono(self, tmp_path):
+        main = [self._wav(tmp_path, "a.wav", [1000] * SR, 0.0)]
+        out = str(tmp_path / "out.wav")
+        cv.concat_audio(main, out)
+        with wave.open(out) as w:
+            assert w.getnchannels() == 1

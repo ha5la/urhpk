@@ -96,17 +96,9 @@ def _is_main_band(name: str) -> bool:
     return name[15:16] == "A"
 
 
-def sub_band_wavs(recdir: str) -> list[str]:
-    """The files scan_segments left out, so a round that had dual watch on can
-    say so in its own render log rather than just coming out shorter."""
-    return sorted(
-        f
-        for f in os.listdir(recdir)
-        if f.lower().endswith(".wav") and not _is_main_band(f)
-    )
-
-
-def scan_segments(recdir: str) -> list[Segment]:
+def scan_segments(recdir: str, main_band: bool = True) -> list[Segment]:
+    """The main band's WAVs as a timeline, or with main_band=False the sub
+    band's, which overlay it on wall clock rather than following it."""
     segs: list[Segment] = []
     audio_t = 0.0
     files = sorted(f for f in os.listdir(recdir) if f.lower().endswith(".wav"))
@@ -115,7 +107,7 @@ def scan_segments(recdir: str) -> list[Segment]:
             wall = datetime.strptime(f[:15], "%Y%m%d_%H%M%S")
         except ValueError:
             continue
-        if not _is_main_band(f):
+        if _is_main_band(f) != main_band:
             continue
         p = os.path.join(recdir, f)
         w = wave.open(p)
