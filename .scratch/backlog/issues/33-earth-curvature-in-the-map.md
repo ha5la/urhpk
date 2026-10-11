@@ -72,7 +72,7 @@ correctness fix to ground that is already on screen.
 ## Previewed
 
 Rendered against the production renderer on both ends of the round's range
-(`/tmp/ticket10/preview_pairs.py`), at the shipped camera:
+(`.scratch/backlog/prototypes/ticket10/preview_pairs.py`), at the shipped camera:
 
 - **HA5LA→HA1VHF, 233 km** — the far ground drops and more of it fits, Balaton
   shifts visibly, and the pin lands on the ground instead of above it.
@@ -90,5 +90,5 @@ screen at the camera that already ships, and it should land whichever way
 that decision goes.
 
 Prototypes: `curve_bench.py`, `curve_px.py`, `curve_look.py`,
-`preview_pairs.py` in `/tmp/ticket10/`.
+`preview_pairs.py` in `.scratch/backlog/prototypes/ticket10/`.
 Background and the rejected DEM: ticket 10.

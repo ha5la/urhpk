@@ -1,6 +1,6 @@
 # 10 — Translucent map beside the cast PiP
 
-Status: resolved
+Status: needs-triage
 
 There is plenty of unused space next to the cast PiP. The vision: a
 third-person aerial view of the QTH that **rotates with the antenna**, with a
@@ -48,7 +48,7 @@ frame. Whichever half is kept, the other is not a matter of tuning.
 admin-0 (public domain, ~1.6 MB, embeddable beside the HUD artwork the same
 way — no fetch at render time, no tile-server policy, no attribution overlay)
 drawn as 1 px coastline and border lines. Hungary and its neighbours are
-recognisable at 350 px and stay recognisable rotated. `/tmp/ticket10/` has the
+recognisable at 350 px and stay recognisable rotated. `.scratch/backlog/prototypes/ticket10/` has the
 mocks; the shapefile is a plain struct parse, ~25 lines, no geo dependency.
 
 **The one real trade left is range compression.** Linear range keeps the map
@@ -75,7 +75,7 @@ Feasible, and cheaper than the top-down one.
 **No 3D engine and no Google Earth Studio needed.** A tilted pinhole camera
 looking at flat ground is exactly a homography of an ortho image, and JN97TF
 sits on the Pest plain; at any altitude worth using, relief is below a pixel.
-So it is *one* aerial image plus a per-pixel inverse map. `/tmp/ticket10/`
+So it is *one* aerial image plus a per-pixel inverse map. `.scratch/backlog/prototypes/ticket10/`
 has the geometry working against a synthetic ground texture — the imagery is
 the only thing still to source.
 
@@ -117,7 +117,7 @@ cannot be the same panel.
 
 ## The path shot, on real imagery
 
-`/tmp/ticket10/path_view.py`, rendered against Esri World Imagery tiles for
+`.scratch/backlog/prototypes/ticket10/path_view.py`, rendered against Esri World Imagery tiles for
 four of the September round's own paths (33, 47, 168 and 233 km).
 
 **Framing both ends composes itself.** The camera sits behind the QTH along
@@ -165,7 +165,7 @@ sharper than any of these views need — the 47 km shot is already oversampled a
 
 ## The swing between stations
 
-`/tmp/ticket10/swing.py` → `swing.mp4`: one second on HG5O (47 km, 307°), a
+`.scratch/backlog/prototypes/ticket10/swing.py` → `swing.mp4`: one second on HG5O (47 km, 307°), a
 1.4 s move, one second on HA3KHB (168 km, 251°). 102 frames at 672x350.
 
 - **Smoothstep on the transition parameter**, bearing taken the short way
@@ -197,7 +197,7 @@ and that sets its resolution everywhere — including the near ground at the
 bottom of the frame, which is exactly where a tilted camera has the most
 resolution to spend. Two levels, sampled coarsest-first so the finer one paints
 over where it reaches: **z8 at 415 m/px** covering the 168 km path, and
-**z11 at 52 m/px** covering ±50 km of near ground. `/tmp/ticket10/twolevel.png`
+**z11 at 52 m/px** covering ±50 km of near ground. `.scratch/backlog/prototypes/ticket10/twolevel.png`
 is the same HG5O frame rendered both ways; the one-level version is mush where
 the two-level one has Budapest's streets and the Danube.
 
@@ -225,7 +225,7 @@ was left. No cross-fade band was needed.
 
 ## The swing, rendered the settled way
 
-`/tmp/ticket10/swing2.py` → `swing2.mp4`. Same 1 s / 1.4 s / 1 s shape as
+`.scratch/backlog/prototypes/ticket10/swing2.py` → `swing2.mp4`. Same 1 s / 1.4 s / 1 s shape as
 before, now on Sentinel-2 with both levels and **bilinear** texel sampling.
 Sharp from the QTH to the horizon at both ends of the move, and nothing about
 the level boundary is visible.
@@ -331,7 +331,7 @@ term the flat model should have had all along.
 
 ### Terrain: built, measured, rejected
 
-`/tmp/ticket10/terrain.py`. DEM is Mapzen terrarium off AWS Open Data, the
+`.scratch/backlog/prototypes/ticket10/terrain.py`. DEM is Mapzen terrarium off AWS Open Data, the
 same XYZ scheme as the imagery, so the level machinery is unchanged.
 
 **A heightfield has no inverse map.** Flat ground is a homography and the
@@ -479,13 +479,13 @@ the horizon is in shot, which is a composition change this ticket has not
 taken, and they stay here until it is.
 
 Mocks: `terrain.py`, `curve_bench.py`, `curve_px.py`, `curve_look.py`,
-`reframe.py`, `skyline.py`, `haze_test.py`, `shadow_test.py` in `/tmp/ticket10/`.
+`reframe.py`, `skyline.py`, `haze_test.py`, `shadow_test.py` in `.scratch/backlog/prototypes/ticket10/`.
 
 ## Previewed against the shipped renderer
 
 Two pairs — HA5LA→HA1VHF (233 km) and HA5LA→HG5O (47 km) — rendered by the
 production renderer and by the same camera with curvature, 3x supersampling
-and borders, before writing any of it. `/tmp/ticket10/preview_pairs.py` and
+and borders, before writing any of it. `.scratch/backlog/prototypes/ticket10/preview_pairs.py` and
 `preview_horizon.py`.
 
 **At the camera as it ships, two of the three do nothing.** Curvature moves

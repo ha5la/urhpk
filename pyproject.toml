@@ -27,6 +27,10 @@ dev-dependencies = [
 
 [tool.ruff]
 target-version = "py312"
+# Archived throwaways kept as the evidence behind the tickets that cite
+# them. Linting them would mean editing them, which is the one thing a
+# record must not have done to it.
+extend-exclude = [".scratch/backlog/prototypes"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
