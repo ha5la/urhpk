@@ -11,11 +11,11 @@ import pytest
 from urhpk.qth_map import (
     DX_COLOUR,
     SWING_S,
-    build_pyramids,
     camera_at,
     camera_for,
     draw_map_frame,
     map_targets,
+    mip_pyramid,
     mosaic,
     project,
     row_taps,
@@ -76,13 +76,11 @@ class TestTheFrame:
         """The station being worked is the point of the shot, at either render
         size, and its name must not land on the caption naming it."""
 
-        def blank(z, x, y):
-            return np.zeros((256, 256, 3), np.uint8)
-
+        blank = [mip_pyramid(np.zeros((64, 64, 3), np.uint8), 4.0, (32.0, 32.0))]
         targets = map_targets([_qso("HG5O", "JN97NL")], [(0.0, 60.0)], ME)
         frame = np.asarray(
             draw_map_frame(
-                build_pyramids(ME, targets, blank),
+                blank,
                 camera_at(targets, 30.0),
                 w,
                 h,
