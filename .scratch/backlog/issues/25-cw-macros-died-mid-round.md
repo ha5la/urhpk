@@ -132,3 +132,7 @@ every 20 ms, `answer_commands = False`, then the stall shows while
 alongside the scope stream is what wedges the radio's command handler is still a
 guess, and only the bench can answer it. What is different now is that the next
 occurrence announces itself and gets a reopen attempt for free.
+
+**2026-10-11: happened again in October; (2) did not recover it.** `CIV ✗`
+fired on time and stayed red for 2 min 17 s until a restart. Evidence and the
+next steps are in ticket 34.
